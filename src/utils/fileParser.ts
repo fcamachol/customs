@@ -1,38 +1,162 @@
-import * as XLSX from 'xlsx';
-import { ParsingRecord, GuideRecord, RiskLevel } from '../types';
-
 /**
- * Intelligent helper to score key match for column headers in multilanguage formats (ES/EN)
+ * T1 Manifest File Parser
+ *
+ * Parses Excel (.xlsx/.xls), CSV, and JSON files into T1Shipment objects.
+ * Enhanced for real T1 pedimento requirements:
+ *   - Consignee RFC capture
+ *   - Origin country detection
+ *   - Transport mode detection
+ *   - MAWB reference extraction
+ *   - Auto-assignment of generic HS codes
  */
-function findBestHeaderMatch(headers: string[], possibleNames: string[]): string | null {
-  for (const name of possibleNames) {
-    const lowerName = name.toLowerCase().trim();
-    // 1. Exact match
-    const exactMatch = headers.find(h => h.toLowerCase().trim() === lowerName);
-    if (exactMatch) return exactMatch;
 
-    // 2. Substring match
-    const subMatch = headers.find(h => {
-      const normalizedH = h.toLowerCase().trim()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, ""); // strip accents
-      const normalizedName = lowerName
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-      return normalizedH.includes(normalizedName) || normalizedName.includes(normalizedH);
-    });
-    if (subMatch) return subMatch;
+import * as XLSX from 'xlsx';
+import { T1Shipment, TransportMode } from '../types/t1';
+import { assignGenericHsCode } from '../constants/genericHscodes';
+import { detectRRNA } from '../engine/rrnaDetector';
+import { normalizeCountryCode, generateShipmentId } from '../utils/formatters';
+
+// ============================================================================
+// Column Header Synonyms (multilingual: ES / EN)
+// ============================================================================
+
+const HEADER_SYNONYMS = {
+  guideId: ['guia', 'guía', 'id', 'guideid', 'ref', 'referencia', 'num', 'numero', 'nro', 'guide', 'guide_id', 'no_guia', 'tracking', 'awb', 'airway_bill'],
+  consigneeName: ['consignee', 'consignatario', 'destinatario', 'cliente', 'cliente_nombre', 'razon_social', 'razonSocial', 'importer', 'importador', 'receiver', 'recipient', 'nombre'],
+  consigneeRfc: ['rfc', 'consignee_rfc', 'destinatario_rfc', 'cliente_rfc', 'tax_id', 'taxid', 'rfc_destinatario'],
+  description: ['desc', 'description', 'descripcion', 'descripción', 'mercancia', 'mercancía', 'producto', 'product', 'item', 'goods', 'contenido'],
+  declaredValueUsd: ['value', 'declaredvalue', 'valor', 'monto', 'usd', 'valor_usd', 'declared_value', 'valordeclarado', 'precio', 'amount', 'cost'],
+  quantity: ['qty', 'quantity', 'cantidad', 'cant', 'pzas', 'piezas', 'unidades', 'units', 'bultos', 'bulto', 'pcs'],
+  unit: ['unit', 'unidad', 'uom', 'um', 'medida', 'unidad_medida', 'uom_code', 'measure'],
+  weightKg: ['weight', 'peso', 'kg', 'kgs', 'kilogramos', 'weight_kg', 'peso_kg', 'netweight', 'net_weight'],
+  originCountry: ['origin', 'pais_origen', 'país_origen', 'country', 'origen', 'pais', 'país', 'source_country', 'from'],
+  transportMode: ['mode', 'transporte', 'transport_mode', 'modalidad', 'tipo_transporte', 'via'],
+  mawbReference: ['mawb', 'master', 'guia_maestra', 'master_awb', 'mawb_reference', 'master_reference'],
+};
+
+// ============================================================================
+// Header Matching
+// ============================================================================
+
+function findBestHeaderMatch(headers: string[], possibleNames: string[]): string | null {
+  const normalizedHeaders = headers.map((h) =>
+    h.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  );
+
+  for (const name of possibleNames) {
+    const lowerName = name.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    // Exact match
+    const exactIdx = normalizedHeaders.indexOf(lowerName);
+    if (exactIdx >= 0) return headers[exactIdx];
+
+    // Substring match
+    const subIdx = normalizedHeaders.findIndex(
+      (h) => h.includes(lowerName) || lowerName.includes(h)
+    );
+    if (subIdx >= 0) return headers[subIdx];
   }
   return null;
 }
 
-/**
- * Parses any uploaded File object (Excel xlsx/xls, CSV, or JSON)
- * Returns a list of parsed records both in ParsingRecord shape and GuideRecord shape.
- */
+function matchHeaders(headers: string[]) {
+  const keys = Object.keys(HEADER_SYNONYMS) as (keyof typeof HEADER_SYNONYMS)[];
+  const matched: Record<keyof typeof HEADER_SYNONYMS, string | null> = {} as any;
+
+  for (const key of keys) {
+    matched[key] = findBestHeaderMatch(headers, HEADER_SYNONYMS[key]);
+  }
+  return matched;
+}
+
+// ============================================================================
+// Row Processing
+// ============================================================================
+
+function getCellValue(row: Record<string, unknown>, matchedKey: string | null, fallbackKeys: string[]): string {
+  if (matchedKey && row[matchedKey] !== undefined) {
+    return String(row[matchedKey]).trim();
+  }
+  for (const key of fallbackKeys) {
+    if (row[key] !== undefined) {
+      return String(row[key]).trim();
+    }
+  }
+  return '';
+}
+
+function getNumberValue(row: Record<string, unknown>, matchedKey: string | null, fallbackKeys: string[]): number {
+  const raw = getCellValue(row, matchedKey, fallbackKeys);
+  if (!raw) return 0;
+  const cleaned = raw.replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+function parseTransportMode(value: string): TransportMode {
+  const normalized = value.toUpperCase().trim();
+  if (normalized.startsWith('AIR') || normalized.startsWith('AER') || normalized === '1') return 'AIR';
+  if (normalized.startsWith('LAND') || normalized.startsWith('TER') || normalized.startsWith('ROAD') || normalized === '2') return 'LAND';
+  return 'AIR'; // Default
+}
+
+function processRow(
+  row: Record<string, unknown>,
+  matched: Record<keyof typeof HEADER_SYNONYMS, string | null>,
+  index: number,
+  defaultMawb: string
+): T1Shipment {
+  const guideId = getCellValue(row, matched.guideId, ['_col_0']);
+  const consigneeName = getCellValue(row, matched.consigneeName, ['_col_1']);
+  const consigneeRfc = getCellValue(row, matched.consigneeRfc, ['_col_2']);
+  const description = getCellValue(row, matched.description, ['_col_3']);
+  const declaredValueUsd = getNumberValue(row, matched.declaredValueUsd, ['_col_4']);
+  const quantity = getNumberValue(row, matched.quantity, ['_col_5']);
+  const unit = getCellValue(row, matched.unit, ['_col_6']) || 'PCE';
+  const weightKg = getNumberValue(row, matched.weightKg, ['_col_7']);
+  const originCountry = normalizeCountryCode(getCellValue(row, matched.originCountry, ['_col_8']) || 'US');
+  const transportMode = parseTransportMode(getCellValue(row, matched.transportMode, ['_col_9']));
+  const mawbReference = getCellValue(row, matched.mawbReference, ['_col_10']) || defaultMawb;
+
+  const shipment: T1Shipment = {
+    id: generateShipmentId(),
+    guideId: guideId || `GUIA-${String(90800 + index).padStart(5, '0')}`,
+    mawbReference,
+    consigneeName: consigneeName || `Consignatario ${index + 1}`,
+    consigneeRfc: consigneeRfc || 'XAXX010101000',
+    description: description || 'Mercancía General',
+    declaredValueUsd,
+    quantity: quantity || 1,
+    unit: unit.toUpperCase(),
+    weightKg: weightKg > 0 ? weightKg : (quantity || 1) * 0.25,
+    originCountry,
+    transportMode,
+    status: 'PENDING',
+    genericHsCode: assignGenericHsCode(unit),
+    rrnaFlags: [],
+  };
+
+  // Run RRNA detection
+  shipment.rrnaFlags = detectRRNA(shipment);
+  if (shipment.rrnaFlags.length > 0) {
+    shipment.status = 'RRNA_BLOCKED';
+  }
+
+  // Value threshold check
+  if (shipment.declaredValueUsd > 2500) {
+    shipment.status = 'EXCEEDS_THRESHOLD';
+  }
+
+  return shipment;
+}
+
+// ============================================================================
+// File Parsers
+// ============================================================================
+
 export async function parseManifestFile(file: File): Promise<{
-  parsingRecords: ParsingRecord[];
-  guideRecords: GuideRecord[];
+  shipments: T1Shipment[];
+  mawbReference: string;
 }> {
   const extension = file.name.split('.').pop()?.toLowerCase();
 
@@ -43,75 +167,64 @@ export async function parseManifestFile(file: File): Promise<{
   } else if (extension === 'xlsx' || extension === 'xls') {
     return parseExcelFile(file);
   } else {
-    // Treat everything else as potential CSV / text
     return parseCSVFile(file);
   }
 }
 
-async function parseJSONFile(file: File): Promise<{
-  parsingRecords: ParsingRecord[];
-  guideRecords: GuideRecord[];
-}> {
+async function parseJSONFile(file: File): Promise<{ shipments: T1Shipment[]; mawbReference: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const text = e.target?.result as string;
         const data = JSON.parse(text);
-        
-        let rawRows: any[] = [];
+
+        let rawRows: unknown[] = [];
         if (Array.isArray(data)) {
           rawRows = data;
         } else if (typeof data === 'object' && data !== null) {
-          // If JSON contains a key like "records", "items", "data", "guias", inspect those
-          const keys = ['records', 'items', 'data', 'guias', 'rows', 'manifests'];
-          const foundKey = keys.find(k => Array.isArray(data[k]));
+          const keys = ['records', 'items', 'data', 'guias', 'rows', 'manifests', 'shipments'];
+          const foundKey = keys.find((k) => Array.isArray((data as Record<string, unknown>)[k]));
           if (foundKey) {
-            rawRows = data[foundKey];
+            rawRows = (data as Record<string, unknown>)[foundKey] as unknown[];
           } else {
-            rawRows = [data]; // single object
+            rawRows = [data];
           }
         }
 
-        const result = processRawRows(rawRows);
+        const mawbRef = (data as Record<string, unknown>)?.mawbReference as string ||
+                        (data as Record<string, unknown>)?.mawb as string ||
+                        `MAWB-${Date.now().toString().slice(-8)}`;
+
+        const result = processRawRows(rawRows, mawbRef);
         resolve(result);
-      } catch (err) {
-        reject(new Error("Error al analizar el archivo JSON: formato inválido."));
+      } catch {
+        reject(new Error('Error al analizar el archivo JSON: formato inválido.'));
       }
     };
-    reader.onerror = () => reject(new Error("Error de lectura de archivo."));
+    reader.onerror = () => reject(new Error('Error de lectura de archivo.'));
     reader.readAsText(file);
   });
 }
 
-function parseCSVFile(file: File): Promise<{
-  parsingRecords: ParsingRecord[];
-  guideRecords: GuideRecord[];
-}> {
+function parseCSVFile(file: File): Promise<{ shipments: T1Shipment[]; mawbReference: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const text = e.target?.result as string;
-        // Split by lines, filtering out empty ones
-        const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-        if (lines.length === 0) {
-          throw new Error("El archivo CSV está vacío.");
-        }
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length === 0) throw new Error('El archivo CSV está vacío.');
 
-        // Detect delimiter (comma, semicolon, tab)
+        // Detect delimiter
         const firstLine = lines[0];
-        let delimiter = ',';
         const commas = (firstLine.match(/,/g) || []).length;
         const semicolons = (firstLine.match(/;/g) || []).length;
         const tabs = (firstLine.match(/\t/g) || []).length;
-        if (semicolons > commas && semicolons > tabs) {
-          delimiter = ';';
-        } else if (tabs > commas && tabs > semicolons) {
-          delimiter = '\t';
-        }
+        let delimiter = ',';
+        if (semicolons > commas && semicolons > tabs) delimiter = ';';
+        else if (tabs > commas && tabs > semicolons) delimiter = '\t';
 
-        // Helper to parse CSV row correctly considering quotes
         const parseCSVRow = (rowText: string): string[] => {
           const cells: string[] = [];
           let currentCell = '';
@@ -131,239 +244,75 @@ function parseCSVFile(file: File): Promise<{
           return cells;
         };
 
-        const headers = parseCSVRow(lines[0]).map(h => h.replace(/^"|"$/g, '').trim());
-        const rawRows: any[] = [];
+        const headers = parseCSVRow(lines[0]).map((h) => h.replace(/^"|"$/g, '').trim());
+        const rawRows: Record<string, unknown>[] = [];
 
         for (let i = 1; i < lines.length; i++) {
-          const cells = parseCSVRow(lines[i]).map(c => c.replace(/^"|"$/g, '').trim());
-          if (cells.length === 0 || (cells.length === 1 && cells[0] === "")) continue;
+          const cells = parseCSVRow(lines[i]).map((c) => c.replace(/^"|"$/g, '').trim());
+          if (cells.length === 0 || (cells.length === 1 && cells[0] === '')) continue;
 
-          const rowObj: any = {};
+          const rowObj: Record<string, unknown> = {};
           headers.forEach((header, colIndex) => {
-            rowObj[header] = cells[colIndex] || "";
-            // Also store index references just in case headers are wonky
-            rowObj[`_col_${colIndex}`] = cells[colIndex] || "";
+            rowObj[header] = cells[colIndex] || '';
+            rowObj[`_col_${colIndex}`] = cells[colIndex] || '';
           });
           rawRows.push(rowObj);
         }
 
-        const result = processRawRows(rawRows, headers);
+        const mawbRef = `MAWB-${Date.now().toString().slice(-8)}`;
+        const result = processRawRows(rawRows, mawbRef);
         resolve(result);
       } catch (err) {
-        reject(new Error("Error al analizar el archivo CSV."));
+        reject(new Error('Error al analizar el archivo CSV.'));
       }
     };
-    reader.onerror = () => reject(new Error("Error de lectura de archivo."));
+    reader.onerror = () => reject(new Error('Error de lectura de archivo.'));
     reader.readAsText(file);
   });
 }
 
-function parseExcelFile(file: File): Promise<{
-  parsingRecords: ParsingRecord[];
-  guideRecords: GuideRecord[];
-}> {
+function parseExcelFile(file: File): Promise<{ shipments: T1Shipment[]; mawbReference: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        
-        // Grab the first sheet
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        
-        // Convert to array of arrays or json objects
-        const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-        
-        // Extract headers from sheet range to assist matching if needed
-        const headers: string[] = [];
-        const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1');
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-          const address = XLSX.utils.encode_cell({ r: range.s.r, c: C });
-          const cell = sheet[address];
-          if (cell && cell.v) headers.push(String(cell.v));
-        }
+        const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
 
-        const result = processRawRows(rawRows, headers);
+        const mawbRef = `MAWB-${Date.now().toString().slice(-8)}`;
+        const result = processRawRows(rawRows, mawbRef);
         resolve(result);
-      } catch (err) {
-        reject(new Error("Error al procesar el archivo Excel. Asegúrese de que no esté corrupto."));
+      } catch {
+        reject(new Error('Error al procesar el archivo Excel. Asegúrese de que no esté corrupto.'));
       }
     };
-    reader.onerror = () => reject(new Error("Error de lectura de archivo."));
+    reader.onerror = () => reject(new Error('Error de lectura de archivo.'));
     reader.readAsArrayBuffer(file);
   });
 }
 
-/**
- * Normalizes and processes raw rows extracted from Excel/CSV/JSON
- */
-function processRawRows(rawRows: any[], headerNames: string[] = []): {
-  parsingRecords: ParsingRecord[];
-  guideRecords: GuideRecord[];
-} {
-  const parsingRecords: ParsingRecord[] = [];
-  const guideRecords: GuideRecord[] = [];
+// ============================================================================
+// Raw Row Processing
+// ============================================================================
 
-  // Try to find matching headers
-  let sampleRow: any = rawRows[0] || {};
-  let keys = Object.keys(sampleRow);
+function processRawRows(
+  rawRows: unknown[],
+  defaultMawb: string
+): { shipments: T1Shipment[]; mawbReference: string } {
+  if (rawRows.length === 0) {
+    return { shipments: [], mawbReference: defaultMawb };
+  }
 
-  // Synonyms mapping
-  const idSynonyms = ['guia', 'guía', 'id', 'manifestid', 'ref', 'referencia', 'num', 'numero', 'nro', 'guide', 'guideid', 'manifest_id', 'no_guia'];
-  const htsSynonyms = ['hscode', 'hts', 'fraccion', 'fracción', 'arancel', 'codigo', 'código', 'hts_code', 'fraccion_arancelaria'];
-  const descSynonyms = ['desc', 'description', 'descripcion', 'descripción', 'mercancia', 'mercancía', 'producto', 'product', 'item'];
-  const qtySynonyms = ['qty', 'quantity', 'cantidad', 'cant', 'pzas', 'piezas', 'unidades', 'units', 'bultos', 'bulto'];
-  const unitSynonyms = ['unit', 'unidad', 'uom', 'um', 'medida', 'unidad_medida'];
-  const weightSynonyms = ['weight', 'peso', 'kg', 'kgs', 'kilogramos', 'weight_kg', 'peso_kg', 'netweight'];
-  const importerSynonyms = ['importer', 'importador', 'cliente', 'cliente_nombre', 'razon_social', 'razonSocial', 'importername', 'destinatario'];
-  const valSynonyms = ['value', 'declaredvalue', 'valor', 'monto', 'usd', 'valor_usd', 'declared_value', 'valordeclarado', 'precio'];
+  const sampleRow = rawRows[0] as Record<string, unknown>;
+  const headers = Object.keys(sampleRow).filter((k) => !k.startsWith('_col_'));
+  const matched = matchHeaders(headers);
 
-  const matchedKeys = {
-    id: findBestHeaderMatch(keys, idSynonyms) || findBestHeaderMatch(headerNames, idSynonyms),
-    hts: findBestHeaderMatch(keys, htsSynonyms) || findBestHeaderMatch(headerNames, htsSynonyms),
-    desc: findBestHeaderMatch(keys, descSynonyms) || findBestHeaderMatch(headerNames, descSynonyms),
-    qty: findBestHeaderMatch(keys, qtySynonyms) || findBestHeaderMatch(headerNames, qtySynonyms),
-    unit: findBestHeaderMatch(keys, unitSynonyms) || findBestHeaderMatch(headerNames, unitSynonyms),
-    weight: findBestHeaderMatch(keys, weightSynonyms) || findBestHeaderMatch(headerNames, weightSynonyms),
-    importer: findBestHeaderMatch(keys, importerSynonyms) || findBestHeaderMatch(headerNames, importerSynonyms),
-    value: findBestHeaderMatch(keys, valSynonyms) || findBestHeaderMatch(headerNames, valSynonyms),
-  };
+  const shipments: T1Shipment[] = rawRows.map((row, index) =>
+    processRow(row as Record<string, unknown>, matched, index, defaultMawb)
+  );
 
-  rawRows.forEach((row, i) => {
-    // 1. Recover values with key lookup, index lookup, or defaults
-    let manifestId = '';
-    if (matchedKeys.id && row[matchedKeys.id] !== undefined) {
-      manifestId = String(row[matchedKeys.id]).trim();
-    } else if (row['_col_0'] !== undefined) {
-      manifestId = String(row['_col_0']).trim();
-    }
-    if (!manifestId) {
-      manifestId = `GUIA-USR-${90800 + i}`;
-    }
-
-    let hsCode = '8517.13.01'; // DEFAULT
-    if (matchedKeys.hts && row[matchedKeys.hts] !== undefined) {
-      hsCode = String(row[matchedKeys.hts]).trim();
-    } else if (row['_col_1'] !== undefined) {
-      hsCode = String(row['_col_1']).trim();
-    }
-    // format HSCode (e.g., ensure dots or normalize clean digits)
-    hsCode = hsCode.replace(/[^0-9.]/g, '');
-    if (hsCode.length === 8 && !hsCode.includes('.')) {
-      // Format as XX.XX.XX.XX or similar if 8 digits
-      hsCode = `${hsCode.slice(0, 4)}.${hsCode.slice(4, 6)}.${hsCode.slice(6, 8)}`;
-    }
-
-    let description = 'Mercancías Generales';
-    if (matchedKeys.desc && row[matchedKeys.desc] !== undefined) {
-      description = String(row[matchedKeys.desc]).trim();
-    } else if (row['_col_2'] !== undefined) {
-      description = String(row['_col_2']).trim();
-    }
-
-    let quantity = 1;
-    if (matchedKeys.qty && row[matchedKeys.qty] !== undefined) {
-      quantity = parseInt(String(row[matchedKeys.qty]).replace(/[^0-9-]/g, ''), 10);
-    } else if (row['_col_3'] !== undefined) {
-      quantity = parseInt(String(row['_col_3']).replace(/[^0-9-]/g, ''), 10);
-    }
-    if (isNaN(quantity)) quantity = 0; // Trigger compliance rule if 0/NaN
-
-    let unit = 'PCE';
-    if (matchedKeys.unit && row[matchedKeys.unit] !== undefined) {
-      unit = String(row[matchedKeys.unit]).trim().toUpperCase();
-    } else if (row['_col_4'] !== undefined) {
-      unit = String(row['_col_4']).trim().toUpperCase();
-    }
-    if (!unit) unit = 'PCE';
-
-    let weight = 1.0;
-    if (matchedKeys.weight && row[matchedKeys.weight] !== undefined) {
-      weight = parseFloat(String(row[matchedKeys.weight]).replace(/[^0-9.]/g, ''));
-    } else if (row['_col_5'] !== undefined) {
-      weight = parseFloat(String(row['_col_5']).replace(/[^0-9.]/g, ''));
-    }
-    if (isNaN(weight) || weight <= 0) weight = quantity * 0.25 || 1.0;
-
-    let importerName = 'Logistics Express SA';
-    if (matchedKeys.importer && row[matchedKeys.importer] !== undefined) {
-      importerName = String(row[matchedKeys.importer]).trim();
-    } else if (row['_col_6'] !== undefined) {
-      importerName = String(row['_col_6']).trim();
-    }
-
-    let declaredValue = quantity * 125.00;
-    if (matchedKeys.value && row[matchedKeys.value] !== undefined) {
-      declaredValue = parseFloat(String(row[matchedKeys.value]).replace(/[^0-9.]/g, ''));
-    } else if (row['_col_7'] !== undefined) {
-      declaredValue = parseFloat(String(row['_col_7']).replace(/[^0-9.]/g, ''));
-    }
-    if (isNaN(declaredValue) || declaredValue < 0) {
-      declaredValue = quantity * 125.00;
-    }
-
-    // Determine status of parsing record
-    const status = quantity > 0 ? 'READY' : 'ERROR';
-
-    const parsingRec: ParsingRecord = {
-      manifestId,
-      hsCode,
-      description,
-      quantity,
-      unit,
-      weight,
-      status
-    };
-
-    // Calculate risk level dynamically
-    let riskLevel: RiskLevel = 'CLEARED';
-    const isProhibited = hsCode.startsWith('2804') || description.toLowerCase().includes('hidrogeno') || description.toLowerCase().includes('explosiv');
-    const isZeroQty = quantity === 0;
-    const isHighValue = hsCode === '8517.13.01' || description.toLowerCase().includes('smart') || description.toLowerCase().includes('apple') || description.toLowerCase().includes('samsung') || description.toLowerCase().includes('gama alta') || declaredValue > 25000;
-    const isWarningGroup = hsCode.startsWith('8708') || description.toLowerCase().includes('auto parts') || description.toLowerCase().includes('incorrecta') || hsCode.startsWith('6204');
-
-    if (isProhibited) {
-      riskLevel = 'PROHIBITED';
-    } else if (isZeroQty) {
-      riskLevel = 'CRITICAL';
-    } else if (isHighValue) {
-      riskLevel = 'WARNING';
-    } else if (isWarningGroup) {
-      riskLevel = 'WARNING';
-    }
-
-    // Assign flags
-    const flags: ('notes' | 'location' | 'wallet' | 'warning')[] = [];
-    if (riskLevel === 'PROHIBITED' || riskLevel === 'CRITICAL') {
-      flags.push('warning');
-    }
-    if (isHighValue) {
-      flags.push('notes');
-    }
-    if (isWarningGroup) {
-      flags.push('wallet');
-    }
-
-    const guideRec: GuideRecord = {
-      id: `parsed_guide_${i}_${Date.now()}`,
-      guideId: manifestId,
-      importerName,
-      htsCode: hsCode,
-      description,
-      declaredValue,
-      riskLevel,
-      flags
-    };
-
-    parsingRecords.push(parsingRec);
-    guideRecords.push(guideRec);
-  });
-
-  // If we couldn't parse anything usable, use the sample list or return empty
-  return {
-    parsingRecords,
-    guideRecords
-  };
+  return { shipments, mawbReference: defaultMawb };
 }

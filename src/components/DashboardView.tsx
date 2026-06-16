@@ -1,402 +1,344 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * DashboardView — T1 Operational Metrics
+ *
+ * Real-time KPIs for courier T1 operations:
+ *   - Guías T1 Pendientes
+ *   - % Prevalidación Exitosa
+ *   - Violaciones RRNA Detectadas
+ *   - Utilización del Límite de Valor
+ *   - Desglose de Tasas Globales (33.5% vs 19%)
+ *   - Exenciones De Minimis
  */
 
-import { useState } from 'react';
-import { 
-  TrendingUp, 
-  Clock, 
-  AlertTriangle, 
-  Plane, 
-  Download, 
-  Plus, 
-  ArrowRight,
-  TrendingDown,
+import { useMemo } from 'react';
+import type { ReactNode } from 'react';
+import {
+  TrendingUp,
+  Clock,
+  AlertTriangle,
+  Plane,
   CheckCircle,
-  Upload,
   ShieldAlert,
-  ArrowUpRight,
-  Search,
-  ChevronRight,
-  ExternalLink
+  ArrowRight,
+  Package,
+  DollarSign,
+  Percent,
+  Zap,
 } from 'lucide-react';
-import { ManifestActivity } from '../types';
+import { useT1 } from '../context/T1Context';
+import { getCountryName } from '../utils/formatters';
 
-interface DashboardViewProps {
-  activities: ManifestActivity[];
-  onAddDeclaration: () => void;
-  onNavigateToTab: (tabId: string) => void;
-  onSelectManifest: (id: string) => void;
-}
+export default function DashboardView() {
+  const { state } = useT1();
+  const { manifest, tax, compliance } = state;
+  const shipments = manifest.shipments;
 
-export default function DashboardView({ 
-  activities, 
-  onAddDeclaration, 
-  onNavigateToTab,
-  onSelectManifest
-}: DashboardViewProps) {
-  const [timeRange, setTimeRange] = useState<'7D' | '30D' | '90D'>('7D');
-  const [searchTerm, setSearchTerm] = useState('');
+  // -------------------------------------------------------------------------
+  // Derived metrics
+  // -------------------------------------------------------------------------
 
-  // Animated bars data depending on time scale
-  const barData = {
-    '7D': [
-      { day: 'MON', value: 840, height: 'h-[60%]' },
-      { day: 'TUE', value: 620, height: 'h-[45%]' },
-      { day: 'WED', value: 980, height: 'h-[75%]' },
-      { day: 'THU', value: 740, height: 'h-[55%]' },
-      { day: 'FRI', value: 1248, height: 'h-[90%]', current: true },
-      { day: 'SAT', value: 550, height: 'h-[40%]' },
-      { day: 'SUN', value: 910, height: 'h-[65%]' }
-    ],
-    '30D': [
-      { day: 'W1', value: 4200, height: 'h-[50%]' },
-      { day: 'W2', value: 5600, height: 'h-[70%]' },
-      { day: 'W3', value: 7200, height: 'h-[90%]', current: true },
-      { day: 'W4', value: 4800, height: 'h-[60%]' }
-    ],
-    '90D': [
-      { day: 'MAR', value: 18400, height: 'h-[55%]' },
-      { day: 'APR', value: 24500, height: 'h-[78%]' },
-      { day: 'MAY', value: 29800, height: 'h-[95%]', current: true }
-    ]
-  };
+  const metrics = useMemo(() => {
+    const total = shipments.length;
+    const valid = shipments.filter((s) => s.status === 'VALID').length;
+    const blocked = shipments.filter(
+      (s) => s.status !== 'VALID' && s.status !== 'PENDING'
+    ).length;
+    const pending = shipments.filter((s) => s.status === 'PENDING').length;
+    const totalValue = shipments.reduce((sum, s) => sum + s.declaredValueUsd, 0);
 
-  const filteredActivities = activities.filter(activity => 
-    activity.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    activity.origin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    activity.destination.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    activity.assignedAgent.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+    // De minimis count
+    const deMinimis = shipments.filter((s) => s.declaredValueUsd <= 50).length;
+
+    // USMCA eligible count
+    const usmca = shipments.filter(
+      (s) =>
+        ['US', 'CA', 'USA', 'CAN'].includes(s.originCountry.toUpperCase()) &&
+        s.declaredValueUsd > 117
+    ).length;
+
+    // Standard global rate count
+    const standard = shipments.filter(
+      (s) =>
+        !['US', 'CA', 'USA', 'CAN'].includes(s.originCountry.toUpperCase()) &&
+        s.declaredValueUsd > 50
+    ).length;
+
+    // Prevalidation success rate
+    const prevalidationRate =
+      compliance?.canProceed !== null
+        ? compliance?.canProceed
+          ? 100
+          : Math.max(0, 100 - (compliance?.summary.blocking || 0) * 15)
+        : 0;
+
+    // Consignees near threshold
+    const consigneeValues = new Map<string, number>();
+    for (const s of shipments) {
+      const rfc = s.consigneeRfc.toUpperCase().trim();
+      consigneeValues.set(rfc, (consigneeValues.get(rfc) || 0) + s.declaredValueUsd);
+    }
+    const nearThreshold = Array.from(consigneeValues.values()).filter(
+      (v) => v > 2000 && v <= 2500
+    ).length;
+
+    return {
+      total,
+      valid,
+      blocked,
+      pending,
+      totalValue,
+      deMinimis,
+      usmca,
+      standard,
+      prevalidationRate,
+      nearThreshold,
+    };
+  }, [shipments, compliance]);
+
+  // Origin distribution for chart
+  const originDist = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of shipments) {
+      map.set(s.originCountry, (map.get(s.originCountry) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([code, count]) => ({ code, name: getCountryName(code), count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [shipments]);
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
 
   return (
     <div className="space-y-6">
-      {/* Metrics Row */}
+      {/* Metric cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1 */}
-        <div className="glass-card p-5 rounded-xl flex flex-col gap-2 hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start">
-            <p className="text-xs font-semibold uppercase tracking-wider text-on-primary-container">MAWBs en proceso</p>
-            <Clock className="w-5 h-5 text-secondary" />
-          </div>
-          <p className="text-3xl font-bold tracking-tight">1,248</p>
-          <div className="flex items-center gap-1 text-xs text-emerald-600 font-bold">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>+12.5% vs ayer</span>
-          </div>
-        </div>
-
-        {/* Card 2 */}
-        <div className="glass-card p-5 rounded-xl flex flex-col gap-2 border-l-4 border-l-primary hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start">
-            <p className="text-xs font-semibold uppercase tracking-wider text-on-primary-container">% Eficiencia de Validación</p>
-            <CheckCircle className="w-5 h-5 text-emerald-600" />
-          </div>
-          <p className="text-3xl font-bold tracking-tight">99.2%</p>
-          <div className="flex items-center gap-1 text-xs text-on-surface-variant">
-            <span>Target: 98.0%</span>
-          </div>
-        </div>
-
-        {/* Card 3 */}
-        <div className="glass-card p-5 rounded-xl flex flex-col gap-2 bg-error-container/10 border-l-4 border-l-error hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start">
-            <p className="text-xs font-semibold uppercase tracking-wider text-error">Casos en Rojo (Riesgo)</p>
-            <AlertTriangle className="w-5 h-5 text-error fill-error/20" />
-          </div>
-          <p className="text-3xl font-bold tracking-tight text-error">14</p>
-          <div className="flex items-center gap-1 text-xs text-error font-bold">
-            <span>Acción Crítica Requerida</span>
-          </div>
-        </div>
-
-        {/* Card 4 */}
-        <div className="glass-card p-5 rounded-xl flex flex-col gap-2 hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start">
-            <p className="text-xs font-semibold uppercase tracking-wider text-on-primary-container">Próximos Arribos</p>
-            <Plane className="w-5 h-5 text-secondary" />
-          </div>
-          <p className="text-3xl font-bold tracking-tight">32</p>
-          <div className="flex items-center gap-1 text-xs text-on-surface-variant font-bold">
-            <span>Próximas 24 Horas</span>
-          </div>
-        </div>
+        <MetricCard
+          label="Guías T1"
+          value={metrics.total}
+          sub={`${metrics.valid} válidas / ${metrics.blocked} bloqueadas`}
+          icon={<Package className="w-5 h-5" />}
+          trend={metrics.total > 0 ? `+${metrics.valid} listas` : 'Sin manifiesto'}
+          color="primary"
+        />
+        <MetricCard
+          label="% Prevalidación"
+          value={`${Math.round(metrics.prevalidationRate)}%`}
+          sub={compliance?.canProceed ? 'Aprobado para T1' : compliance ? 'Con bloqueantes' : 'Pendiente'}
+          icon={<CheckCircle className="w-5 h-5" />}
+          trend="Target: 100%"
+          color="emerald"
+        />
+        <MetricCard
+          label="Violaciones RRNA"
+          value={metrics.blocked}
+          sub={metrics.blocked > 0 ? 'Requieren acción inmediata' : 'Sin violaciones'}
+          icon={<AlertTriangle className="w-5 h-5" />}
+          trend={metrics.blocked > 0 ? '🔴 Crítico' : '✅ Limpio'}
+          color="red"
+        />
+        <MetricCard
+          label="Cerca del Límite"
+          value={metrics.nearThreshold}
+          sub="Consignatarios >$2,000 USD"
+          icon={<DollarSign className="w-5 h-5" />}
+          trend="Máx $2,500/consignatario"
+          color="amber"
+        />
       </div>
 
-      {/* Main Chart and Global KPIs */}
+      {/* Main charts area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Chart Column */}
-        <div className="lg:col-span-2 glass-card p-5 rounded-xl h-[400px] flex flex-col justify-between">
-          <div className="flex justify-between items-center">
+        {/* Tax rate breakdown */}
+        <div className="lg:col-span-2 bg-white border border-outline-variant p-5 rounded-xl shadow-sm">
+          <div className="flex justify-between items-center mb-4">
             <div>
-              <h3 className="text-lg font-bold">Tendencia de Volumen Diario</h3>
-              <p className="text-xs text-on-surface-variant">Registros procesados en todas las patentes de agencias aduanales</p>
-            </div>
-            {/* Range Toggle */}
-            <div className="flex gap-1 bg-surface-container-low p-1 rounded">
-              {(['7D', '30D', '90D'] as const).map(range => (
-                <button
-                  key={range}
-                  onClick={() => setTimeRange(range)}
-                  className={`px-3 py-1 rounded text-xs font-bold transition-all ${
-                    timeRange === range 
-                      ? 'bg-white shadow-sm text-primary' 
-                      : 'text-on-surface-variant hover:text-primary'
-                  }`}
-                >
-                  {range}
-                </button>
-              ))}
+              <h3 className="text-lg font-bold">Desglose de Tasas Globales Aplicadas</h3>
+              <p className="text-xs text-on-surface-variant">
+                Distribución por régimen fiscal según origen y valor (RGCE 3.7.35)
+              </p>
             </div>
           </div>
 
-          {/* Interactive Bars container */}
-          <div className="flex-1 flex items-end gap-4 md:gap-6 pb-2 pt-6 relative h-[250px]">
-            {/* Dotted Grid lines */}
-            <div className="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-10 pt-6">
-              <div className="border-t border-dashed border-primary"></div>
-              <div className="border-t border-dashed border-primary"></div>
-              <div className="border-t border-dashed border-primary"></div>
-              <div className="border-t border-dashed border-primary"></div>
+          {shipments.length === 0 ? (
+            <div className="h-[250px] flex items-center justify-center text-on-surface-variant text-sm">
+              Cargue un manifiesto T1 para visualizar el desglose de tasas.
             </div>
-
-            {/* Render bars */}
-            {barData[timeRange].map((bar, idx) => (
-              <div 
-                key={idx} 
-                className="flex-1 flex flex-col items-center h-full justify-end group relative cursor-pointer"
-              >
-                {/* Floating tooltip on hover */}
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-primary-container text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10 shadow whitespace-nowrap">
-                  {bar.value.toLocaleString()} bultos
+          ) : (
+            <div className="space-y-4">
+              {/* De Minimis bar */}
+              <div>
+                <div className="flex justify-between items-center text-xs font-bold mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-emerald-500" />
+                    De Minimis Exento (≤$50 USD)
+                  </span>
+                  <span className="text-emerald-600">{metrics.deMinimis} guías</span>
                 </div>
+                <div className="h-3 bg-surface-container-high rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                    style={{ width: `${metrics.total > 0 ? (metrics.deMinimis / metrics.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
 
-                {/* Animated bar column */}
-                <div 
-                  className={`w-full rounded-t-sm transition-all duration-700 ease-out ${bar.height} ${
-                    bar.current 
-                      ? 'bg-primary shadow-lg ring-2 ring-primary/20' 
-                      : 'bg-primary/20 hover:bg-primary/40'
-                  }`}
-                />
-                
-                {/* Day label */}
-                <span className="text-[10px] font-bold text-on-surface-variant uppercase mt-2 tracking-wider">
-                  {bar.day}
+              {/* USMCA bar */}
+              <div>
+                <div className="flex justify-between items-center text-xs font-bold mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Plane className="w-3.5 h-3.5 text-blue-500" />
+                    USMCA Preferencial (19%)
+                  </span>
+                  <span className="text-blue-600">{metrics.usmca} guías</span>
+                </div>
+                <div className="h-3 bg-surface-container-high rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                    style={{ width: `${metrics.total > 0 ? (metrics.usmca / metrics.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Standard bar */}
+              <div>
+                <div className="flex justify-between items-center text-xs font-bold mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Percent className="w-3.5 h-3.5 text-red-500" />
+                    Tasa Global Estándar (33.5%)
+                  </span>
+                  <span className="text-red-600">{metrics.standard} guías</span>
+                </div>
+                <div className="h-3 bg-surface-container-high rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-red-500 rounded-full transition-all duration-500"
+                    style={{ width: `${metrics.total > 0 ? (metrics.standard / metrics.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Total liquidation */}
+              <div className="pt-3 border-t border-outline-variant/30 flex justify-between items-center">
+                <span className="text-sm font-bold text-primary">Liquidación Total Estimada</span>
+                <span className="text-lg font-black text-primary">
+                  ${tax.globalTotals.totalLiquidacion.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                 </span>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* Global KPIs Sidebar */}
-        <div className="glass-card p-5 rounded-xl flex flex-col justify-between">
-          <div>
-            <h3 className="text-lg font-bold mb-4">Índice de Cumplimiento</h3>
-            <div className="space-y-4">
-              {/* Row 1 */}
-              <div>
-                <div className="flex justify-between items-center text-xs font-bold mb-1">
-                  <span>O1: Integridad de Datos</span>
-                  <span className="text-emerald-600 font-bold">99.9%</span>
+        {/* Origin distribution */}
+        <div className="bg-white border border-outline-variant p-5 rounded-xl shadow-sm">
+          <h3 className="text-lg font-bold mb-4">Distribución por Origen</h3>
+          {originDist.length === 0 ? (
+            <div className="h-[200px] flex items-center justify-center text-on-surface-variant text-sm">
+              Sin datos de origen.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {originDist.map((o) => (
+                <div key={o.code}>
+                  <div className="flex justify-between items-center text-xs font-bold mb-1">
+                    <span>{o.name}</span>
+                    <span className="text-on-surface-variant">{o.count} guías</span>
+                  </div>
+                  <div className="h-2 bg-surface-container-high rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-500"
+                      style={{ width: `${(o.count / metrics.total) * 100}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500 rounded-full" style={{ width: '99.9%' }}></div>
-                </div>
-              </div>
+              ))}
+            </div>
+          )}
 
-              {/* Row 2 */}
-              <div>
-                <div className="flex justify-between items-center text-xs font-bold mb-1">
-                  <span>O2: Tiempo de Validación SAT</span>
-                  <span>2.4m</span>
-                </div>
-                <div className="h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                  <div className="h-full bg-primary rounded-full" style={{ width: '85%' }}></div>
-                </div>
+          <div className="pt-4 border-t border-outline-variant mt-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs">
+                <span className="text-on-surface-variant">Tipo de cambio SAT:</span>
+                <span className="font-bold">${state.tax.exchangeRate.toFixed(2)} MXN/USD</span>
               </div>
-
-              {/* Row 3 */}
-              <div>
-                <div className="flex justify-between items-center text-xs font-bold mb-1">
-                  <span>O3: Precisión de Riesgo</span>
-                  <span>96.4%</span>
-                </div>
-                <div className="h-1.5 bg-surface-container-high rounded-full overflow-hidden">
-                  <div className="h-full bg-primary rounded-full" style={{ width: '96.4%' }}></div>
-                </div>
-              </div>
-
-              {/* Row 4 */}
-              <div>
-                <div className="flex justify-between items-center text-xs font-semibold mb-1 text-error">
-                  <span>O4: Tasa de Discrepancias</span>
-                  <span>0.4%</span>
-                </div>
-                <div className="h-1.5 bg-error-container rounded-full overflow-hidden">
-                  <div className="h-full bg-error rounded-full" style={{ width: '15%' }}></div>
-                </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-on-surface-variant">Modalidad:</span>
+                <span className="font-bold">{manifest.transportMode === 'AIR' ? 'Aérea' : 'Terrestre'}</span>
               </div>
             </div>
           </div>
-
-          <div className="pt-6 border-t border-outline-variant mt-4">
-            <button 
-              onClick={() => onNavigateToTab('riskAnalysis')}
-              className="w-full flex items-center justify-between p-3 border border-outline hover:border-primary rounded hover:bg-surface-container-low transition-colors group"
-            >
-              <span className="text-xs font-bold text-primary">Reporte Completo de Cumplimiento</span>
-              <ArrowRight className="w-4 h-4 text-primary group-hover:translate-x-1 transition-transform" />
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* Recents Table Panel */}
-      <div className="glass-card rounded-xl overflow-hidden shadow-sm">
-        <div className="p-5 border-b border-outline-variant bg-surface-container-low/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h3 className="text-lg font-bold">Actividades Recientes de Manifiestos</h3>
-            <p className="text-xs text-on-surface-variant">Haga clic en el código de referencia para abrir la inspección de cumplimiento</p>
-          </div>
-          {/* Search Box */}
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-outline" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              placeholder="Buscar manifiesto, agente, ruta..."
-              className="w-full pl-9 pr-4 py-1.5 bg-white border border-outline-variant rounded focus:border-primary focus:ring-1 focus:ring-primary text-xs outline-none"
-            />
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-surface-container-low font-table-header text-table-header uppercase tracking-wider text-on-surface-variant border-b border-outline-variant">
-              <tr>
-                <th className="px-6 py-3 text-xs font-semibold">ID Ref</th>
-                <th className="px-6 py-3 text-xs font-semibold">Origen / Destino</th>
-                <th className="px-6 py-3 text-xs font-semibold">Bultos / Items</th>
-                <th className="px-6 py-3 text-xs font-semibold">Agente Asignado</th>
-                <th className="px-6 py-3 text-xs font-semibold">Estatus</th>
-                <th className="px-6 py-3 text-xs font-semibold">Marca de Tiempo</th>
-                <th className="px-6 py-3 text-xs font-semibold text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-variant text-[13px] font-medium">
-              {filteredActivities.length === 0 ? (
-                <tr>
-                   <td colSpan={7} className="px-6 py-8 text-center text-on-surface-variant">
-                     No se encontraron registros de manifiestos.
-                   </td>
-                </tr>
-              ) : (
-                filteredActivities.map((activity) => (
-                  <tr 
-                    key={activity.id} 
-                    className={`hover:bg-surface-container-low/60 transition-colors ${
-                      activity.status === 'RECHAZADO' ? 'bg-error-container/5' : ''
-                    }`}
-                  >
-                    <td className="px-6 py-4 font-mono font-bold text-primary">
-                      <button 
-                        onClick={() => {
-                          // Handle route lookup - usually redirect to Manifest view or click inspection
-                          if (activity.id === 'CA-2024-00994') {
-                            onNavigateToTab('manifests');
-                          } else {
-                            onSelectManifest(activity.id);
-                          }
-                        }}
-                        className="hover:underline text-left text-primary"
-                      >
-                        {activity.id}
-                      </button>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold">{activity.origin}</span>
-                        <ChevronRight className="w-3.5 h-3.5 text-outline" />
-                        <span className="font-bold">{activity.destination}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs">{activity.items}</td>
-                    <td className="px-6 py-4 text-on-surface-variant">{activity.assignedAgent}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                        activity.status === 'VALIDADO' 
-                          ? 'bg-emerald-100 text-emerald-800' 
-                          : activity.status === 'EN COLA' 
-                          ? 'bg-surface-container-highest text-on-surface-variant' 
-                          : activity.status === 'RECHAZADO' 
-                          ? 'bg-error text-white' 
-                          : 'bg-blue-100 text-blue-800'
-                      }`}>
-                        {activity.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs opacity-80">{activity.timestamp}</td>
-                    <td className="px-6 py-4 text-right">
-                      <button 
-                        onClick={() => onSelectManifest(activity.id)}
-                        className="text-primary hover:underline font-bold text-xs"
-                      >
-                        Auditar
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Bottom Hub Cards */}
+      {/* Quick actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Card Left */}
-        <div className="glass-card p-6 rounded-xl flex items-start gap-4 border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
+        <div className="bg-white border border-outline-variant p-6 rounded-xl flex items-start gap-4 border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-full">
-            <Upload className="w-6 h-6" />
+            <Package className="w-6 h-6" />
           </div>
           <div>
-            <h4 className="font-bold text-sm">Nueva Declaración Aduanal</h4>
+            <h4 className="font-bold text-sm">Nuevo Manifiesto T1</h4>
             <p className="text-xs text-on-surface-variant mt-1 mb-3">
-              Cargue manifiestos masivos en formato XML o JSON para validación automática SAT/ANAM.
+              Cargue manifiestos de mensajería para validación automática RGCE 3.7.3 / 3.7.5.
             </p>
-            <button 
-              onClick={onAddDeclaration}
-              className="text-xs font-bold text-primary hover:underline flex items-center gap-1"
-            >
-              <span>Ir a Cargar Manifiesto</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
           </div>
         </div>
 
-        {/* Card Right */}
-        <div className="glass-card p-6 rounded-xl flex items-start gap-4 border-l-4 border-l-error hover:shadow-md transition-shadow">
-          <div className="p-3 bg-red-50 text-error rounded-full">
+        <div className="bg-white border border-outline-variant p-6 rounded-xl flex items-start gap-4 border-l-4 border-l-red-500 hover:shadow-md transition-shadow">
+          <div className="p-3 bg-red-50 text-red-600 rounded-full">
             <ShieldAlert className="w-6 h-6" />
           </div>
           <div>
-            <h4 className="font-bold text-sm">Reporte de Riesgo Preventivo</h4>
+            <h4 className="font-bold text-sm">Revisión RRNA</h4>
             <p className="text-xs text-on-surface-variant mt-1 mb-3">
-              Análisis heurístico de consignatarios y HTS restringidos para evitar multas operativas.
+              {metrics.blocked > 0
+                ? `${metrics.blocked} guías bloqueadas por regulaciones no arancelarias.`
+                : 'Sin violaciones RRNA detectadas en el manifiesto actual.'}
             </p>
-            <button 
-              onClick={() => onNavigateToTab('riskAnalysis')}
-              className="text-xs font-bold text-error hover:underline flex items-center gap-1"
-            >
-              <span>Ver Reporte de Riesgo</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function MetricCard({
+  label,
+  value,
+  sub,
+  icon,
+  trend,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  sub: string;
+  icon: ReactNode;
+  trend: string;
+  color: string;
+}) {
+  const colorMap: Record<string, { iconBg: string; iconText: string; border: string }> = {
+    primary: { iconBg: 'bg-primary/10', iconText: 'text-primary', border: 'border-l-primary' },
+    emerald: { iconBg: 'bg-emerald-50', iconText: 'text-emerald-600', border: 'border-l-emerald-500' },
+    red: { iconBg: 'bg-red-50', iconText: 'text-red-600', border: 'border-l-red-500' },
+    amber: { iconBg: 'bg-amber-50', iconText: 'text-amber-600', border: 'border-l-amber-500' },
+  };
+  const c = colorMap[color] || colorMap.primary;
+
+  return (
+    <div className={`glass-card p-5 rounded-xl flex flex-col gap-2 hover:shadow-md transition-shadow border-l-4 ${c.border}`}>
+      <div className="flex justify-between items-start">
+        <p className="text-xs font-semibold uppercase tracking-wider text-on-primary-container">{label}</p>
+        <div className={`p-1.5 rounded-full ${c.iconBg} ${c.iconText}`}>{icon}</div>
+      </div>
+      <p className="text-3xl font-bold tracking-tight">{value}</p>
+      <p className="text-[10px] text-on-surface-variant font-medium">{sub}</p>
+      <p className={`text-[10px] font-bold ${color === 'red' ? 'text-red-600' : 'text-emerald-600'}`}>{trend}</p>
     </div>
   );
 }

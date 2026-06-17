@@ -8,6 +8,7 @@ import { pedimentoRouter } from './routes/pedimento';
 import { recordsRouter } from './routes/records';
 import { exportsRouter } from './routes/exports';
 import { dashboardRouter } from './routes/dashboard';
+import { filesRouter } from './routes/files';
 
 export function createApp(): Express {
   const app = express();
@@ -22,5 +23,6 @@ export function createApp(): Express {
   app.use('/api/records', recordsRouter);
   app.use('/api/records', exportsRouter);
   app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/files', filesRouter);
   return app;
 }

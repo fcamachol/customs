@@ -235,3 +235,6 @@ export type T1Action =
   | { type: 'SET_RRNA_MODE'; payload: RRNAMode }
   | { type: 'LOAD_DEMO_DATA'; payload: { shipments: T1Shipment[]; mawbReference: string } }
   | { type: 'HYDRATE_STATE'; payload: T1AppState };
+
+// Canonical model now lives in shared/. Re-export for existing imports.
+export * from '../../shared/types/shipment';

@@ -1,0 +1,8 @@
+{
+  "name": "@customs/shared",
+  "private": true,
+  "type": "module",
+  "main": "types/index.ts",
+  "scripts": { "test": "vitest run" },
+  "devDependencies": { "vitest": "^2.1.8", "typescript": "~5.8.2" }
+}

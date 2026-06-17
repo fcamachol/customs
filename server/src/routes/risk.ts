@@ -3,7 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { scoreManifest } from '../../../shared/risk/classify';
-import { loadHistoryNames, recordNames } from '../services/monthlyHistory';
+import { deleteManifestHistory, loadHistoryNames, recordNames } from '../services/monthlyHistory';
 import type { Shipment } from '../../../shared/types/shipment';
 
 export const riskRouter = Router();
@@ -14,14 +14,15 @@ riskRouter.post('/:id/risk', requireAuth, async (req, res) => {
     'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);
   const shipments = rows.map((r) => r.data);
 
-  const history = await loadHistoryNames(period);
+  await deleteManifestHistory(req.params.id);
+  const history = await loadHistoryNames(period, req.params.id);
   const scored = scoreManifest(shipments, history);
 
   for (const sc of scored) {
     await query('UPDATE shipments SET risk_score=$1, risk_color=$2 WHERE id=$3',
       [sc.score, sc.color, sc.shipment.id]);
   }
-  await recordNames(shipments.map((s) => s.consignee.name), period);
+  await recordNames(shipments.map((s) => s.consignee.name), period, req.params.id);
 
   const summary = {
     analizados: scored.length,

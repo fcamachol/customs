@@ -21,6 +21,10 @@ import {
 } from 'lucide-react';
 
 import { T1Provider, useT1 } from './context/T1Context';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { AppShell, type Section } from './components/AppShell';
+import { LoginView } from './components/LoginView';
+import { AcercaDeView } from './components/AcercaDeView';
 import DashboardView from './components/DashboardView';
 import ManifestUploadView from './components/ManifestUploadView';
 import T1ComplianceView from './components/T1ComplianceView';
@@ -226,13 +230,51 @@ function AppInner() {
 }
 
 // ---------------------------------------------------------------------------
+// Authenticated app — six-section shell (Plan 05)
+// ---------------------------------------------------------------------------
+
+function AuthenticatedApp() {
+  const { user } = useAuth();
+  const [section, setSection] = useState<Section>('registro');
+  const noop = () => {};
+
+  return (
+    <div className="min-h-screen bg-surface-container-lowest text-primary-fixed flex flex-col font-sans antialiased">
+      <AppShell role={user!.role} active={section} onSelect={setSection} />
+      <div className="flex-1 min-h-0 p-6 overflow-y-auto">
+        {section === 'registro' && <ManifestUploadView onToast={noop} />}
+        {section === 'seguimiento' && <div>Seguimiento</div>}
+        {section === 'reporte' && <div>Reporte General</div>}
+        {section === 'consulta' && <div>Consulta</div>}
+        {section === 'dashboard' && <DashboardView />}
+        {section === 'acerca' && <AcercaDeView />}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Auth gate — LoginView when logged out, the app when logged in
+// ---------------------------------------------------------------------------
+
+function AuthGate() {
+  const { user } = useAuth();
+  if (!user) return <LoginView />;
+  return (
+    <T1Provider>
+      <AuthenticatedApp />
+    </T1Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Export with Provider wrapper
 // ---------------------------------------------------------------------------
 
 export default function App() {
   return (
-    <T1Provider>
-      <AppInner />
-    </T1Provider>
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }

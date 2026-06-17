@@ -4,6 +4,7 @@ import { usersRouter } from './routes/users';
 import { manifestsRouter } from './routes/manifests';
 import { pedimentoUploadRouter } from './routes/pedimentoUpload';
 import { riskRouter } from './routes/risk';
+import { pedimentoRouter } from './routes/pedimento';
 
 export function createApp(): Express {
   const app = express();
@@ -14,5 +15,6 @@ export function createApp(): Express {
   app.use('/api/manifests', manifestsRouter);
   app.use('/api/manifests', pedimentoUploadRouter);
   app.use('/api/manifests', riskRouter);
+  app.use('/api/manifests', pedimentoRouter);
   return app;
 }

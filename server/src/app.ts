@@ -7,6 +7,7 @@ import { riskRouter } from './routes/risk';
 import { pedimentoRouter } from './routes/pedimento';
 import { recordsRouter } from './routes/records';
 import { exportsRouter } from './routes/exports';
+import { dashboardRouter } from './routes/dashboard';
 
 export function createApp(): Express {
   const app = express();
@@ -20,5 +21,6 @@ export function createApp(): Express {
   app.use('/api/manifests', pedimentoRouter);
   app.use('/api/records', recordsRouter);
   app.use('/api/records', exportsRouter);
+  app.use('/api/dashboard', dashboardRouter);
   return app;
 }

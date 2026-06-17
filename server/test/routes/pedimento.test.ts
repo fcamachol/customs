@@ -38,4 +38,17 @@ describe('POST /api/manifests/:id/pedimento', () => {
     expect(res.body.prevalidation.status).toBe('APPROVED');
     expect(res.body.pedimento.partidas[0].observation).toMatch(/^GUIA /);
   });
+
+  it('returns 400 (not 500) when importer and agent are missing', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        numeroPedimento: '258516535001684', tipoCambio: 20.45,
+        customsEntryCode: '4', customsClearanceCode: '850',
+        entryDate: '2025-04-04', paymentDate: '2025-04-05',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/importer/);
+  });
 });

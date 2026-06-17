@@ -1,4 +1,4 @@
-import express, { type Express } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { authRouter } from './routes/auth';
 import { usersRouter } from './routes/users';
 import { manifestsRouter } from './routes/manifests';
@@ -24,5 +24,11 @@ export function createApp(): Express {
   app.use('/api/records', exportsRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/files', filesRouter);
+  // Global error handler: log server-side, never leak stack traces to clients.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Internal error' });
+  });
   return app;
 }

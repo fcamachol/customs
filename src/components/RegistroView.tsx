@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { FormEvent } from 'react';
 import * as XLSX from 'xlsx';
 import { apiPost } from '../api';
 import { RiskSummary, RiskResultTable, type RiskRow, type RiskSummaryData } from './RiskResultTable';
@@ -23,7 +24,7 @@ export default function RegistroView() {
   const [unmappedHeaders, setUnmappedHeaders] = useState<string[]>([]);
   const [result, setResult] = useState<RiskResponse | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setResult(null);

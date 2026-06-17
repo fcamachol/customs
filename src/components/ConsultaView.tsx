@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { FormEvent } from 'react';
 import { apiGet, apiDownload } from '../api';
 
 interface RecordSummary {
@@ -28,7 +29,7 @@ export default function ConsultaView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleSearch(e: React.FormEvent) {
+  async function handleSearch(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setDetail(null);

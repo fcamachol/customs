@@ -9,6 +9,7 @@ import { recordsRouter } from './routes/records';
 import { exportsRouter } from './routes/exports';
 import { dashboardRouter } from './routes/dashboard';
 import { filesRouter } from './routes/files';
+import { auditRouter } from './routes/audit';
 
 export function createApp(): Express {
   const app = express();
@@ -24,6 +25,7 @@ export function createApp(): Express {
   app.use('/api/records', exportsRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/files', filesRouter);
+  app.use('/api/audit', auditRouter);
   // Global error handler: log server-side, never leak stack traces to clients.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

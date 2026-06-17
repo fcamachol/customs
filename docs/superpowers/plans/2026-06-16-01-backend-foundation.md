@@ -28,7 +28,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "migrate": "node-pg-migrate -j ts -m migrations --envPath .env",
+    "migrate": "node-pg-migrate --tsx -m migrations --envPath .env",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -152,7 +152,7 @@ import { pool } from '../src/db/pool';
 
 beforeAll(() => {
   process.env.NODE_ENV = 'test';
-  execSync('node-pg-migrate -j ts -m migrations up', {
+  execSync('node-pg-migrate --tsx -m migrations up', {
     env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL },
     stdio: 'inherit',
   });

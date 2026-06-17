@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "migrate": "node-pg-migrate -j ts -m migrations --envPath .env",
+    "migrate": "node-pg-migrate --tsx -m migrations --envPath .env",
     "test": "vitest run",
     "test:watch": "vitest"
   },

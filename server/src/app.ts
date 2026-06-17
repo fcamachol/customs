@@ -2,6 +2,7 @@ import express, { type Express } from 'express';
 import { authRouter } from './routes/auth';
 import { usersRouter } from './routes/users';
 import { manifestsRouter } from './routes/manifests';
+import { pedimentoUploadRouter } from './routes/pedimentoUpload';
 
 export function createApp(): Express {
   const app = express();
@@ -10,5 +11,6 @@ export function createApp(): Express {
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);
   app.use('/api/manifests', manifestsRouter);
+  app.use('/api/manifests', pedimentoUploadRouter);
   return app;
 }

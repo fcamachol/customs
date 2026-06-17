@@ -1,0 +1,51 @@
+// Maps a raw spreadsheet header (any casing/accents) to a canonical path.
+const TABLE: Record<string, string> = {
+  'no de registro t1': 'core.t1RegistryId',
+  'patente': 'core.patente',
+  'no pedimento': 'core.pedimentoNumber',
+  'descripcion de la mercancia': 'core.description',
+  'fraccion arancelaria': 'core.hsCode',
+  'cantidad de la mercancia': 'core.quantity',
+  'unidad de medida': 'core.unit',
+  'valor en aduana declarado': 'core.customsValueUsd',
+  'moneda': 'core.currency',
+  'pais de procedencia': 'core.originCountry',
+  'fecha de arribo a territorio nacional': 'core.arrivalDate',
+  'no de guia aerea o documento de transporte': 'core.guideId',
+  'tasa global o cuota aplicada': 'core.appliedRate',
+  'regulaciones y restricciones no arancelarias': 'core.rrnaNote',
+  'clave de aduana de entrada': 'core.customsEntryCode',
+  'clave de aduana de despacho': 'core.customsClearanceCode',
+  'nombre denominacion o razon social': 'consignee.name',
+  'rfc': 'consignee.rfc',
+  'curp': 'consignee.curp',
+  'id fiscal de pais de residencia': 'consignee.foreignTaxId',
+  'no de seguridad social': 'consignee.socialSecurity',
+  'no de pasaporte': 'consignee.passport',
+  'domicilio': 'consignee.address',
+  'telefono': 'consignee.phone',
+  'correo electronico': 'consignee.email',
+  'remitente nombre': 'sender.name',
+  'id fiscal del remitente': 'sender.taxId',
+  'remitente domicilio': 'sender.address',
+  'remitente telefono': 'sender.phone',
+  'remitente correo': 'sender.email',
+  'nombre comercial': 'platform.commercialName',
+  'pais de origen': 'platform.countryOfOrigin',
+  'denominacion o razon social': 'platform.legalName',
+  'plataforma correo': 'platform.email',
+};
+
+function normalize(h: string): string {
+  return h
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function resolveHeader(raw: string): string | null {
+  return TABLE[normalize(raw)] ?? null;
+}

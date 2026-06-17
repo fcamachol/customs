@@ -14,7 +14,7 @@ beforeEach(async () => {
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('c',$1,'capturista') RETURNING id`, [hash]);
   token = signToken({ userId: u.rows[0].id, role: 'capturista' });
-  await query(`INSERT INTO manifests (mawb_reference, client_name) VALUES ('369-1','Cliente A'),('370-2','Cliente B')`);
+  await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('369-1','Cliente A',$1),('370-2','Cliente B',$1)`, [u.rows[0].id]);
 });
 
 describe('records', () => {

@@ -15,7 +15,7 @@ beforeEach(async () => {
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('c',$1,'capturista') RETURNING id`, [hash]);
   token = signToken({ userId: u.rows[0].id, role: 'capturista' });
-  const m = await query(`INSERT INTO manifests (mawb_reference, client_name) VALUES ('369-1','Cliente A') RETURNING id`);
+  const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('369-1','Cliente A',$1) RETURNING id`, [u.rows[0].id]);
   manifestId = m.rows[0].id;
   const s = { id: crypto.randomUUID(), mawbReference: '369-1', description: 'TRAJE', hsCode: '99010001',
     quantity: 1, unit: '6', customsValueUsd: 120, currency: 'USD', originCountry: 'CN', guideId: 'g1',

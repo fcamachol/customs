@@ -22,9 +22,9 @@ function send(res: any, buf: Buffer, name: string) {
   res.send(buf);
 }
 
-async function loadShipments(manifestId: string): Promise<{ data: Shipment; risk_color: string | null }[]> {
-  const { rows } = await query<{ data: Shipment; risk_color: string | null }>(
-    'SELECT data, risk_color FROM shipments WHERE manifest_id=$1', [manifestId]);
+async function loadShipments(manifestId: string): Promise<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }[]> {
+  const { rows } = await query<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }>(
+    'SELECT data, risk_color, risk_incidences FROM shipments WHERE manifest_id=$1', [manifestId]);
   return rows;
 }
 
@@ -46,7 +46,7 @@ exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
   const rows = await loadShipments(req.params.id);
   const reportRows = buildReportRows({
     shipments: rows.map((r) => r.data),
-    riskByGuide: Object.fromEntries(rows.map((r) => [r.data.guideId, { color: r.risk_color ?? '', incidences: [] }])),
+    riskByGuide: Object.fromEntries(rows.map((r) => [r.data.guideId, { color: r.risk_color ?? '', incidences: r.risk_incidences ?? [] }])),
     client: { name: m.rows[0]?.client_name ?? '' },
   });
   send(res, workbook(reportRows), 'Reporte_General.xlsx');

@@ -19,8 +19,8 @@ riskRouter.post('/:id/risk', requireAuth, async (req, res) => {
   const scored = scoreManifest(shipments, history);
 
   for (const sc of scored) {
-    await query('UPDATE shipments SET risk_score=$1, risk_color=$2 WHERE id=$3',
-      [sc.score, sc.color, sc.shipment.id]);
+    await query('UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3 WHERE id=$4',
+      [sc.score, sc.color, JSON.stringify(sc.incidences), sc.shipment.id]);
   }
   await recordNames(shipments.map((s) => s.consignee.name), period, req.params.id);
 

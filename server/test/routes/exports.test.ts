@@ -20,7 +20,8 @@ beforeEach(async () => {
   const s = { id: crypto.randomUUID(), mawbReference: '369-1', description: 'TRAJE', hsCode: '99010001',
     quantity: 1, unit: '6', customsValueUsd: 120, currency: 'USD', originCountry: 'CN', guideId: 'g1',
     consignee: { name: 'Juan', rfc: 'TOMM020922D40' }, sender: { name: 'S' }, platform: { commercialName: 'P' } };
-  await query('INSERT INTO shipments (id,manifest_id,data,risk_color) VALUES ($1,$2,$3,$4)', [s.id, manifestId, JSON.stringify(s), 'verde']);
+  await query('INSERT INTO shipments (id,manifest_id,data,risk_color,risk_incidences) VALUES ($1,$2,$3,$4,$5)',
+    [s.id, manifestId, JSON.stringify(s), 'rojo', JSON.stringify(['valor atipico', 'destinatario nuevo'])]);
 });
 
 describe('exports', () => {
@@ -33,5 +34,16 @@ describe('exports', () => {
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const json = XLSX.utils.sheet_to_json(sheet);
     expect(Object.keys(json[0] as object)).toHaveLength(34);
+  });
+
+  it('populates report Motivo from persisted risk incidences', async () => {
+    const res = await request(app).get(`/api/records/${manifestId}/report.xlsx`).set('Authorization', `Bearer ${token}`).buffer().parse((r, cb) => {
+      const chunks: Buffer[] = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+    expect(res.status).toBe(200);
+    const wb = XLSX.read(res.body, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet) as Record<string, string>[];
+    expect(json[0].Motivo).toBe('valor atipico; destinatario nuevo');
   });
 });

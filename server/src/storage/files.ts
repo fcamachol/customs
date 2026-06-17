@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query } from '../db/pool';
 
@@ -15,7 +15,8 @@ export async function saveFile(input: SaveFileInput): Promise<FileMeta> {
   const id = randomUUID();
   const dir = join(STORAGE_DIR, input.kind);
   await mkdir(dir, { recursive: true });
-  const storagePath = join(dir, `${id}-${input.originalName}`);
+  const safeName = basename(input.originalName).replace(/[/\\]/g, '_') || 'file';
+  const storagePath = join(dir, `${id}-${safeName}`);
   await writeFile(storagePath, input.bytes);
   await query(
     `INSERT INTO files (id, kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6)`,

@@ -174,7 +174,7 @@ export default function RegistroView() {
                 <span
                   className={`grid h-5 w-5 shrink-0 place-items-center rounded-full transition-colors duration-300 ${
                     i < checkedCount
-                      ? 'bg-emerald-500 text-white'
+                      ? 'bg-navy-800 text-white'
                       : 'border border-slate-300 bg-slate-50'
                   }`}
                 >

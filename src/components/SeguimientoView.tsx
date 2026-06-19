@@ -358,8 +358,8 @@ export default function SeguimientoView() {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
           className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
             isDragging
-              ? 'border-emerald-500 bg-emerald-50'
-              : 'border-slate-300 bg-slate-50 hover:border-emerald-400 hover:bg-emerald-50/30'
+              ? 'border-navy-600 bg-navy-50'
+              : 'border-slate-300 bg-slate-50 hover:border-navy-400 hover:bg-navy-50/30'
           }`}
         >
           <Upload className="h-8 w-8 text-slate-400" />
@@ -387,7 +387,7 @@ export default function SeguimientoView() {
           </p>
         )}
         {uploadSuccess && (
-          <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
+          <p className="mt-3 rounded-lg border border-navy-200 bg-navy-50 px-4 py-2 text-sm font-medium text-navy-800">
             Pedimento PDF subido correctamente.
           </p>
         )}

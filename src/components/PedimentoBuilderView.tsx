@@ -340,7 +340,7 @@ export default function PedimentoBuilderView({ onToast }: Props) {
                 </button>
                 <button
                   onClick={downloadM3Layout}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 transition-all"
+                  className="bg-navy-700 hover:bg-navy-800 text-white px-3.5 py-1.5 rounded text-xs font-bold flex items-center gap-1.5 transition-all"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Descargar .txt</span>
@@ -384,13 +384,13 @@ export default function PedimentoBuilderView({ onToast }: Props) {
           <div className="bg-white w-full max-w-4xl rounded-2xl border border-outline-variant shadow-2xl flex flex-col overflow-hidden h-[90vh]">
             <div className="no-print p-4 border-b border-outline-variant bg-surface-container-low flex justify-between items-center shrink-0">
               <div className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <div className="w-2.5 h-2.5 rounded-full bg-navy-600 animate-pulse" />
                 <span className="text-xs font-bold font-sans text-primary">Reporte Oficial T1 — ANAM/SAT</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => window.print()}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+                  className="bg-navy-700 hover:bg-navy-800 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span>Imprimir / Guardar PDF</span>
@@ -470,7 +470,7 @@ export default function PedimentoBuilderView({ onToast }: Props) {
                       <tbody className="divide-y divide-slate-100 font-mono text-[10px] text-slate-600">
                         {ped.partidas.map((part) => (
                           <tr key={part.secuencia} className="hover:bg-slate-50/50">
-                            <td className="p-2.5 font-bold text-[#0C2314]">{String(part.secuencia).padStart(3, '0')}</td>
+                            <td className="p-2.5 font-bold text-navy-800">{String(part.secuencia).padStart(3, '0')}</td>
                             <td className="p-2.5 font-bold text-slate-700">{part.genericHsCode}</td>
                             <td className="p-2.5 font-sans truncate max-w-[150px]">{part.description}</td>
                             <td className="p-2.5 text-center">{part.quantity} {part.unit}</td>

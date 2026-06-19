@@ -279,9 +279,9 @@ export default function ManifestUploadView({ onToast }: Props) {
       {step === 2 && shipments.length > 0 && (
         <div className="space-y-6">
           {/* Summary header */}
-          <div className="bg-[#0b2c1b] text-white p-6 rounded-xl border border-emerald-500/20 shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="bg-navy-800 text-white p-6 rounded-xl border border-navy-600/30 shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div className="space-y-1">
-              <span className="text-[10px] font-mono font-black text-emerald-300 uppercase tracking-wider block">
+              <span className="text-[10px] font-mono font-black text-gold-400 uppercase tracking-wider block">
                 Análisis RGCE — Empresas de Mensajería y Paquetería
               </span>
               <h2 className="text-xl font-black tracking-tight font-sans text-white">
@@ -404,7 +404,7 @@ export default function ManifestUploadView({ onToast }: Props) {
           {/* Compliance results header */}
           <div className={`p-6 rounded-xl border shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${
             compliance.canProceed
-              ? 'bg-[#0b2c1b] border-emerald-500/20 text-white'
+              ? 'bg-navy-800 border-navy-600/30 text-white'
               : 'bg-red-950 border-red-500/30 text-white'
           }`}>
             <div className="space-y-1">
@@ -428,7 +428,7 @@ export default function ManifestUploadView({ onToast }: Props) {
               {compliance.canProceed && (
                 <button
                   onClick={() => setShowPedimentoForm(true)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all active:scale-95 shadow-sm shadow-emerald-600/20"
+                  className="bg-navy-700 hover:bg-navy-800 text-white px-5 py-2.5 rounded-lg font-bold text-xs flex items-center gap-2 transition-all active:scale-95 shadow-sm"
                 >
                   <FileCheck className="w-4 h-4" />
                   <span>Generar Pedimento T1</span>
@@ -659,9 +659,9 @@ export default function ManifestUploadView({ onToast }: Props) {
               </button>
               <button
                 onClick={generatePedimento}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 text-xs rounded transition-all flex items-center justify-center gap-1.5 shadow-sm shadow-emerald-600/20"
+                className="flex-1 bg-navy-700 hover:bg-navy-800 text-white font-bold py-2 text-xs rounded transition-all flex items-center justify-center gap-1.5 shadow-sm"
               >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
+                <Sparkles className="w-3.5 h-3.5 text-gold-400" />
                 <span>Generar y Prevalidar</span>
               </button>
             </div>

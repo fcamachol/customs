@@ -2,14 +2,16 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { apiPost } from '../api';
 
 interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad'; }
-interface AuthValue { user: User | null; login: (u: string, p: string) => Promise<void>; logout: () => void; }
+interface AuthValue { user: User | null; login: (u: string, p: string, code?: string) => Promise<void>; logout: () => void; }
 
 const Ctx = createContext<AuthValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  async function login(username: string, password: string) {
-    const { token, user } = await apiPost<{ token: string; user: User }>('/api/auth/login', { username, password });
+  async function login(username: string, password: string, code?: string) {
+    const body: Record<string, string> = { username, password };
+    if (code) body.code = code;
+    const { token, user } = await apiPost<{ token: string; user: User }>('/api/auth/login', body);
     localStorage.setItem('token', token);
     setUser(user);
   }

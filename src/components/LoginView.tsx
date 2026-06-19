@@ -6,6 +6,8 @@ export function LoginView() {
   const { login } = useAuth();
   const [u, setU] = useState('');
   const [p, setP] = useState('');
+  const [code, setCode] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -14,9 +16,16 @@ export function LoginView() {
     setErr('');
     setLoading(true);
     try {
-      await login(u, p);
-    } catch (x) {
-      setErr('Usuario o contraseña incorrectos.');
+      await login(u, p, code || undefined);
+    } catch (x: unknown) {
+      // If the server returned mfa_required, reveal the MFA field and prompt to retry
+      const msg = x instanceof Error ? x.message : '';
+      if (msg === 'mfa_required') {
+        setMfaRequired(true);
+        setErr('Ingresa tu código de autenticación (MFA).');
+      } else {
+        setErr('Usuario, contraseña o código MFA incorrectos.');
+      }
     } finally {
       setLoading(false);
     }
@@ -69,6 +78,25 @@ export function LoginView() {
               className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
             />
           </div>
+
+          {mfaRequired && (
+            <div className="space-y-1.5">
+              <label htmlFor="mfa-code" className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+                Código MFA
+              </label>
+              <input
+                id="mfa-code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="000000"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                className="w-full rounded-lg border border-navy-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30 tracking-widest font-mono"
+              />
+            </div>
+          )}
 
           {err && (
             <p role="alert" className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">

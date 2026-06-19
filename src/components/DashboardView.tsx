@@ -41,12 +41,10 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (s: Section
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {kpis.map((k) => (
-          <div key={k.label}>
-            <Card className="p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{k.label}</div>
-              <div className={`mt-1.5 text-3xl font-bold tabular-nums tracking-tight ${k.tone}`}>{k.value}</div>
-            </Card>
-          </div>
+          <Card key={k.label} className="p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{k.label}</div>
+            <div className={`mt-1.5 text-3xl font-bold tabular-nums tracking-tight ${k.tone}`}>{k.value}</div>
+          </Card>
         ))}
       </div>
 

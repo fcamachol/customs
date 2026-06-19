@@ -23,15 +23,15 @@ export function LoginView() {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#0c2e17] via-[#0a3a22] to-[#06140c] px-4 font-sans antialiased">
+    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-navy-900 via-navy-800 to-navy-950 px-4 font-sans antialiased">
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="flex flex-col items-center mb-8 select-none">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center shadow-lg mb-4">
-            <ShieldCheck className="w-7 h-7 text-emerald-400" />
+          <div className="w-14 h-14 rounded-2xl bg-gold-500/15 border border-gold-400/30 flex items-center justify-center shadow-lg mb-4">
+            <ShieldCheck className="w-7 h-7 text-gold-400" />
           </div>
           <h1 className="text-white font-black tracking-tight text-xl leading-none">Capital Centennials</h1>
-          <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-emerald-400 font-bold mt-2">
+          <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-gold-400 font-bold mt-2">
             Análisis de Riesgo · T1
           </p>
         </div>
@@ -51,7 +51,7 @@ export function LoginView() {
               placeholder="Usuario"
               value={u}
               onChange={(e) => setU(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
+              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
             />
           </div>
 
@@ -66,7 +66,7 @@ export function LoginView() {
               placeholder="••••••••"
               value={p}
               onChange={(e) => setP(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
+              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
             />
           </div>
 
@@ -79,7 +79,7 @@ export function LoginView() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold py-2.5 transition shadow-md"
+            className="w-full flex items-center justify-center gap-2 rounded-lg bg-navy-800 hover:bg-navy-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold py-2.5 transition shadow-md"
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             {loading ? 'Entrando…' : 'Entrar'}

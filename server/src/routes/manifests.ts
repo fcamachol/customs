@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db/pool';
-import { requireAuth } from '../auth/middleware';
+import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { parseManifestRows } from '../../../shared/parsing/manifestParser';
 
@@ -17,4 +17,28 @@ manifestsRouter.post('/', requireAuth, async (req, res) => {
   }
   await recordAudit({ userId: req.user!.userId, action: 'UPLOAD_MANIFEST', entity: 'manifest', entityId: manifestId, after: { mawbReference, shipmentCount: shipments.length }, ip: req.ip });
   res.status(201).json({ manifestId, shipmentCount: shipments.length, unmappedHeaders });
+});
+
+// POST /api/manifests/:id/client — associate a client to a manifest
+manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
+  const { id } = req.params;
+  const { clientId } = req.body ?? {};
+  if (!clientId) { res.status(400).json({ error: 'clientId is required' }); return; }
+
+  const existing = await query('SELECT id FROM manifests WHERE id=$1', [id]);
+  if (existing.rows.length === 0) { res.status(404).json({ error: 'Manifest not found' }); return; }
+
+  const clientCheck = await query('SELECT id FROM clients WHERE id=$1', [clientId]);
+  if (clientCheck.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+
+  await query('UPDATE manifests SET client_id=$1 WHERE id=$2', [clientId, id]);
+  await recordAudit({
+    userId: req.user!.userId,
+    action: 'LINK_CLIENT',
+    entity: 'manifest',
+    entityId: id,
+    after: { clientId },
+    ip: req.ip,
+  });
+  res.json({ ok: true });
 });

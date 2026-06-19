@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Search, Download } from 'lucide-react';
-import { apiGet, apiDownload } from '../api';
+import { apiGet, apiPost, apiDownload } from '../api';
 import { Card, Field, Input, Button } from './ui';
 
 interface RecordSummary {
@@ -60,6 +60,23 @@ export default function ReporteGeneralView() {
     setError(null);
     setDownloading(true);
     try {
+      // 1. Create (or upsert) the client in the catalog
+      const created = await apiPost<{ id: string }>('/api/catalogs/clients', {
+        name: nombreCompleto,
+        tax_id: idFiscal || undefined,
+        address: domicilio || undefined,
+        phone: telefono || undefined,
+        email: correoRemitente || undefined,
+        platform: {
+          commercialName: nombreComercial || undefined,
+          countryOfOrigin: paisOrigen || undefined,
+          legalName: denominacionPlataforma || undefined,
+          email: correoPlataforma || undefined,
+        },
+      });
+      // 2. Associate client to the manifest
+      await apiPost(`/api/manifests/${selectedId}/client`, { clientId: created.id });
+      // 3. Download the report
       await apiDownload(`/api/records/${selectedId}/report.xlsx`, 'Reporte_General.xlsx');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al generar el reporte.');
@@ -173,9 +190,6 @@ export default function ReporteGeneralView() {
             />
           </Field>
         </div>
-        <p className="text-[11px] font-medium text-amber-700">
-          Vista previa — la captura del catálogo se conectará al backend.
-        </p>
       </Card>
 
       {/* Datos de la Plataforma */}
@@ -219,9 +233,6 @@ export default function ReporteGeneralView() {
             />
           </Field>
         </div>
-        <p className="text-[11px] font-medium text-amber-700">
-          Vista previa — la captura del catálogo se conectará al backend.
-        </p>
       </Card>
 
       {/* Generate report action */}

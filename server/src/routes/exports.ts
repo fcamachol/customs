@@ -55,12 +55,27 @@ exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
 
 exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
-  const m = await query(`SELECT client_name FROM manifests WHERE id=$1`, [req.params.id]);
+  const m = await query(
+    `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email, c.platform
+     FROM manifests m
+     LEFT JOIN clients c ON c.id = m.client_id
+     WHERE m.id = $1`,
+    [req.params.id],
+  );
+  const manifest = m.rows[0] ?? {};
   const rows = await loadShipments(req.params.id);
   const reportRows = buildReportRows({
     shipments: rows.map((r) => r.data),
     riskByGuide: Object.fromEntries(rows.map((r) => [r.data.guideId, { color: r.risk_color ?? '', incidences: r.risk_incidences ?? [] }])),
-    client: { name: m.rows[0]?.client_name ?? '' },
+    importData: manifest.import_data ?? undefined,
+    client: manifest.name ? {
+      name: manifest.name,
+      tax_id: manifest.tax_id ?? undefined,
+      address: manifest.address ?? undefined,
+      phone: manifest.phone ?? undefined,
+      email: manifest.email ?? undefined,
+      platform: manifest.platform ?? undefined,
+    } : undefined,
   });
   send(res, workbook(reportRows), 'Reporte_General.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_REPORT', entity: 'manifest', entityId: req.params.id, ip: req.ip });

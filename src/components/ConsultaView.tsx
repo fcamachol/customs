@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { Search, Download, FileText } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
 
 interface RecordSummary {
@@ -68,74 +69,87 @@ export default function ConsultaView() {
   return (
     <div className="space-y-6">
       <form onSubmit={handleSearch} className="flex gap-2">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar por MAWB o cliente"
-          className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm"
-        />
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por MAWB o cliente"
+            className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
+          />
+        </div>
         <button
           type="submit"
           disabled={loading}
-          className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Buscar
         </button>
       </form>
 
       {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>
       )}
 
-      <ul className="divide-y divide-gray-200 rounded border border-gray-200">
-        {records.map((r) => (
-          <li key={r.id}>
-            <button
-              type="button"
-              onClick={() => handleSelect(r.id)}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-            >
-              <span className="font-semibold">{r.mawbReference}</span> — {r.clientName}
-              <span className="ml-2 text-xs text-gray-500">{r.createdAt}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {records.length > 0 && (
+        <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          {records.map((r) => (
+            <li key={r.id}>
+              <button
+                type="button"
+                onClick={() => handleSelect(r.id)}
+                className="flex w-full items-center justify-between px-4 py-3 text-left text-sm transition-colors hover:bg-slate-50"
+              >
+                <span>
+                  <span className="font-semibold text-slate-800">{r.mawbReference}</span>
+                  <span className="text-slate-500"> — {r.clientName}</span>
+                </span>
+                <span className="ml-2 shrink-0 text-xs text-slate-400">{r.createdAt}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {detail && (
-        <div className="space-y-3 rounded border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold">
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+            <FileText className="h-4 w-4 text-emerald-600" />
             {detail.mawbReference} — {detail.clientName}
           </h3>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => handleDownload(`/api/records/${detail.id}/risk.xlsx`, 'Analisis_de_Riesgo.xlsx')}
-              className="rounded border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
             >
+              <Download className="h-3.5 w-3.5" />
               Análisis de Riesgo (XLS)
             </button>
             <button
               type="button"
               onClick={() => handleDownload(`/api/records/${detail.id}/report.xlsx`, 'Reporte_General.xlsx')}
-              className="rounded border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
             >
+              <Download className="h-3.5 w-3.5" />
               Reporte General (XLS)
             </button>
             <button
               type="button"
               onClick={() => handleDownload(`/api/records/${detail.id}/layout.xlsx`, 'LayOut_sistema.xlsx')}
-              className="rounded border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
             >
+              <Download className="h-3.5 w-3.5" />
               LayOut (XLS)
             </button>
             {hasPedimento && (
               <button
                 type="button"
                 onClick={() => handleDownload(detail.artifacts.pedimentoPdf as string, 'Pedimento.pdf')}
-                className="rounded border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
               >
+                <Download className="h-3.5 w-3.5" />
                 Pedimento (PDF)
               </button>
             )}

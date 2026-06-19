@@ -19,7 +19,7 @@ describe('audit hash chain', () => {
     await recordAudit({ userId: null, action: 'LOGIN', ip: '10.0.0.1' });
     await recordAudit({
       userId: null, action: 'RUN_RISK', entity: 'manifest', entityId: 'm1', ip: '10.0.0.2',
-      after: { analizados: 3, aprobados: 1, validarEnPrevio: 1, rojos: 1 },
+      after: { analizados: 3, aprobados: 1, noIdentificados: 1, validarEnPrevio: 1 },
     });
     expect((await verifyAuditChain()).ok).toBe(true);
   });

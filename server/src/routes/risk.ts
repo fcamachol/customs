@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { scoreManifest } from '../../../shared/risk/classify';
+import { RULESET } from '../../../shared/risk/ruleset';
 import { deleteManifestHistory, loadHistoryNames, recordNames } from '../services/monthlyHistory';
 import { buildRiskWorkbook } from '../services/artifacts';
 import { saveFile } from '../storage/files';
@@ -37,11 +38,12 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
   }
   await recordNames(shipments.map((s) => s.consignee.name), period, req.params.id);
 
+  // PRD 3-bucket mapping (D2): aprobados=verde, noIdentificados=amarillo, validarEnPrevio=rojo
   const summary = {
     analizados: scored.length,
     aprobados: scored.filter((s) => s.color === 'verde').length,
-    validarEnPrevio: scored.filter((s) => s.color === 'amarillo').length,
-    rojos: scored.filter((s) => s.color === 'rojo').length,
+    noIdentificados: scored.filter((s) => s.color === 'amarillo').length,
+    validarEnPrevio: scored.filter((s) => s.color === 'rojo').length,
   };
 
   // Load branding config for XLS header
@@ -61,7 +63,7 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
     bytes: riskBuffer,
     uploadedBy: req.user!.userId,
   });
-  await query('UPDATE manifests SET risk_file_id=$1 WHERE id=$2', [riskFile.id, req.params.id]);
+  await query('UPDATE manifests SET risk_file_id=$1, ruleset_version=$2 WHERE id=$3', [riskFile.id, RULESET.version, req.params.id]);
 
   await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 

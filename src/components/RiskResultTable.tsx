@@ -15,16 +15,16 @@ export interface RiskRow {
 export interface RiskSummaryData {
   analizados: number;
   aprobados: number;
+  noIdentificados: number;
   validarEnPrevio: number;
-  rojos: number;
 }
 
 export function RiskSummary({ summary }: { summary: RiskSummaryData }) {
   const buckets: { label: string; value: number; accent: string; dot: string }[] = [
-    { label: 'Analizados',       value: summary.analizados,       accent: 'text-slate-900',    dot: 'bg-slate-400'   },
-    { label: 'Aprobados',        value: summary.aprobados,        accent: 'text-emerald-600',  dot: 'bg-emerald-500' },
-    { label: 'Validar en previo', value: summary.validarEnPrevio, accent: 'text-amber-600',    dot: 'bg-amber-500'   },
-    { label: 'Rojos',            value: summary.rojos,            accent: 'text-red-600',      dot: 'bg-red-500'     },
+    { label: 'Analizados',         value: summary.analizados,       accent: 'text-slate-900',    dot: 'bg-slate-400'   },
+    { label: 'Aprobados',          value: summary.aprobados,        accent: 'text-emerald-600',  dot: 'bg-emerald-500' },
+    { label: 'No identificados',   value: summary.noIdentificados,  accent: 'text-amber-600',    dot: 'bg-amber-500'   },
+    { label: 'Validar en previo',  value: summary.validarEnPrevio,  accent: 'text-red-600',      dot: 'bg-red-500'     },
   ];
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

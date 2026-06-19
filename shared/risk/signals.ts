@@ -1,5 +1,6 @@
 import type { Shipment } from '../types/shipment';
 import { matchesBrand, matchesProhibited } from './lists';
+import { RULESET } from './ruleset';
 
 export interface RiskContext {
   nameCounts: Record<string, number>;
@@ -29,10 +30,10 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
 
   const signals: SignalResult[] = [
     { id: 'id', flagged: !(id.length === 13 || id.length === 18), incidence: 'Falta RFC/CURP' },
-    { id: 'cantidad', flagged: s.quantity > 10, incidence: 'Demasiados productos' },
-    { id: 'monto', flagged: s.customsValueUsd < 1 || s.customsValueUsd > 2500, incidence: 'Valor declarado incorrecto' },
-    { id: 'consignatarios', flagged: (ctx.nameCounts[name] ?? 0) > 1, incidence: 'Varios paquetes por consignatario' },
-    { id: 'direcciones', flagged: !!addr && (ctx.addressCounts[addr] ?? 0) > 1, incidence: 'Misma dirección de entrega' },
+    { id: 'cantidad', flagged: s.quantity > RULESET.thresholds.cantidad, incidence: 'Demasiados productos' },
+    { id: 'monto', flagged: s.customsValueUsd < RULESET.thresholds.montoMin || s.customsValueUsd > RULESET.thresholds.montoMax, incidence: 'Valor declarado incorrecto' },
+    { id: 'consignatarios', flagged: (ctx.nameCounts[name] ?? 0) >= RULESET.thresholds.consignatario, incidence: 'Varios paquetes por consignatario' },
+    { id: 'direcciones', flagged: !!addr && (ctx.addressCounts[addr] ?? 0) >= RULESET.thresholds.direccion, incidence: 'Misma dirección de entrega' },
     { id: 'prohibidos', flagged: !!prohibited, incidence: prohibited ? `Artículos prohibidos (${prohibited})` : undefined },
     { id: 'pirateria', flagged: !!brand, incidence: brand ? `Piratería (${brand})` : undefined },
     { id: 'bbdd', flagged: ctx.monthlyHistoryNames.has(name), incidence: 'Varias importaciones en el mes' },

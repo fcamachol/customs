@@ -3,14 +3,14 @@ import { render, screen } from '@testing-library/react';
 import { RiskSummary, RiskResultTable } from './RiskResultTable';
 
 describe('RiskSummary', () => {
-  it('renders the four buckets with labels and numbers', () => {
+  it('renders the four buckets with labels and numbers (3-bucket PRD mapping)', () => {
     render(
-      <RiskSummary summary={{ analizados: 10, aprobados: 6, validarEnPrevio: 3, rojos: 1 }} />
+      <RiskSummary summary={{ analizados: 10, aprobados: 6, noIdentificados: 3, validarEnPrevio: 1 }} />
     );
     expect(screen.getByText('Analizados')).toBeTruthy();
     expect(screen.getByText('Aprobados')).toBeTruthy();
+    expect(screen.getByText('No identificados')).toBeTruthy();
     expect(screen.getByText('Validar en previo')).toBeTruthy();
-    expect(screen.getByText('Rojos')).toBeTruthy();
     expect(screen.getByText('10')).toBeTruthy();
     expect(screen.getByText('6')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();

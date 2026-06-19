@@ -20,8 +20,18 @@ export function createApp(): Express {
   app.set('trust proxy', true);
   // Allow the browser client (different origin/port in dev) to call the API.
   // CORS_ORIGIN can be a comma-separated allowlist; defaults to permissive for dev.
-  const origins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim());
-  app.use(cors({ origin: origins && origins.length ? origins : true }));
+  // In production with no CORS_ORIGIN set, deny cross-origin requests (closed allowlist).
+  const origins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
+  let corsOrigin: string[] | boolean;
+  if (origins && origins.length > 0) {
+    corsOrigin = origins;
+  } else if (process.env.NODE_ENV === 'production') {
+    console.warn('[CORS] NODE_ENV=production but CORS_ORIGIN is not set — cross-origin requests will be denied.');
+    corsOrigin = false;
+  } else {
+    corsOrigin = true;
+  }
+  app.use(cors({ origin: corsOrigin }));
   app.use(express.json({ limit: '5mb' }));
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRouter);

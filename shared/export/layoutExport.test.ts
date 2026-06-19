@@ -22,4 +22,10 @@ describe('layoutExport', () => {
     expect(row[LAYOUT_HEADERS[25]]).toBe('SHEIN HK');        // col 26 remitente nombre
     expect(row[LAYOUT_HEADERS[30]]).toBe('SHEIN');           // col 31 plataforma nombre comercial
   });
+  it('injects generic fraction, PCS unit, and N/A RRNA', () => {
+    const rows = toLayoutRows([{ ...s, hsCode: '6109100022', unit: 'gramo' }]);
+    expect(rows[0]['Fracción arancelaria']).toBe('9901000100');
+    expect(rows[0]['Unidad de medida']).toBe('PCS');
+    expect(rows[0]['Regulaciones y restricciones no arancelarias']).toBe('N/A');
+  });
 });

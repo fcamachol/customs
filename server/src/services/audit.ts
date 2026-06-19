@@ -19,10 +19,19 @@ export function stableStringify(value: unknown): string {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
 }
 
+// Round-trip a payload through JSON exactly as it is stored in the jsonb column
+// (Dates -> ISO strings, undefined dropped, etc.). Hashing this normalized form
+// on BOTH write and verify guarantees the recomputed hash matches the stored one,
+// even when before/after carry non-JSON-native values like a Postgres timestamp.
+function jsonNormalize(v: unknown): unknown {
+  return v == null ? null : JSON.parse(JSON.stringify(v));
+}
+
 export function canonicalPayload(e: AuditEntry, createdAtIso: string): string {
   return stableStringify({
     userId: e.userId ?? null, action: e.action, entity: e.entity ?? null,
-    entityId: e.entityId ?? null, before: e.before ?? null, after: e.after ?? null,
+    entityId: e.entityId ?? null,
+    before: jsonNormalize(e.before), after: jsonNormalize(e.after),
     ip: e.ip ?? null, createdAt: createdAtIso,
   });
 }

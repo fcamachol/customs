@@ -23,6 +23,17 @@ describe('audit hash chain', () => {
     });
     expect((await verifyAuditChain()).ok).toBe(true);
   });
+  it('verifies intact when after contains a Date (jsonb stores ISO; hash must agree)', async () => {
+    // Regression: a Date in before/after previously hashed to {} on write (Dates have
+    // no enumerable keys) but stored as an ISO string in jsonb, breaking the chain on
+    // verify. Payloads from RETURNING rows (e.g. created_at) carry exactly this.
+    await recordAudit({ userId: null, action: 'LOGIN', ip: '10.0.0.1' });
+    await recordAudit({
+      userId: null, action: 'CREATE_CLIENT', entity: 'client', entityId: 'c1', ip: '10.0.0.2',
+      after: { id: 'c1', name: 'ACME', created_at: new Date('2026-06-19T21:00:00.000Z') },
+    });
+    expect((await verifyAuditChain()).ok).toBe(true);
+  });
   it('treats leading NULL-hash rows as a pre-chain era and verifies the rest', async () => {
     // seed a legacy row written before the hash-chain migration (no hash)
     await query(

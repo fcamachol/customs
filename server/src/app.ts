@@ -13,6 +13,7 @@ import { filesRouter } from './routes/files';
 import { auditRouter } from './routes/audit';
 import { importDataRouter } from './routes/importData';
 import { catalogsRouter } from './routes/catalogs';
+import { consolidatedRouter } from './routes/consolidated';
 
 export function createApp(): Express {
   const app = express();
@@ -36,6 +37,7 @@ export function createApp(): Express {
   app.use('/api/audit', auditRouter);
   app.use('/api/manifests', importDataRouter);
   app.use('/api/catalogs', catalogsRouter);
+  app.use('/api', consolidatedRouter);
   // Global error handler: log server-side, never leak stack traces to clients.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

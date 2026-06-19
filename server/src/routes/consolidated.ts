@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import * as XLSX from 'xlsx';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
@@ -13,7 +13,7 @@ function workbook(rows: Record<string, unknown>[]): Buffer {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
-function send(res: any, buf: Buffer, name: string) {
+function send(res: Response, buf: Buffer, name: string) {
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.send(buf);
@@ -23,7 +23,7 @@ consolidatedRouter.get(
   '/consolidated.xlsx',
   requireAuth,
   requireRole('autoridad', 'admin'),
-  async (req, res) => {
+  async (req, res, next) => {
     const { period, date } = req.query as Record<string, string | undefined>;
 
     if (!period && !date) {
@@ -89,6 +89,10 @@ consolidatedRouter.get(
 
     const buf = workbook(sheetRows);
 
+    // Fail-closed audit: this is an AUTHORITY download in a compliance system.
+    // The audit row MUST be durably written BEFORE the file is delivered.
+    // If the audit write fails, do NOT deliver the file — surface a 500 so the
+    // access is never silently unlogged (no audit ⇒ no export).
     try {
       await recordAudit({
         userId: req.user!.userId,
@@ -96,7 +100,8 @@ consolidatedRouter.get(
         ip: req.ip,
       });
     } catch (err) {
-      console.error('Audit write failed for EXPORT_CONSOLIDATED:', err);
+      next(err);
+      return;
     }
 
     send(res, buf, `Consolidado_${label}.xlsx`);

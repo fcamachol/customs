@@ -116,6 +116,15 @@ describe('GET /api/consolidated.xlsx', () => {
     expect(json).toHaveLength(3);
   });
 
+  it('writes an EXPORT_CONSOLIDATED audit row on a successful authority download', async () => {
+    const res = await getXlsx(autoridadToken, `period=${period}`);
+    expect(res.status).toBe(200);
+    const audit = await query(
+      `SELECT action FROM audit_log WHERE action = 'EXPORT_CONSOLIDATED'`,
+    );
+    expect(audit.rows).toHaveLength(1);
+  });
+
   it('Valida is true only for verde shipments', async () => {
     const res = await getXlsx(adminToken, `period=${period}`);
     const wb = XLSX.read(res.body, { type: 'buffer' });

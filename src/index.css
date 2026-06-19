@@ -68,3 +68,10 @@ body {
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
 }
+
+/* Nav group section labels — rendered via CSS content so DOM text doesn't
+   collide with item labels of the same name in tests */
+.nav-group-label::before {
+  content: attr(data-label);
+  display: block;
+}

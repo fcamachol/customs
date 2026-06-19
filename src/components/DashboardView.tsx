@@ -12,6 +12,7 @@
 
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
+import type { Section } from '../nav';
 import {
   TrendingUp,
   Clock,
@@ -28,7 +29,7 @@ import {
 import { useT1 } from '../context/T1Context';
 import { getCountryName } from '../utils/formatters';
 
-export default function DashboardView() {
+export default function DashboardView({ onNavigate: _onNavigate }: { onNavigate?: (s: Section) => void } = {}) {
   const { state } = useT1();
   const { manifest, tax, compliance } = state;
   const shipments = manifest.shipments;

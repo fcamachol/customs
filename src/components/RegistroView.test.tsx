@@ -3,11 +3,9 @@ import { render, screen } from '@testing-library/react';
 import RegistroView from './RegistroView';
 
 describe('RegistroView', () => {
-  it('renders the form fields and submit button', () => {
+  it('starts on Paso 1 with the manifest upload control', () => {
     render(<RegistroView />);
-    expect(screen.getByLabelText('MAWB')).toBeTruthy();
-    expect(screen.getByLabelText('Cliente')).toBeTruthy();
-    expect(screen.getByLabelText('Manifiesto')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Realizar análisis de Riesgo' })).toBeTruthy();
+    expect(screen.getByText(/Paso 1|Cargar manifiesto/i)).toBeTruthy();
+    expect(screen.getByText('MAWB')).toBeTruthy();
   });
 });

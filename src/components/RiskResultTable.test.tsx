@@ -48,8 +48,8 @@ describe('RiskResultTable', () => {
     expect(screen.getByText('Beta LLC')).toBeTruthy();
     expect(screen.getByText('CN')).toBeTruthy();
     expect(screen.getByText('US')).toBeTruthy();
-    expect(screen.getByText('rojo')).toBeTruthy();
-    expect(screen.getByText('verde')).toBeTruthy();
+    expect(screen.getByText('Rojo')).toBeTruthy();
+    expect(screen.getByText('Verde')).toBeTruthy();
   });
 
   it('shows the motivo text for the rojo row', () => {

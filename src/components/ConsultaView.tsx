@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Search, Download, FileText } from 'lucide-react';
+import { Search, FileText } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
+import { Card, Input, Button, FileCard } from './ui';
 
 interface RecordSummary {
   id: string;
@@ -68,25 +69,24 @@ export default function ConsultaView() {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por MAWB o cliente"
-            className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Buscar
-        </button>
-      </form>
+      {/* Search card */}
+      <Card className="p-4 shadow-sm">
+        <form onSubmit={handleSearch} className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar por MAWB o cliente"
+              className="pl-10"
+            />
+          </div>
+          <Button type="submit" disabled={loading}>
+            Buscar
+          </Button>
+        </form>
+      </Card>
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>
@@ -113,48 +113,44 @@ export default function ConsultaView() {
       )}
 
       {detail && (
-        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
-            <FileText className="h-4 w-4 text-emerald-600" />
+        <Card className="p-5 shadow-sm">
+          <h3 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-800">
+            <FileText className="h-4 w-4 text-navy-700" />
             {detail.mawbReference} — {detail.clientName}
           </h3>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => handleDownload(`/api/records/${detail.id}/risk.xlsx`, 'Analisis_de_Riesgo.xlsx')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Análisis de Riesgo (XLS)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownload(`/api/records/${detail.id}/report.xlsx`, 'Reporte_General.xlsx')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Reporte General (XLS)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownload(`/api/records/${detail.id}/layout.xlsx`, 'LayOut_sistema.xlsx')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
-            >
-              <Download className="h-3.5 w-3.5" />
-              LayOut (XLS)
-            </button>
+          <div className="space-y-2">
+            <div>
+              <FileCard
+                kind="xls"
+                name="Análisis de Riesgo"
+                onDownload={() => handleDownload(`/api/records/${detail.id}/risk.xlsx`, 'Analisis_de_Riesgo.xlsx')}
+              />
+            </div>
+            <div>
+              <FileCard
+                kind="xls"
+                name="Reporte General"
+                onDownload={() => handleDownload(`/api/records/${detail.id}/report.xlsx`, 'Reporte_General.xlsx')}
+              />
+            </div>
+            <div>
+              <FileCard
+                kind="xls"
+                name="LayOut"
+                onDownload={() => handleDownload(`/api/records/${detail.id}/layout.xlsx`, 'LayOut_sistema.xlsx')}
+              />
+            </div>
             {hasPedimento && (
-              <button
-                type="button"
-                onClick={() => handleDownload(detail.artifacts.pedimentoPdf as string, 'Pedimento.pdf')}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Pedimento (PDF)
-              </button>
+              <div>
+                <FileCard
+                  kind="pdf"
+                  name="Pedimento"
+                  onDownload={() => handleDownload(detail.artifacts.pedimentoPdf as string, 'Pedimento.pdf')}
+                />
+              </div>
             )}
           </div>
-        </div>
+        </Card>
       )}
     </div>
   );

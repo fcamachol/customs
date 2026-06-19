@@ -19,24 +19,21 @@ const recordDetail = {
   },
 };
 
+vi.mock('../api', () => ({
+  apiGet: vi.fn(async (url: string) => {
+    if (url.includes('/api/records/rec-1')) return recordDetail;
+    if (url.includes('/api/records')) return recordsList;
+    throw new Error('not found');
+  }),
+  apiDownload: vi.fn(async () => undefined),
+}));
+
 describe('ConsultaView', () => {
   beforeEach(() => {
-    localStorage.clear();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        if (url.includes('/api/records/rec-1')) {
-          return { ok: true, json: async () => recordDetail } as Response;
-        }
-        if (url.includes('/api/records')) {
-          return { ok: true, json: async () => recordsList } as Response;
-        }
-        return { ok: false, statusText: 'not found' } as Response;
-      }) as unknown as typeof fetch,
-    );
+    vi.clearAllMocks();
   });
 
-  it('searches and renders a record, then shows artifact download buttons on click', async () => {
+  it('searches and renders a record', async () => {
     render(<ConsultaView />);
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Acme' } });
@@ -45,14 +42,22 @@ describe('ConsultaView', () => {
     const recordButton = await screen.findByText(/MAWB-123/);
     expect(recordButton).toBeTruthy();
     expect(screen.getByText(/Acme Corp/)).toBeTruthy();
+  });
 
+  it('shows artifact FileCards after selecting a record', async () => {
+    render(<ConsultaView />);
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+
+    const recordButton = await screen.findByText(/MAWB-123/);
     fireEvent.click(recordButton);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Análisis de Riesgo (XLS)' })).toBeTruthy();
+      expect(screen.getByText('Análisis de Riesgo')).toBeTruthy();
     });
-    expect(screen.getByRole('button', { name: 'Reporte General (XLS)' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'LayOut (XLS)' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Pedimento (PDF)' })).toBeTruthy();
+    expect(screen.getByText('Reporte General')).toBeTruthy();
+    expect(screen.getByText('LayOut')).toBeTruthy();
+    expect(screen.getByText('Pedimento')).toBeTruthy();
   });
 });

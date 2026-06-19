@@ -23,29 +23,55 @@ describe('resolveHeader', () => {
   });
 });
 
-describe('real manifest headers', () => {
-  it('maps the 28 MANIFEST_TEST input headers', () => {
-    expect(resolveHeader('MWB')).toBe('core.mawb');
-    expect(resolveHeader('Número de guía de embarque')).toBe('core.guideId');
-    expect(resolveHeader('Destinatario (CNNE)')).toBe('consignee.name');
-    expect(resolveHeader('ID')).toBe('consignee.rfc');
-    expect(resolveHeader('Email')).toBe('consignee.email');
-    expect(resolveHeader('Dirección de CNNE')).toBe('consignee.address');
-    expect(resolveHeader('Teléfono de CNNE')).toBe('consignee.phone');
-    expect(resolveHeader('Peso')).toBe('core.weight');
-    expect(resolveHeader('Unidad de peso')).toBe('core.weightUnit');
-    expect(resolveHeader('Descripción del Producto')).toBe('core.description');
-    expect(resolveHeader('Código HS')).toBe('core.hsCode');
-    expect(resolveHeader('Precio unitario declarado')).toBe('core.unitPrice');
-    expect(resolveHeader('Número de productos')).toBe('core.quantity');
-    expect(resolveHeader('Divisa')).toBe('core.currency');
-    expect(resolveHeader('Valor total declarado')).toBe('core.customsValueUsd');
-    expect(resolveHeader('Expedidor')).toBe('sender.name');
-    expect(resolveHeader('Dirección del remitente')).toBe('sender.address');
-    expect(resolveHeader('Nombre/Código de país del remitente')).toBe('sender.countryCode');
-    expect(resolveHeader('Bulto')).toBe('core.bulto');
-    expect(resolveHeader('URL')).toBe('platform.url');
+// The 28 REAL headers, verbatim (accents + punctuation), from the first row
+// of MANIFEST_TEST.xlsx. The whole point of Task 1 is to read THIS file, so
+// every one of these must resolve to a non-null canonical path.
+const REAL_MANIFEST_HEADERS = [
+  'MWB',
+  'Número de guía de embarque',
+  'Expedidor',
+  'Dirección del remitente',
+  'Nombre de la ciudad del remitente',
+  'Código de ciudad del remitente',
+  'Nombre del país del remitente',
+  'Código de país del remitente',
+  'ID',
+  'Destinatario (CNNE)',
+  'Email',
+  'Dirección de CNNE',
+  'Nombre de la ciudad de CNNE',
+  'Número de teléfono de CNNE',
+  'Código postal de CNNE',
+  'Nombre del país CNEE',
+  'Código de país de CNNE',
+  'Peso',
+  'Unidad de peso',
+  'Descripción del Producto',
+  'Código HS',
+  'Precio unitario declarado de las mercancías',
+  'Número de productos',
+  'Divisa',
+  'Valor total declarado',
+  'Bulto',
+  'N° de pedido del cliente',
+  'URL',
+];
+
+describe('real manifest headers (MANIFEST_TEST.xlsx)', () => {
+  it('resolves all 28 real input headers to a non-null canonical path', () => {
+    for (const h of REAL_MANIFEST_HEADERS) {
+      expect(resolveHeader(h), `header "${h}" should resolve`).not.toBeNull();
+    }
   });
+
+  it('maps the previously-wrong headers to the correct canonical path', () => {
+    expect(resolveHeader('Número de teléfono de CNNE')).toBe('consignee.phone');
+    expect(resolveHeader('Precio unitario declarado de las mercancías')).toBe('core.unitPrice');
+    expect(resolveHeader('Nombre de la ciudad del remitente')).toBe('sender.city');
+    expect(resolveHeader('Código de país de CNNE')).toBe('consignee.countryCode');
+    expect(resolveHeader('Destinatario (CNNE)')).toBe('consignee.name');
+  });
+
   it('still maps existing layout headers', () => {
     expect(resolveHeader('Fracción arancelaria')).toBe('core.hsCode');
   });

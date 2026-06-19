@@ -7,6 +7,7 @@ import { deleteManifestHistory, loadHistoryNames, recordNames } from '../service
 import { buildRiskWorkbook } from '../services/artifacts';
 import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
+import { decryptShipment } from '../crypto/fieldCrypto';
 
 export const riskRouter = Router();
 
@@ -14,7 +15,7 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
   const period: string = req.body?.period ?? new Date().toISOString().slice(0, 7);
   const { rows } = await query<{ id: string; data: Shipment }>(
     'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);
-  const shipments = rows.map((r) => r.data);
+  const shipments = rows.map((r) => decryptShipment(r.data));
 
   await deleteManifestHistory(req.params.id);
   const history = await loadHistoryNames(period, req.params.id);

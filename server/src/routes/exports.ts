@@ -9,6 +9,7 @@ import { toLayoutRows } from '../../../shared/export/layoutExport';
 import { buildReportRows } from '../../../shared/export/reportBuilder';
 import type { Shipment } from '../../../shared/types/shipment';
 import { saveFile, readFileById } from '../storage/files';
+import { decryptShipment } from '../crypto/fieldCrypto';
 
 export const exportsRouter = Router();
 
@@ -36,7 +37,7 @@ async function assertManifestAccess(manifestId: string, user: Claims): Promise<b
 async function loadShipments(manifestId: string): Promise<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }[]> {
   const { rows } = await query<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }>(
     'SELECT data, risk_color, risk_incidences FROM shipments WHERE manifest_id=$1', [manifestId]);
-  return rows;
+  return rows.map((r) => ({ ...r, data: decryptShipment(r.data) }));
 }
 
 exportsRouter.get('/:id/layout.xlsx', requireAuth, async (req, res) => {

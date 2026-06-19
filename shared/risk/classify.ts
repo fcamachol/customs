@@ -30,24 +30,18 @@ export function scoreManifest(
   monthlyHistoryNames: Set<string>,
   options?: ScoreOptions,
 ): ScoredShipment[] {
-  // Count DISTINCT packages (guideId) per consignee/address — not raw rows.
-  // Each manifest row is a product line-item; many rows share one guideId (one
-  // physical package/guide). Counting rows would flag every multi-line package
-  // as "varios paquetes por consignatario" / "misma dirección de entrega".
-  // Aggregate by package so the signals reflect real shipment units.
-  const namePackages: Record<string, Set<string>> = {};
-  const addressPackages: Record<string, Set<string>> = {};
+  // Count line-item ROWS per consignee name / address to match the authoritative
+  // Risk_analysis workbook (V4 consignatario, V5 dirección fire on row repetition).
+  // Open decision (defer to client): whether V4/V5 should count distinct packages
+  // (guideId) vs line-item rows — v1 uses rows per the source spreadsheet.
+  const nameCounts: Record<string, number> = {};
+  const addressCounts: Record<string, number> = {};
   for (const s of shipments) {
     const n = norm(s.consignee.name);
     const a = norm(s.consignee.address ?? '');
-    const pkg = s.guideId || s.id; // fall back to row id when a guide is absent
-    if (n) (namePackages[n] ??= new Set()).add(pkg);
-    if (a) (addressPackages[a] ??= new Set()).add(pkg);
+    if (n) nameCounts[n] = (nameCounts[n] ?? 0) + 1;
+    if (a) addressCounts[a] = (addressCounts[a] ?? 0) + 1;
   }
-  const nameCounts: Record<string, number> = {};
-  const addressCounts: Record<string, number> = {};
-  for (const [k, v] of Object.entries(namePackages)) nameCounts[k] = v.size;
-  for (const [k, v] of Object.entries(addressPackages)) addressCounts[k] = v.size;
   const ctx: RiskContext = {
     nameCounts,
     addressCounts,

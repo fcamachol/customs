@@ -10,6 +10,10 @@ export interface ConsigneeData {        // cols 17–25
   address?: string;
   phone?: string;
   email?: string;
+  city?: string;
+  postalCode?: string;
+  countryCode?: string;
+  countryName?: string;
 }
 
 export interface SenderData {            // cols 26–30 (NEW)
@@ -18,6 +22,10 @@ export interface SenderData {            // cols 26–30 (NEW)
   address?: string;
   phone?: string;
   email?: string;
+  city?: string;
+  cityCode?: string;
+  countryCode?: string;
+  countryName?: string;
 }
 
 export interface PlatformData {          // cols 31–34 (NEW)
@@ -25,6 +33,7 @@ export interface PlatformData {          // cols 31–34 (NEW)
   countryOfOrigin?: string;
   legalName?: string;
   email?: string;
+  url?: string;
 }
 
 export interface ShipmentCore {          // cols 1–16
@@ -44,6 +53,13 @@ export interface ShipmentCore {          // cols 1–16
   rrnaNote?: string;
   customsEntryCode?: string;
   customsClearanceCode?: string;
+  mawb?: string;
+  weight?: number;
+  weightUnit?: string;
+  weightKg?: number;
+  unitPrice?: number;
+  bulto?: string;
+  clientOrderId?: string;
 }
 
 export interface Shipment extends ShipmentCore {

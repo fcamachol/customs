@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Shipment } from '../types/shipment';
 import { resolveHeader } from './headerSynonyms';
+import { parseNumber, toKg } from './normalize';
 
 export interface ParseResult { shipments: Shipment[]; unmappedHeaders: string[]; }
 
@@ -26,13 +27,16 @@ export function parseManifestRows(rows: Record<string, unknown>[], mawb: string)
       if (!path) { unmapped.add(rawHeader); continue; }
       let value = cleanCell(raw);
       if (path === 'core.originCountry') value = value.toUpperCase();
-      if (path === 'core.quantity') { s.quantity = Number(value) || 0; continue; }
-      if (path === 'core.customsValueUsd') { s.customsValueUsd = Number(value) || 0; continue; }
-      if (path === 'core.appliedRate') { s.appliedRate = Number(value); continue; }
+      if (path === 'core.quantity') { s.quantity = parseNumber(value); continue; }
+      if (path === 'core.customsValueUsd') { s.customsValueUsd = parseNumber(value); continue; }
+      if (path === 'core.unitPrice') { s.unitPrice = parseNumber(value); continue; }
+      if (path === 'core.weight') { s.weight = parseNumber(value); continue; }
+      if (path === 'core.appliedRate') { s.appliedRate = parseNumber(value); continue; }
       const [group, key] = path.split('.');
       if (group === 'core') s[key] = value;
       else s[group][key] = value;
     }
+    if (s.weight != null) s.weightKg = toKg(s.weight, s.weightUnit ?? '');
     return s as Shipment;
   });
   return { shipments, unmappedHeaders: [...unmapped] };

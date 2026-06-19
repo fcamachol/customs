@@ -30,4 +30,13 @@ describe('parseManifestRows', () => {
     const out = parseManifestRows([{ 'Columna Rara': 'x', 'RFC': 'AAA010101AAA' }], 'M');
     expect(out.unmappedHeaders).toContain('Columna Rara');
   });
+  it('normalizes comma decimal value from a real-shaped row', () => {
+    const { shipments } = parseManifestRows(
+      [{ 'Valor total declarado': '0,79', 'Número de productos': '3', 'Peso': '500', 'Unidad de peso': 'gramo', 'Destinatario (CNNE)': 'Juan' }],
+      '369-1');
+    expect(shipments[0].customsValueUsd).toBe(0.79);
+    expect(shipments[0].quantity).toBe(3);
+    expect(shipments[0].weightKg).toBe(0.5);
+    expect(shipments[0].consignee.name).toBe('Juan');
+  });
 });

@@ -11,15 +11,25 @@ import { decryptShipment } from '../crypto/fieldCrypto';
 
 export const riskRouter = Router();
 
+/** Load a config value from the config table; returns undefined when key not found */
+async function loadConfig<T>(key: string): Promise<T | undefined> {
+  const { rows } = await query<{ value: T }>('SELECT value FROM config WHERE key=$1', [key]);
+  return rows[0]?.value;
+}
+
 riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
   const period: string = req.body?.period ?? new Date().toISOString().slice(0, 7);
   const { rows } = await query<{ id: string; data: Shipment }>(
     'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);
   const shipments = rows.map((r) => decryptShipment(r.data));
 
+  // Load optional catalog overrides from config (fallback to built-in defaults when unset)
+  const prohibitedKeywords = await loadConfig<string[]>('prohibited');
+  const piracyBrands = await loadConfig<string[]>('piracy_brands');
+
   await deleteManifestHistory(req.params.id);
   const history = await loadHistoryNames(period, req.params.id);
-  const scored = scoreManifest(shipments, history);
+  const scored = scoreManifest(shipments, history, { prohibitedKeywords, piracyBrands });
 
   for (const sc of scored) {
     await query('UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3 WHERE id=$4',
@@ -34,6 +44,9 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
     rojos: scored.filter((s) => s.color === 'rojo').length,
   };
 
+  // Load branding config for XLS header
+  const branding = await loadConfig<{ companyName?: string; rfc?: string }>('branding');
+
   // Build and persist the risk XLSX artifact
   const riskRows = scored.map((s) => ({
     Guia: s.shipment.guideId,
@@ -41,7 +54,7 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
     Resultado: s.color,
     Motivo: s.incidences.join('; '),
   }));
-  const riskBuffer = buildRiskWorkbook(riskRows);
+  const riskBuffer = buildRiskWorkbook(riskRows, branding);
   const riskFile = await saveFile({
     kind: 'risk_analysis',
     originalName: 'Analisis_de_Riesgo.xlsx',

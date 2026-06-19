@@ -140,3 +140,82 @@ describe('DELETE /api/catalogs/clients/:id', () => {
     expect(remaining).toHaveLength(0);
   });
 });
+
+describe('PUT /api/catalogs/config/:key', () => {
+  it('admin can save branding config and it persists', async () => {
+    const branding = { logoUrl: 'https://example.com/logo.png', rfc: 'CAP010101CAP', companyName: 'Capital Centennials' };
+    const res = await request(app)
+      .put('/api/catalogs/config/branding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: branding });
+    expect(res.status).toBe(200);
+    expect(res.body.key).toBe('branding');
+
+    // Verify in DB
+    const { rows } = await query(`SELECT value FROM config WHERE key='branding'`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toEqual(branding);
+  });
+
+  it('admin can upsert the same key twice', async () => {
+    await request(app)
+      .put('/api/catalogs/config/prohibited')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: ['faro', 'llanta'] });
+
+    const res = await request(app)
+      .put('/api/catalogs/config/prohibited')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: ['faro', 'llanta', 'freno'] });
+    expect(res.status).toBe(200);
+
+    const { rows } = await query(`SELECT value FROM config WHERE key='prohibited'`);
+    expect(rows[0].value).toEqual(['faro', 'llanta', 'freno']);
+  });
+
+  it('capturista PUT → 403', async () => {
+    const res = await request(app)
+      .put('/api/catalogs/config/branding')
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send({ value: { companyName: 'Hack Attempt' } });
+    expect(res.status).toBe(403);
+  });
+
+  it('unknown key → 400', async () => {
+    const res = await request(app)
+      .put('/api/catalogs/config/unknown_key')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: 'x' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/catalogs/config/:key', () => {
+  it('returns null for an unset key', async () => {
+    const res = await request(app)
+      .get('/api/catalogs/config/branding')
+      .set('Authorization', `Bearer ${autoridadToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.value).toBeNull();
+  });
+
+  it('returns the stored value after PUT', async () => {
+    await request(app)
+      .put('/api/catalogs/config/piracy_brands')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: ['TestBrand'] });
+
+    const res = await request(app)
+      .get('/api/catalogs/config/piracy_brands')
+      .set('Authorization', `Bearer ${autoridadToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.value).toEqual(['TestBrand']);
+  });
+
+  it('unknown key → 400', async () => {
+    const res = await request(app)
+      .get('/api/catalogs/config/bad_key')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(400);
+  });
+});

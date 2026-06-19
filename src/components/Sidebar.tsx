@@ -1,26 +1,47 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ShieldCheck, LogOut } from 'lucide-react';
 import { NAV_GROUPS, visibleSectionsFor, type Section } from '../nav';
+import { apiGet } from '../api';
 
 const ROLE_LABELS: Record<string, string> = { capturista: 'Capturista', admin: 'Administrador', autoridad: 'Autoridad' };
+
+interface BrandingConfig { logoUrl?: string; rfc?: string; companyName?: string; }
 
 export function Sidebar({ role, active, onSelect, username, onLogout }: {
   role: string; active: Section; onSelect: (s: Section) => void; username?: string; onLogout?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<boolean>(() => typeof localStorage !== 'undefined' && localStorage.getItem('sidebar:collapsed') === '1');
+  const [branding, setBranding] = useState<BrandingConfig>({});
   const visible = new Set(visibleSectionsFor(role));
   const toggle = () => { const v = !collapsed; setCollapsed(v); localStorage.setItem('sidebar:collapsed', v ? '1' : '0'); };
+
+  useEffect(() => {
+    apiGet<{ key: string; value: BrandingConfig | null }>('/api/catalogs/config/branding')
+      .then((res) => { if (res.value) setBranding(res.value); })
+      .catch(() => {});
+  }, []);
+
+  const companyName = branding.companyName || 'Capital Centennials';
+  const rfc = branding.rfc;
 
   return (
     <aside className={`${collapsed ? 'w-16' : 'w-60'} sticky top-0 flex h-screen shrink-0 flex-col border-r border-slate-200 bg-white transition-[width]`}>
       <div className="flex h-16 items-center gap-2.5 px-4 select-none">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-navy-800 text-white shadow-sm">
-          <ShieldCheck className="h-5 w-5" />
-        </div>
+        {branding.logoUrl ? (
+          <img src={branding.logoUrl} alt={companyName} className="h-9 w-9 shrink-0 rounded-xl object-contain" />
+        ) : (
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-navy-800 text-white shadow-sm">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+        )}
         {!collapsed && (
-          <div className="leading-tight">
-            <div className="text-sm font-bold tracking-tight text-slate-900">Capital Centennials</div>
-            <div className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-600">Riesgo · T1</div>
+          <div className="leading-tight min-w-0">
+            <div className="text-sm font-bold tracking-tight text-slate-900 truncate">{companyName}</div>
+            {rfc ? (
+              <div className="font-mono text-[10px] text-slate-400 truncate">{rfc}</div>
+            ) : (
+              <div className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-gold-600">Riesgo · T1</div>
+            )}
           </div>
         )}
       </div>

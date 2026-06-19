@@ -1,5 +1,5 @@
 /**
- * ConfigurationView — T1 Simulator & Registry Configuration
+ * ConfigurationView — T1 Simulator & Registry Configuration + DB-driven Catalogs
  *
  * Features:
  *   - 78/LA Registry Simulator (ANAM authorization requirements)
@@ -8,9 +8,10 @@
  *   - De minimis thresholds
  *   - RRNA sensitivity modes
  *   - Manual shipment injection
+ *   - DB-driven catalog editing (prohibited keywords, piracy brands, branding)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Settings,
   Plus,
@@ -25,20 +26,39 @@ import {
   Sliders,
   Info,
   TrendingUp,
+  Tag,
+  Building2,
+  Save,
 } from 'lucide-react';
 import { useT1 } from '../context/T1Context';
+import { useAuth } from '../context/AuthContext';
 import { T1Shipment } from '../types/t1';
 import { assignGenericHsCode } from '../constants/genericHscodes';
 import { detectRRNA } from '../engine/rrnaDetector';
 import { generateShipmentId } from '../utils/formatters';
+import { apiGet, apiPut } from '../api';
 
 interface Props {
   onToast: (msg: string) => void;
 }
 
+interface BrandingConfig {
+  logoUrl?: string;
+  rfc?: string;
+  companyName?: string;
+}
+
+interface ConfigResponse<T> {
+  key: string;
+  value: T | null;
+}
+
 export default function ConfigurationView({ onToast }: Props) {
   const { state, dispatch } = useT1();
-  const { userRole, tax } = state;
+  const { user } = useAuth();
+  const { tax } = state;
+
+  const isAdmin = user?.role === 'admin';
 
   const [exchangeRate, setExchangeRate] = useState(tax.exchangeRate.toString());
   const [rrnaMode, setRrnaMode] = useState<'STRICT' | 'NORMAL' | 'RELAXED'>('NORMAL');
@@ -53,11 +73,90 @@ export default function ConfigurationView({ onToast }: Props) {
   const [qty, setQty] = useState('1');
   const [unit, setUnit] = useState('PCE');
 
-  const isAdmin = userRole === 'admin';
+  // DB-driven catalog state
+  const [prohibitedText, setProhibitedText] = useState('');
+  const [brandsText, setBrandsText] = useState('');
+  const [brandingLogoUrl, setBrandingLogoUrl] = useState('');
+  const [brandingRfc, setBrandingRfc] = useState('');
+  const [brandingCompanyName, setBrandingCompanyName] = useState('');
+  const [configLoading, setConfigLoading] = useState(true);
+  const [configSaving, setConfigSaving] = useState(false);
+
+  // Load config on mount
+  useEffect(() => {
+    async function loadConfig() {
+      setConfigLoading(true);
+      try {
+        const [prohibRes, brandsRes, brandingRes] = await Promise.all([
+          apiGet<ConfigResponse<string[]>>('/api/catalogs/config/prohibited'),
+          apiGet<ConfigResponse<string[]>>('/api/catalogs/config/piracy_brands'),
+          apiGet<ConfigResponse<BrandingConfig>>('/api/catalogs/config/branding'),
+        ]);
+        if (prohibRes.value) setProhibitedText(prohibRes.value.join('\n'));
+        if (brandsRes.value) setBrandsText(brandsRes.value.join('\n'));
+        if (brandingRes.value) {
+          setBrandingLogoUrl(brandingRes.value.logoUrl ?? '');
+          setBrandingRfc(brandingRes.value.rfc ?? '');
+          setBrandingCompanyName(brandingRes.value.companyName ?? '');
+        }
+      } catch {
+        // Not fatal — user may not be authed yet or config is unset
+      } finally {
+        setConfigLoading(false);
+      }
+    }
+    loadConfig();
+  }, []);
+
+  const handleSaveProhibited = async () => {
+    if (!isAdmin) return;
+    setConfigSaving(true);
+    try {
+      const keywords = prohibitedText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/prohibited', { value: keywords });
+      onToast('Lista de prohibidos guardada');
+    } catch (e: any) {
+      onToast(`Error: ${e.message}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const handleSaveBrands = async () => {
+    if (!isAdmin) return;
+    setConfigSaving(true);
+    try {
+      const brands = brandsText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/piracy_brands', { value: brands });
+      onToast('Marcas de piratería guardadas');
+    } catch (e: any) {
+      onToast(`Error: ${e.message}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const handleSaveBranding = async () => {
+    if (!isAdmin) return;
+    setConfigSaving(true);
+    try {
+      const branding: BrandingConfig = {
+        logoUrl: brandingLogoUrl.trim() || undefined,
+        rfc: brandingRfc.trim() || undefined,
+        companyName: brandingCompanyName.trim() || undefined,
+      };
+      await apiPut('/api/catalogs/config/branding', { value: branding });
+      onToast('Datos de empresa guardados');
+    } catch (e: any) {
+      onToast(`Error: ${e.message}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  };
 
   const handleInject = () => {
     if (!isAdmin) {
-      onToast('🔒 Solo administrador puede inyectar guías');
+      onToast('Solo administrador puede inyectar guías');
       return;
     }
 
@@ -92,7 +191,7 @@ export default function ConfigurationView({ onToast }: Props) {
       },
     });
 
-    onToast(`🎉 Guía ${guideId} inyectada`);
+    onToast(`Guía ${guideId} inyectada`);
 
     // Auto increment
     const parts = guideId.split('-');
@@ -110,13 +209,13 @@ export default function ConfigurationView({ onToast }: Props) {
     const rate = parseFloat(exchangeRate);
     if (rate > 0) {
       dispatch({ type: 'SET_EXCHANGE_RATE', payload: rate });
-      onToast(`💱 Tipo de cambio actualizado: $${rate.toFixed(2)} MXN/USD`);
+      onToast(`Tipo de cambio actualizado: $${rate.toFixed(2)} MXN/USD`);
     }
   };
 
   const handleReset = () => {
     dispatch({ type: 'CLEAR_MANIFEST' });
-    onToast('🔄 Todos los datos reiniciados');
+    onToast('Todos los datos reiniciados');
   };
 
   return (
@@ -129,7 +228,7 @@ export default function ConfigurationView({ onToast }: Props) {
         <div>
           <h2 className="text-lg font-bold">Configuración T1 & Simulador</h2>
           <p className="text-xs text-on-surface-variant">
-            Parámetros del motor RGCE, tasas globales, y simulador de registro 78/LA.
+            Parámetros del motor RGCE, tasas globales, catálogos de riesgo y datos de empresa.
           </p>
         </div>
       </div>
@@ -143,6 +242,117 @@ export default function ConfigurationView({ onToast }: Props) {
           </div>
         </div>
       )}
+
+      {/* DB-driven catalogs — Admin only */}
+      <section className="space-y-4">
+        <h3 className="text-xs font-bold text-primary uppercase tracking-wider flex items-center gap-2">
+          <Database className="w-4 h-4" />
+          Catálogos de Riesgo (BD)
+        </h3>
+        {configLoading ? (
+          <p className="text-xs text-on-surface-variant">Cargando configuración...</p>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Prohibited keywords */}
+            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
+              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
+                <AlertOctagon className="w-4 h-4" />
+                Palabras Prohibidas
+              </h4>
+              <p className="text-[10px] text-on-surface-variant mb-2">Una por línea. Vacío = usar lista predeterminada.</p>
+              <textarea
+                value={prohibitedText}
+                onChange={(e) => setProhibitedText(e.target.value)}
+                disabled={!isAdmin}
+                rows={8}
+                className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100 resize-none"
+                placeholder="maquillaje\nliquido\nautoparte..."
+              />
+              <button
+                onClick={handleSaveProhibited}
+                disabled={!isAdmin || configSaving}
+                className="mt-2 w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Guardar
+              </button>
+            </div>
+
+            {/* Piracy brands */}
+            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
+              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
+                <Tag className="w-4 h-4" />
+                Marcas de Piratería
+              </h4>
+              <p className="text-[10px] text-on-surface-variant mb-2">Una por línea. Vacío = usar lista predeterminada.</p>
+              <textarea
+                value={brandsText}
+                onChange={(e) => setBrandsText(e.target.value)}
+                disabled={!isAdmin}
+                rows={8}
+                className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100 resize-none"
+                placeholder="Nike\nAdidas\nGucci..."
+              />
+              <button
+                onClick={handleSaveBrands}
+                disabled={!isAdmin || configSaving}
+                className="mt-2 w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Guardar
+              </button>
+            </div>
+
+            {/* Branding */}
+            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
+              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
+                <Building2 className="w-4 h-4" />
+                Datos de Empresa
+              </h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">Nombre de Empresa</label>
+                  <input
+                    value={brandingCompanyName}
+                    onChange={(e) => setBrandingCompanyName(e.target.value)}
+                    disabled={!isAdmin}
+                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
+                    placeholder="Capital Centennials"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">RFC</label>
+                  <input
+                    value={brandingRfc}
+                    onChange={(e) => setBrandingRfc(e.target.value.toUpperCase())}
+                    disabled={!isAdmin}
+                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
+                    placeholder="CAP010101ABC"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">URL del Logo</label>
+                  <input
+                    value={brandingLogoUrl}
+                    onChange={(e) => setBrandingLogoUrl(e.target.value)}
+                    disabled={!isAdmin}
+                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
+                    placeholder="https://..."
+                  />
+                </div>
+                <button
+                  onClick={handleSaveBranding}
+                  disabled={!isAdmin || configSaving}
+                  className="w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Guardar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Tax & Exchange Rate */}

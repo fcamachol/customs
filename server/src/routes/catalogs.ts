@@ -119,3 +119,53 @@ catalogsRouter.delete(
     res.json({ ok: true });
   },
 );
+
+// ─── Config endpoints ───────────────────────────────────────────────────────
+
+const ALLOWED_CONFIG_KEYS = new Set(['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties']);
+
+// GET /api/catalogs/config/:key — any authenticated role
+catalogsRouter.get('/config/:key', requireAuth, async (req, res) => {
+  const { key } = req.params;
+  if (!ALLOWED_CONFIG_KEYS.has(key)) {
+    res.status(400).json({ error: 'Unknown config key' });
+    return;
+  }
+  const { rows } = await query('SELECT value FROM config WHERE key=$1', [key]);
+  res.json({ key, value: rows[0]?.value ?? null });
+});
+
+// PUT /api/catalogs/config/:key — admin only
+catalogsRouter.put(
+  '/config/:key',
+  requireAuth,
+  requireRole('admin'),
+  async (req, res) => {
+    const { key } = req.params;
+    if (!ALLOWED_CONFIG_KEYS.has(key)) {
+      res.status(400).json({ error: 'Unknown config key' });
+      return;
+    }
+    const value = req.body?.value;
+    if (value === undefined) {
+      res.status(400).json({ error: 'value is required' });
+      return;
+    }
+    const { rows } = await query(
+      `INSERT INTO config (key, value, updated_by, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (key) DO UPDATE SET value=$2, updated_by=$3, updated_at=now()
+       RETURNING key, value, updated_at`,
+      [key, JSON.stringify(value), req.user!.userId],
+    );
+    await recordAudit({
+      userId: req.user!.userId,
+      action: 'UPDATE_CONFIG',
+      entity: 'config',
+      entityId: key,
+      after: { key, value },
+      ip: req.ip,
+    });
+    res.json(rows[0]);
+  },
+);

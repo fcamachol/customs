@@ -5,6 +5,10 @@ export interface RiskContext {
   nameCounts: Record<string, number>;
   addressCounts: Record<string, number>;
   monthlyHistoryNames: Set<string>;
+  /** Optional override list for piracy brand detection */
+  piracyBrands?: string[];
+  /** Optional override list for prohibited keyword detection */
+  prohibitedKeywords?: string[];
 }
 
 export interface SignalResult {
@@ -20,8 +24,8 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
   const id = (s.consignee.curp ?? s.consignee.rfc ?? '').replace(/\s/g, '');
   const name = norm(s.consignee.name);
   const addr = norm(s.consignee.address ?? '');
-  const brand = matchesBrand(s.description);
-  const prohibited = matchesProhibited(s.description);
+  const brand = matchesBrand(s.description, ctx.piracyBrands);
+  const prohibited = matchesProhibited(s.description, ctx.prohibitedKeywords);
 
   const signals: SignalResult[] = [
     { id: 'id', flagged: !(id.length === 13 || id.length === 18), incidence: 'Falta RFC/CURP' },

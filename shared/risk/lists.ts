@@ -14,12 +14,16 @@ function norm(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
-export function matchesBrand(description: string): string | null {
+/** Returns the matched brand name or null. Accepts an optional override list; falls back to PIRACY_BRANDS. */
+export function matchesBrand(description: string, brands?: string[]): string | null {
+  const list = brands && brands.length > 0 ? brands : PIRACY_BRANDS;
   const d = norm(description);
-  return PIRACY_BRANDS.find((b) => d.includes(norm(b))) ?? null;
+  return list.find((b) => d.includes(norm(b))) ?? null;
 }
 
-export function matchesProhibited(description: string): string | null {
+/** Returns the matched keyword or null. Accepts an optional override list; falls back to PROHIBITED_KEYWORDS. */
+export function matchesProhibited(description: string, keywords?: string[]): string | null {
+  const list = keywords && keywords.length > 0 ? keywords : PROHIBITED_KEYWORDS;
   const d = norm(description);
-  return PROHIBITED_KEYWORDS.find((k) => d.includes(norm(k))) ?? null;
+  return list.find((k) => d.includes(norm(k))) ?? null;
 }

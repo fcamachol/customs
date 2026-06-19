@@ -16,7 +16,18 @@ export interface ScoredShipment {
   incidences: string[];
 }
 
-export function scoreManifest(shipments: Shipment[], monthlyHistoryNames: Set<string>): ScoredShipment[] {
+export interface ScoreOptions {
+  /** Optional override list for piracy brands (falls back to built-in list when omitted) */
+  piracyBrands?: string[];
+  /** Optional override list for prohibited keywords (falls back to built-in list when omitted) */
+  prohibitedKeywords?: string[];
+}
+
+export function scoreManifest(
+  shipments: Shipment[],
+  monthlyHistoryNames: Set<string>,
+  options?: ScoreOptions,
+): ScoredShipment[] {
   const nameCounts: Record<string, number> = {};
   const addressCounts: Record<string, number> = {};
   for (const s of shipments) {
@@ -25,7 +36,13 @@ export function scoreManifest(shipments: Shipment[], monthlyHistoryNames: Set<st
     if (n) nameCounts[n] = (nameCounts[n] ?? 0) + 1;
     if (a) addressCounts[a] = (addressCounts[a] ?? 0) + 1;
   }
-  const ctx: RiskContext = { nameCounts, addressCounts, monthlyHistoryNames };
+  const ctx: RiskContext = {
+    nameCounts,
+    addressCounts,
+    monthlyHistoryNames,
+    piracyBrands: options?.piracyBrands,
+    prohibitedKeywords: options?.prohibitedKeywords,
+  };
   return shipments.map((s) => {
     const signals = runSignals(s, ctx);
     const fired = signals.filter((f) => f.flagged);

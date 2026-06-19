@@ -1,7 +1,13 @@
 // src/components/Sidebar.test.tsx
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Sidebar } from './Sidebar';
+
+vi.mock('../api', () => ({
+  apiGet: vi.fn(async () => ({ key: 'branding', value: null })),
+  apiPost: vi.fn(),
+  apiPut: vi.fn(),
+}));
 
 describe('Sidebar', () => {
   it('shows all sections for admin including Dashboard first', () => {

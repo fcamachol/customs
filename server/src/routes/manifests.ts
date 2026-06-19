@@ -6,7 +6,7 @@ import { parseManifestRows } from '../../../shared/parsing/manifestParser';
 
 export const manifestsRouter = Router();
 
-manifestsRouter.post('/', requireAuth, async (req, res) => {
+manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
   const { mawbReference, clientName, rows } = req.body ?? {};
   if (!mawbReference || !Array.isArray(rows)) { res.status(400).json({ error: 'mawbReference and rows[] required' }); return; }
   const { shipments, unmappedHeaders } = parseManifestRows(rows, mawbReference);

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db/pool';
-import { requireAuth } from '../auth/middleware';
+import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { scoreManifest } from '../../../shared/risk/classify';
 import { deleteManifestHistory, loadHistoryNames, recordNames } from '../services/monthlyHistory';
@@ -10,7 +10,7 @@ import type { Shipment } from '../../../shared/types/shipment';
 
 export const riskRouter = Router();
 
-riskRouter.post('/:id/risk', requireAuth, async (req, res) => {
+riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
   const period: string = req.body?.period ?? new Date().toISOString().slice(0, 7);
   const { rows } = await query<{ id: string; data: Shipment }>(
     'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);

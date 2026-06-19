@@ -28,10 +28,11 @@ beforeEach(async () => {
 });
 
 describe('ownership scoping', () => {
-  it('capturista B does not see A\'s manifest in the list', async () => {
+  // PRD RF-22: capturistas share visibility — B can see A's manifests in the list
+  it('capturista B sees A\'s manifest in the list (shared visibility)', async () => {
     const res = await request(app).get('/api/records?q=Cliente').set('Authorization', `Bearer ${tokenB}`);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(0);
+    expect(res.body).toHaveLength(1);
   });
 
   it('owner A sees their own manifest in the list', async () => {
@@ -46,9 +47,10 @@ describe('ownership scoping', () => {
     expect(res.body).toHaveLength(1);
   });
 
-  it('capturista B gets 403 on A\'s record :id', async () => {
+  // PRD RF-22: capturistas share visibility — B can access A's record detail
+  it('capturista B gets 200 on A\'s record :id (shared visibility)', async () => {
     const res = await request(app).get(`/api/records/${manifestId}`).set('Authorization', `Bearer ${tokenB}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 
   it('owner A gets 200 on their record :id', async () => {
@@ -61,9 +63,10 @@ describe('ownership scoping', () => {
     expect(res.status).toBe(200);
   });
 
-  it('capturista B gets 403 on A\'s export', async () => {
+  // PRD RF-22: capturistas share visibility — B can export A's records
+  it('capturista B gets 200 on A\'s export (shared visibility)', async () => {
     const res = await request(app).get(`/api/records/${manifestId}/risk.xlsx`).set('Authorization', `Bearer ${tokenB}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 
   it('autoridad is not forbidden from A\'s export', async () => {

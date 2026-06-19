@@ -94,7 +94,7 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (s: Section
                 <button onClick={() => onNavigate?.('consulta')}
                   className="flex w-full items-center justify-between py-2.5 text-left text-sm transition hover:bg-slate-50">
                   <span className="flex items-center gap-2">
-                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                    <FileSpreadsheet className="h-4 w-4 text-slate-400" />
                     <span className="font-mono text-xs text-slate-600">{r.mawbReference}</span>
                     <span className="text-slate-500">— {r.clientName}</span>
                   </span>

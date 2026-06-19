@@ -1,9 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile as fsReadFile, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query } from '../db/pool';
 
-export type FileKind = 'manifest' | 'pedimento_pdf' | 'report';
+export type FileKind = 'manifest' | 'pedimento_pdf' | 'report' | 'risk_analysis';
 export interface SaveFileInput { kind: FileKind; originalName: string; bytes: Buffer; uploadedBy: string | null; }
 export interface FileMeta { id: string; kind: FileKind; originalName: string; storagePath: string; sizeBytes: number; }
 
@@ -23,4 +23,12 @@ export async function saveFile(input: SaveFileInput): Promise<FileMeta> {
     [id, input.kind, input.originalName, storagePath, input.bytes.length, input.uploadedBy],
   );
   return { id, kind: input.kind, originalName: input.originalName, storagePath, sizeBytes: input.bytes.length };
+}
+
+export async function readFileById(fileId: string): Promise<{ bytes: Buffer; originalName: string } | null> {
+  const { rows } = await query<{ storage_path: string; original_name: string }>(
+    'SELECT storage_path, original_name FROM files WHERE id=$1', [fileId]);
+  if (!rows.length) return null;
+  const bytes = await fsReadFile(rows[0].storage_path);
+  return { bytes: Buffer.from(bytes), originalName: rows[0].original_name };
 }

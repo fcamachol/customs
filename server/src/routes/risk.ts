@@ -4,6 +4,8 @@ import { requireAuth } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { scoreManifest } from '../../../shared/risk/classify';
 import { deleteManifestHistory, loadHistoryNames, recordNames } from '../services/monthlyHistory';
+import { buildRiskWorkbook } from '../services/artifacts';
+import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
 
 export const riskRouter = Router();
@@ -30,6 +32,23 @@ riskRouter.post('/:id/risk', requireAuth, async (req, res) => {
     validarEnPrevio: scored.filter((s) => s.color === 'amarillo').length,
     rojos: scored.filter((s) => s.color === 'rojo').length,
   };
+
+  // Build and persist the risk XLSX artifact
+  const riskRows = scored.map((s) => ({
+    Guia: s.shipment.guideId,
+    Destinatario: s.shipment.consignee.name,
+    Resultado: s.color,
+    Motivo: s.incidences.join('; '),
+  }));
+  const riskBuffer = buildRiskWorkbook(riskRows);
+  const riskFile = await saveFile({
+    kind: 'risk_analysis',
+    originalName: 'Analisis_de_Riesgo.xlsx',
+    bytes: riskBuffer,
+    uploadedBy: req.user!.userId,
+  });
+  await query('UPDATE manifests SET risk_file_id=$1 WHERE id=$2', [riskFile.id, req.params.id]);
+
   await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 
   res.json({

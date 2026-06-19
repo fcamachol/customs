@@ -8,6 +8,7 @@ import type { Claims } from '../auth/token';
 import { toLayoutRows } from '../../../shared/export/layoutExport';
 import { buildReportRows } from '../../../shared/export/reportBuilder';
 import type { Shipment } from '../../../shared/types/shipment';
+import { saveFile, readFileById } from '../storage/files';
 
 export const exportsRouter = Router();
 
@@ -47,14 +48,44 @@ exportsRouter.get('/:id/layout.xlsx', requireAuth, async (req, res) => {
 
 exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+  // Serve stored artifact if available
+  const { rows: mRows } = await query<{ risk_file_id: string | null }>(
+    'SELECT risk_file_id FROM manifests WHERE id=$1', [req.params.id]);
+  const riskFileId = mRows[0]?.risk_file_id ?? null;
+  if (riskFileId) {
+    const stored = await readFileById(riskFileId);
+    if (stored) {
+      await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id, ip: req.ip });
+      send(res, stored.bytes, stored.originalName);
+      return;
+    }
+  }
+
+  // Fallback: regenerate (no stored file yet)
   const rows = await loadShipments(req.params.id);
-  const out = rows.map((r) => ({ Guia: r.data.guideId, Destinatario: r.data.consignee.name, Resultado: r.risk_color ?? '' }));
+  const out = rows.map((r) => ({ Guia: r.data.guideId, Destinatario: r.data.consignee.name, Resultado: r.risk_color ?? '', Motivo: (r.risk_incidences ?? []).join('; ') }));
   send(res, workbook(out), 'Analisis_de_Riesgo.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });
 
 exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+  // Serve stored artifact if available
+  const { rows: mRows } = await query<{ report_file_id: string | null }>(
+    'SELECT report_file_id FROM manifests WHERE id=$1', [req.params.id]);
+  const reportFileId = mRows[0]?.report_file_id ?? null;
+  if (reportFileId) {
+    const stored = await readFileById(reportFileId);
+    if (stored) {
+      await recordAudit({ userId: req.user!.userId, action: 'EXPORT_REPORT', entity: 'manifest', entityId: req.params.id, ip: req.ip });
+      send(res, stored.bytes, stored.originalName);
+      return;
+    }
+  }
+
+  // Generate + persist
   const m = await query(
     `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email, c.platform
      FROM manifests m
@@ -77,6 +108,17 @@ exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
       platform: manifest.platform ?? undefined,
     } : undefined,
   });
-  send(res, workbook(reportRows), 'Reporte_General.xlsx');
+  const buf = workbook(reportRows);
+
+  // Persist report artifact
+  const reportFile = await saveFile({
+    kind: 'report',
+    originalName: 'Reporte_General.xlsx',
+    bytes: buf,
+    uploadedBy: req.user!.userId,
+  });
+  await query('UPDATE manifests SET report_file_id=$1 WHERE id=$2', [reportFile.id, req.params.id]);
+
+  send(res, buf, 'Reporte_General.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_REPORT', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });

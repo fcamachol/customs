@@ -7,7 +7,7 @@ const ROLE_LABELS: Record<string, string> = { capturista: 'Capturista', admin: '
 export function Sidebar({ role, active, onSelect, username, onLogout }: {
   role: string; active: Section; onSelect: (s: Section) => void; username?: string; onLogout?: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem('sidebar:collapsed') === '1');
+  const [collapsed, setCollapsed] = useState<boolean>(() => typeof localStorage !== 'undefined' && localStorage.getItem('sidebar:collapsed') === '1');
   const visible = new Set(visibleSectionsFor(role));
   const toggle = () => { const v = !collapsed; setCollapsed(v); localStorage.setItem('sidebar:collapsed', v ? '1' : '0'); };
 
@@ -32,15 +32,12 @@ export function Sidebar({ role, active, onSelect, username, onLogout }: {
           return (
             <div key={group.label} className="mb-3" role="group" aria-label={group.label}>
               {!collapsed && (
-                <div
-                  data-label={group.label}
-                  className="nav-group-label px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400"
-                />
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{group.label}</div>
               )}
               {items.map((it) => {
                 const Icon = it.icon; const isActive = active === it.id;
                 return (
-                  <button key={it.id} onClick={() => onSelect(it.id)} aria-current={isActive} title={it.label}
+                  <button key={it.id} onClick={() => onSelect(it.id)} aria-current={isActive ? 'page' : undefined} title={it.label}
                     className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition ${
                       isActive ? 'bg-navy-50 text-navy-800' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}>
                     {isActive && <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-gold-500" />}

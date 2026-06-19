@@ -7,14 +7,15 @@ describe('Sidebar', () => {
   it('shows all sections for admin including Dashboard first', () => {
     render(<Sidebar role="admin" active="dashboard" onSelect={() => {}} username="Ana" onLogout={() => {}} />);
     for (const label of ['Dashboard', 'Realizar Registro', 'Seguimiento', 'Reporte General', 'Consulta', 'Acerca de']) {
-      expect(screen.getByText(label)).toBeTruthy();
+      expect(screen.getByRole('button', { name: label })).toBeTruthy();
     }
   });
 
   it('hides write-flows for autoridad', () => {
     render(<Sidebar role="autoridad" active="dashboard" onSelect={() => {}} username="Inspector" onLogout={() => {}} />);
-    expect(screen.getByText('Dashboard')).toBeTruthy();
-    expect(screen.queryByText('Realizar Registro')).toBeNull();
-    expect(screen.queryByText('Reporte General')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Dashboard' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Realizar Registro' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reporte General' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Seguimiento' })).toBeNull();
   });
 });

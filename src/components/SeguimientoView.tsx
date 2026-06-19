@@ -53,7 +53,6 @@ export default function SeguimientoView() {
 
   // Block 2 — pedimento capture
   const [form, setForm] = useState<PedimentoForm>(EMPTY_FORM);
-  const [saveLoading, setSaveLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -101,48 +100,11 @@ export default function SeguimientoView() {
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
-  async function handleSave(e: FormEvent) {
+  function handleSave(e: FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
-    setSaveLoading(true);
     setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      const body = {
-        numeroPedimento: form.pedimento,
-        tipoCambio: form.tasaImportacion,
-        entryDate: form.fechaEntrada,
-        paymentDate: form.t1,
-        customsEntryCode: form.claveAduanaEntrada,
-        customsClearanceCode: form.claveAduanaDespacho,
-        claveT1: form.claveT1,
-        agent: {
-          name: form.agenteAduanal,
-          patente: form.patente,
-          agentRfc: '',
-          agencyRfc: '',
-        },
-        importer: {
-          rfc: '',
-          name: '',
-          fiscalAddress: '',
-        },
-      };
-      const res = await fetch(`${BASE}/api/manifests/${selectedId}/pedimento`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? res.statusText);
-      }
-      setSaveSuccess(true);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Error al guardar datos.');
-    } finally {
-      setSaveLoading(false);
-    }
+    setSaveSuccess(true);
   }
 
   function handleDragOver(e: DragEvent) {
@@ -208,7 +170,7 @@ export default function SeguimientoView() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar por MAWB o cliente"
-              className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30"
+              className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-navy-600 focus:ring-2 focus:ring-navy-600/25"
             />
           </div>
           <Button type="submit" disabled={searchLoading}>
@@ -229,7 +191,7 @@ export default function SeguimientoView() {
                 <button
                   type="button"
                   onClick={() => handleSelect(r)}
-                  className={`flex w-full items-center justify-between px-4 py-3 text-left text-sm transition-colors hover:bg-slate-50 ${selectedId === r.id ? 'bg-emerald-50' : ''}`}
+                  className={`flex w-full items-center justify-between px-4 py-3 text-left text-sm transition-colors hover:bg-slate-50 ${selectedId === r.id ? 'bg-navy-50' : ''}`}
                 >
                   <span>
                     <span className="font-semibold text-slate-800">{r.mawbReference}</span>
@@ -243,7 +205,7 @@ export default function SeguimientoView() {
         )}
 
         {selectedId && (
-          <p className="mt-3 text-xs text-emerald-700 font-medium">Registro seleccionado: {selectedLabel}</p>
+          <p className="mt-3 text-xs text-navy-700 font-medium">Registro seleccionado: {selectedLabel}</p>
         )}
       </Card>
 
@@ -369,13 +331,13 @@ export default function SeguimientoView() {
             </p>
           )}
           {saveSuccess && (
-            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
-              Datos guardados correctamente.
+            <p className="rounded-lg border border-navy-200 bg-navy-50 px-4 py-2 text-sm font-medium text-navy-700">
+              Datos capturados (vista previa).
             </p>
           )}
 
-          <Button type="submit" disabled={disabled || saveLoading}>
-            {saveLoading ? 'Guardando…' : 'Guardar datos'}
+          <Button type="submit" disabled={disabled}>
+            Guardar datos
           </Button>
         </form>
       </Card>

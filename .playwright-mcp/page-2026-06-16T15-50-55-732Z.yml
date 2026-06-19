@@ -1,0 +1,154 @@
+- generic [ref=e4]:
+  - complementary [ref=e5]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - img [ref=e10]
+        - generic [ref=e16]:
+          - heading "SGA Customs" [level=1] [ref=e17]
+          - paragraph [ref=e18]: T1 Pedimento Pro
+      - navigation [ref=e19]:
+        - button "Operaciones" [ref=e20]:
+          - generic [ref=e21]:
+            - img [ref=e22]
+            - generic [ref=e27]: Operaciones
+        - button "Cargar Manifiesto T1 T1" [ref=e28]:
+          - generic [ref=e29]:
+            - img [ref=e30]
+            - generic [ref=e33]: Cargar Manifiesto T1
+          - generic [ref=e34]: T1
+        - button "Análisis de Cumplimiento" [active] [ref=e35]:
+          - generic [ref=e36]:
+            - img [ref=e37]
+            - generic [ref=e39]: Análisis de Cumplimiento
+        - button "Generar Pedimento T1" [ref=e41]:
+          - generic [ref=e42]:
+            - img [ref=e43]
+            - generic [ref=e46]: Generar Pedimento T1
+        - button "Portal ANAM (Autoridad)" [ref=e47]:
+          - generic [ref=e48]:
+            - img [ref=e49]
+            - generic [ref=e55]: Portal ANAM (Autoridad)
+        - button "Parámetros / Simulador" [ref=e56]:
+          - generic [ref=e57]:
+            - img [ref=e58]
+            - generic [ref=e61]: Parámetros / Simulador
+    - generic [ref=e62]:
+      - generic [ref=e63]:
+        - generic [ref=e64]: TIPO DE USUARIO (ROL)
+        - generic [ref=e65]:
+          - button "Captura" [ref=e66]
+          - button "Admin" [ref=e67]
+          - button "Autoridad" [ref=e68]
+      - generic [ref=e69]:
+        - img [ref=e71]
+        - generic [ref=e74]:
+          - paragraph [ref=e75]: Ing. Fer (Administrador)
+          - paragraph [ref=e76]:
+            - generic [ref=e78]: ADMIN
+      - generic [ref=e79]:
+        - generic [ref=e80]: SGA T1 PRO V2.0
+        - generic [ref=e83]: CONEXIÓN ACTIVA
+  - main [ref=e84]:
+    - generic [ref=e317]:
+      - generic [ref=e318]:
+        - generic [ref=e319]:
+          - generic [ref=e320]:
+            - generic [ref=e321]: REGISTRO T1 — EMPRESAS DE MENSAJERÍA Y PAQUETERÍA
+            - heading "2 Guías Registradas" [level=3] [ref=e322]
+            - generic [ref=e323]:
+              - generic [ref=e324]:
+                - img [ref=e325]
+                - generic [ref=e328]: "MAWB: MANUAL"
+              - generic [ref=e329]:
+                - img [ref=e330]
+                - generic [ref=e333]: "Total: $90.00"
+          - button "Exportar CSV" [ref=e335] [cursor=pointer]:
+            - img [ref=e336]
+            - generic [ref=e339]: Exportar CSV
+        - generic [ref=e340]:
+          - generic:
+            - img
+          - generic [ref=e341]: ESTADO GENERAL
+          - generic [ref=e342]:
+            - heading "0%" [level=4] [ref=e343]
+            - paragraph [ref=e344]: Válidas T1
+      - generic [ref=e346]:
+        - button "Aprobadas T1 0" [ref=e347] [cursor=pointer]:
+          - generic [ref=e348]:
+            - generic [ref=e349]:
+              - paragraph [ref=e350]: Aprobadas T1
+              - heading "0" [level=4] [ref=e351]
+            - img [ref=e353]
+        - button "Bloqueadas 0" [ref=e356] [cursor=pointer]:
+          - generic [ref=e357]:
+            - generic [ref=e358]:
+              - paragraph [ref=e359]: Bloqueadas
+              - heading "0" [level=4] [ref=e360]
+            - img [ref=e362]
+        - button "Pendientes 2" [ref=e365] [cursor=pointer]:
+          - generic [ref=e366]:
+            - generic [ref=e367]:
+              - paragraph [ref=e368]: Pendientes
+              - heading "2" [level=4] [ref=e369]
+            - img [ref=e371]
+        - button "Consignatarios 1" [ref=e373] [cursor=pointer]:
+          - generic [ref=e374]:
+            - generic [ref=e375]:
+              - paragraph [ref=e376]: Consignatarios
+              - heading "1" [level=4] [ref=e377]
+            - img [ref=e379]
+      - generic [ref=e384]:
+        - generic [ref=e385]:
+          - img [ref=e386]
+          - textbox "Buscar guía, RFC, consignatario..." [ref=e389]
+        - combobox [ref=e390]:
+          - option "Todos los países" [selected]
+          - option "Estados Unidos (US)"
+        - combobox [ref=e391]:
+          - option "Todos los estados" [selected]
+          - option "Válida T1"
+          - option "Excede $2,500"
+          - option "RRNA Bloqueada"
+          - option "Fraccionado"
+          - option "Valor Cero"
+          - option "Desc. Genérica"
+          - option "Pendiente"
+        - generic [ref=e392]: Mostrando 2 de 2
+      - table [ref=e395]:
+        - rowgroup [ref=e396]:
+          - row "Guía Consignatario RFC Descripción Valor USD UOM Cód. Genérico Origen Liquidación MXN Estado" [ref=e397]:
+            - columnheader "Guía" [ref=e398]
+            - columnheader "Consignatario" [ref=e399]
+            - columnheader "RFC" [ref=e400]
+            - columnheader "Descripción" [ref=e401]
+            - columnheader "Valor USD" [ref=e402]
+            - columnheader "UOM" [ref=e403]
+            - columnheader "Cód. Genérico" [ref=e404]
+            - columnheader "Origen" [ref=e405]
+            - columnheader "Liquidación MXN" [ref=e406]
+            - columnheader "Estado" [ref=e407]
+        - rowgroup [ref=e408]:
+          - row "MX-T1-001 Juan Pérez PEGJ800101ABC Smartphone case $45.00 PCE 9901.00.01 Estados Unidos $0.00 PENDIENTE" [ref=e409]:
+            - cell "MX-T1-001" [ref=e410]
+            - cell "Juan Pérez" [ref=e411]
+            - cell "PEGJ800101ABC" [ref=e412]
+            - cell "Smartphone case" [ref=e413]
+            - cell "$45.00" [ref=e414]
+            - cell "PCE" [ref=e415]
+            - cell "9901.00.01" [ref=e416]
+            - cell "Estados Unidos" [ref=e417]
+            - cell "$0.00" [ref=e418]
+            - cell "PENDIENTE" [ref=e419]:
+              - generic [ref=e420]: PENDIENTE
+          - row "MX-T1-002 Juan Pérez PEGJ800101ABC Smartphone case $45.00 PCE 9901.00.01 Estados Unidos $0.00 PENDIENTE" [ref=e421]:
+            - cell "MX-T1-002" [ref=e422]
+            - cell "Juan Pérez" [ref=e423]
+            - cell "PEGJ800101ABC" [ref=e424]
+            - cell "Smartphone case" [ref=e425]
+            - cell "$45.00" [ref=e426]
+            - cell "PCE" [ref=e427]
+            - cell "9901.00.01" [ref=e428]
+            - cell "Estados Unidos" [ref=e429]
+            - cell "$0.00" [ref=e430]
+            - cell "PENDIENTE" [ref=e431]:
+              - generic [ref=e432]: PENDIENTE

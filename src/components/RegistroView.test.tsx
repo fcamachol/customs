@@ -8,4 +8,10 @@ describe('RegistroView', () => {
     expect(screen.getByText(/Paso 1|Cargar manifiesto/i)).toBeTruthy();
     expect(screen.getByText('MAWB')).toBeTruthy();
   });
+
+  it('does not render any tax/liquidación figure (PRD §10 — no contribution calculation)', () => {
+    render(<RegistroView />);
+    expect(screen.queryByText(/Liquidaci[oó]n/i)).toBeNull();
+    expect(screen.queryByText(/\bIGI\b|\bIVA\b|\bDTA\b/)).toBeNull();
+  });
 });

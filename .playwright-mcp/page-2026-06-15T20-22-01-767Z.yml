@@ -1,0 +1,183 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - complementary [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - img [ref=e9]
+          - generic [ref=e15]:
+            - heading "SGA Customs" [level=1] [ref=e16]
+            - paragraph [ref=e17]: T1 Pedimento Pro
+        - navigation [ref=e18]:
+          - button "Operaciones" [ref=e19]:
+            - generic [ref=e20]:
+              - img [ref=e21]
+              - generic [ref=e26]: Operaciones
+          - button "Cargar Manifiesto T1 T1" [ref=e27]:
+            - generic [ref=e28]:
+              - img [ref=e29]
+              - generic [ref=e32]: Cargar Manifiesto T1
+            - generic [ref=e33]: T1
+          - button "Análisis de Cumplimiento" [ref=e34]:
+            - generic [ref=e35]:
+              - img [ref=e36]
+              - generic [ref=e38]: Análisis de Cumplimiento
+          - button "Generar Pedimento T1" [ref=e40]:
+            - generic [ref=e41]:
+              - img [ref=e42]
+              - generic [ref=e45]: Generar Pedimento T1
+          - button "Portal ANAM (Autoridad)" [ref=e46]:
+            - generic [ref=e47]:
+              - img [ref=e48]
+              - generic [ref=e54]: Portal ANAM (Autoridad)
+          - button "Parámetros / Simulador" [ref=e55]:
+            - generic [ref=e56]:
+              - img [ref=e57]
+              - generic [ref=e60]: Parámetros / Simulador
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - generic [ref=e63]: TIPO DE USUARIO (ROL)
+          - generic [ref=e64]:
+            - button "Captura" [ref=e65]
+            - button "Admin" [ref=e66]
+            - button "Autoridad" [ref=e67]
+        - generic [ref=e68]:
+          - img [ref=e70]
+          - generic [ref=e73]:
+            - paragraph [ref=e74]: Ing. Fer (Administrador)
+            - paragraph [ref=e75]:
+              - generic [ref=e77]: ADMIN
+        - generic [ref=e78]:
+          - generic [ref=e79]: SGA T1 PRO V2.0
+          - generic [ref=e82]: CONEXIÓN ACTIVA
+    - main [ref=e83]:
+      - generic [ref=e429]:
+        - generic [ref=e430]:
+          - img [ref=e432]
+          - generic [ref=e435]:
+            - heading "Configuración T1 & Simulador" [level=2] [ref=e436]
+            - paragraph [ref=e437]: Parámetros del motor RGCE, tasas globales, y simulador de registro 78/LA.
+        - generic [ref=e438]:
+          - generic [ref=e439]:
+            - generic [ref=e440]:
+              - heading "Tipo de Cambio SAT" [level=3] [ref=e441]:
+                - img [ref=e442]
+                - text: Tipo de Cambio SAT
+              - generic [ref=e444]:
+                - generic [ref=e445]:
+                  - generic [ref=e446]: Tipo de cambio (MXN/USD)
+                  - generic [ref=e447]:
+                    - spinbutton [ref=e448]: "17.85"
+                    - button "Actualizar" [ref=e449]
+                - paragraph [ref=e450]:
+                  - text: "Valor actual:"
+                  - generic [ref=e451]: $17.85 MXN/USD
+            - generic [ref=e452]:
+              - heading "Tasas Globales Vigentes (RGCE 3.7.35)" [level=3] [ref=e453]:
+                - img [ref=e454]
+                - text: Tasas Globales Vigentes (RGCE 3.7.35)
+              - generic [ref=e457]:
+                - generic [ref=e458]:
+                  - generic [ref=e459]:
+                    - text: Estándar (Resto del Mundo)
+                    - paragraph [ref=e460]: Aplica a origen no-USMCA con valor >$50 USD
+                  - generic [ref=e461]: 33.5%
+                - generic [ref=e462]:
+                  - generic [ref=e463]:
+                    - text: USMCA Preferencial
+                    - paragraph [ref=e464]: EE.UU./Canadá, valor >$117 y ≤$2,500
+                  - generic [ref=e465]: 19.0%
+                - generic [ref=e466]:
+                  - generic [ref=e467]:
+                    - text: De Minimis Exento
+                    - paragraph [ref=e468]: ≤$50 USD bajo tratados internacionales
+                  - generic [ref=e469]: 0%
+            - generic [ref=e470]:
+              - heading "Sensibilidad RRNA" [level=3] [ref=e471]:
+                - img [ref=e472]
+                - text: Sensibilidad RRNA
+              - generic [ref=e473]:
+                - button "Estricto" [ref=e474]
+                - button "Normal" [ref=e475]
+                - button "Relajado" [ref=e476]
+              - paragraph [ref=e477]: Balance entre precisión y recall.
+          - generic [ref=e478]:
+            - generic [ref=e479]:
+              - heading "Simulador de Registro 78/LA (ANAM)" [level=3] [ref=e480]:
+                - img [ref=e481]
+                - text: Simulador de Registro 78/LA (ANAM)
+              - paragraph [ref=e484]: "Requisitos para que una empresa de mensajería obtenga el registro ante ANAM para operar T1:"
+              - generic [ref=e485]:
+                - generic [ref=e486]:
+                  - img [ref=e487]
+                  - generic [ref=e489]: RFC activo y domicilio fiscal en México
+                - generic [ref=e490]:
+                  - img [ref=e491]
+                  - generic [ref=e493]: e.firma vigente de representantes legales
+                - generic [ref=e494]:
+                  - img [ref=e495]
+                  - generic [ref=e497]: Opinión de cumplimiento positiva (SAT)
+                - generic [ref=e498]:
+                  - img [ref=e499]
+                  - generic [ref=e501]: No estar en lista de EFOS (Art. 69-B CFF)
+                - generic [ref=e502]:
+                  - img [ref=e503]
+                  - generic [ref=e505]: Inversión en activos fijos ≥ $1,000,000 USD
+                - generic [ref=e506]:
+                  - img [ref=e507]
+                  - generic [ref=e509]: Fianza fiscal ≥ $15,000,000 MXN
+                - generic [ref=e510]:
+                  - img [ref=e511]
+                  - generic [ref=e513]: Concesión Art. 14 / 14-A de la Ley Aduanera
+                - generic [ref=e514]:
+                  - img [ref=e515]
+                  - generic [ref=e517]: CCTV y controles de acceso aprobados por SAT
+                - generic [ref=e518]:
+                  - img [ref=e519]
+                  - generic [ref=e521]: Sistema de candados electrónicos con GPS
+                - generic [ref=e522]:
+                  - img [ref=e523]
+                  - generic [ref=e525]: Acceso en línea para ANAM al sistema de riesgos
+            - generic [ref=e526]:
+              - heading "Inyección Manual de Guía T1" [level=3] [ref=e527]:
+                - img [ref=e528]
+                - text: Inyección Manual de Guía T1
+              - generic [ref=e532]:
+                - generic [ref=e533]:
+                  - generic [ref=e534]: Guía ID
+                  - textbox [ref=e535]: MX-T1-002
+                - generic [ref=e536]:
+                  - generic [ref=e537]: Consignatario
+                  - textbox [ref=e538]: Juan Pérez
+                - generic [ref=e539]:
+                  - generic [ref=e540]: RFC
+                  - textbox [ref=e541]: PEGJ800101ABC
+                - generic [ref=e542]:
+                  - generic [ref=e543]: Valor USD
+                  - spinbutton [ref=e544]: "45"
+                - generic [ref=e545]:
+                  - generic [ref=e546]: Descripción
+                  - textbox [ref=e547]: Smartphone case
+                - generic [ref=e548]:
+                  - generic [ref=e549]: Origen (ISO)
+                  - textbox [ref=e550]: US
+                - generic [ref=e551]:
+                  - generic [ref=e552]: Cantidad
+                  - spinbutton [ref=e553]: "1"
+                - generic [ref=e554]:
+                  - generic [ref=e555]: UOM
+                  - combobox [ref=e556]:
+                    - option "Piezas (PCE)" [selected]
+                    - option "Kilogramos (KGM)"
+                    - option "Litros (LTR)"
+              - generic [ref=e557]:
+                - button "Inyectar Guía T1" [active] [ref=e558]:
+                  - img [ref=e559]
+                  - text: Inyectar Guía T1
+                - button "Reiniciar Todo" [ref=e560]:
+                  - img [ref=e561]
+                  - text: Reiniciar Todo
+  - generic [ref=e566]:
+    - img [ref=e568]
+    - generic [ref=e570]: 🎉 Guía MX-T1-001 inyectada
+    - button "Cerrar notificación" [ref=e571]:
+      - img [ref=e572]

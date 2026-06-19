@@ -1,0 +1,98 @@
+- generic [ref=e4]:
+  - complementary [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e9]
+        - generic [ref=e15]:
+          - heading "SGA Customs" [level=1] [ref=e16]
+          - paragraph [ref=e17]: T1 Pedimento Pro
+      - navigation [ref=e18]:
+        - button "Operaciones" [ref=e19]:
+          - generic [ref=e20]:
+            - img [ref=e21]
+            - generic [ref=e26]: Operaciones
+        - button "Cargar Manifiesto T1 T1" [active] [ref=e27]:
+          - generic [ref=e28]:
+            - img [ref=e29]
+            - generic [ref=e32]: Cargar Manifiesto T1
+          - generic [ref=e33]: T1
+        - button "Análisis de Cumplimiento" [ref=e34]:
+          - generic [ref=e35]:
+            - img [ref=e36]
+            - generic [ref=e38]: Análisis de Cumplimiento
+        - button "Generar Pedimento T1" [ref=e40]:
+          - generic [ref=e41]:
+            - img [ref=e42]
+            - generic [ref=e45]: Generar Pedimento T1
+        - button "Portal ANAM (Autoridad)" [ref=e46]:
+          - generic [ref=e47]:
+            - img [ref=e48]
+            - generic [ref=e54]: Portal ANAM (Autoridad)
+        - button "Parámetros / Simulador" [ref=e55]:
+          - generic [ref=e56]:
+            - img [ref=e57]
+            - generic [ref=e60]: Parámetros / Simulador
+    - generic [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]: TIPO DE USUARIO (ROL)
+        - generic [ref=e64]:
+          - button "Captura" [ref=e65]
+          - button "Admin" [ref=e66]
+          - button "Autoridad" [ref=e67]
+      - generic [ref=e68]:
+        - img [ref=e70]
+        - generic [ref=e73]:
+          - paragraph [ref=e74]: Ing. Fer (Administrador)
+          - paragraph [ref=e75]:
+            - generic [ref=e77]: ADMIN
+      - generic [ref=e78]:
+        - generic [ref=e79]: SGA T1 PRO V2.0
+        - generic [ref=e82]: CONEXIÓN ACTIVA
+  - main [ref=e83]:
+    - generic [ref=e161]:
+      - generic [ref=e163]:
+        - button "1 Subir Manifiesto" [ref=e164]:
+          - generic [ref=e165]: "1"
+          - generic [ref=e166]: Subir Manifiesto
+        - button "2 Análisis T1" [ref=e168]:
+          - generic [ref=e169]: "2"
+          - generic [ref=e170]: Análisis T1
+        - button "3 Generar Pedimento" [ref=e172]:
+          - generic [ref=e173]: "3"
+          - generic [ref=e174]: Generar Pedimento
+      - generic [ref=e175]:
+        - button "Zona de carga de archivos" [ref=e176] [cursor=pointer]:
+          - generic [ref=e177]:
+            - img [ref=e178]
+            - heading "Arrastre y suelte el manifiesto T1 aquí" [level=4] [ref=e181]
+            - paragraph [ref=e182]: "Formatos: Excel (.xlsx), CSV, JSON. Columnas esperadas: guía, valor, origen, destinatario, RFC, UOM"
+            - generic [ref=e183]: Seleccionar Archivos
+        - generic [ref=e184]:
+          - heading "Formato Esperado de Manifiesto T1" [level=4] [ref=e185]:
+            - img [ref=e186]
+            - text: Formato Esperado de Manifiesto T1
+          - generic [ref=e188]:
+            - generic [ref=e189]:
+              - text: guide_id / guia
+              - paragraph [ref=e190]: Número de guía aérea
+            - generic [ref=e191]:
+              - text: declared_value_usd
+              - paragraph [ref=e192]: Valor en USD (máx $2,500)
+            - generic [ref=e193]:
+              - text: origin_country
+              - paragraph [ref=e194]: País origen (US, CA, CN...)
+            - generic [ref=e195]:
+              - text: consignee_rfc
+              - paragraph [ref=e196]: RFC del destinatario
+            - generic [ref=e197]:
+              - text: description
+              - paragraph [ref=e198]: Descripción específica
+            - generic [ref=e199]:
+              - text: quantity
+              - paragraph [ref=e200]: Cantidad
+            - generic [ref=e201]:
+              - text: unit
+              - paragraph [ref=e202]: "UOM: PCE, KGM, LTR"
+            - generic [ref=e203]:
+              - text: weight_kg
+              - paragraph [ref=e204]: Peso en kilogramos

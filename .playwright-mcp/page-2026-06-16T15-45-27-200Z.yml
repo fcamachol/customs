@@ -1,0 +1,19 @@
+- main [ref=e4]:
+  - generic [ref=e5]:
+    - img "Agora" [ref=e6]
+    - heading "Iniciar sesión en Agora" [level=2] [ref=e7]
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]: E-mail
+      - textbox "ejemplo@nombredeempresa.com" [ref=e15]
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - text: Contraseña
+        - paragraph [ref=e18]:
+          - link "¿Olvidaste tu contraseña?" [ref=e19] [cursor=pointer]:
+            - /url: /app/auth/reset/password
+      - generic [ref=e21]:
+        - textbox "Contraseña" [ref=e22]
+        - button "Show password" [ref=e23] [cursor=pointer]
+    - button "Iniciar sesión" [ref=e25] [cursor=pointer]:
+      - generic [ref=e26]: Iniciar sesión

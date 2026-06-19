@@ -10,6 +10,6 @@ filesRouter.get('/:id', requireAuth, async (req, res) => {
     'SELECT storage_path, original_name FROM files WHERE id=$1', [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return; }
   const file = rows[0];
-  await recordAudit({ userId: req.user!.userId, action: 'DOWNLOAD_FILE', entity: 'file', entityId: req.params.id });
+  await recordAudit({ userId: req.user!.userId, action: 'DOWNLOAD_FILE', entity: 'file', entityId: req.params.id, ip: req.ip });
   res.download(file.storage_path, file.original_name);
 });

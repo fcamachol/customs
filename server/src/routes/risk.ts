@@ -30,7 +30,7 @@ riskRouter.post('/:id/risk', requireAuth, async (req, res) => {
     validarEnPrevio: scored.filter((s) => s.color === 'amarillo').length,
     rojos: scored.filter((s) => s.color === 'rojo').length,
   };
-  await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary });
+  await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 
   res.json({
     rows: scored.map((s) => ({

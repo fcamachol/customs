@@ -14,7 +14,7 @@ authRouter.post('/login', async (req, res) => {
   if (!user || !(await verifyPassword(password ?? '', user.password_hash))) {
     res.status(401).json({ error: 'Invalid credentials' }); return;
   }
-  await recordAudit({ userId: user.id, action: 'LOGIN', entity: 'session' });
+  await recordAudit({ userId: user.id, action: 'LOGIN', entity: 'session', ip: req.ip });
   const token = signToken({ userId: user.id, role: user.role });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });

@@ -42,7 +42,7 @@ exportsRouter.get('/:id/layout.xlsx', requireAuth, async (req, res) => {
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
   const rows = await loadShipments(req.params.id);
   send(res, workbook(toLayoutRows(rows.map((r) => r.data))), 'LayOut_sistema.xlsx');
-  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_LAYOUT', entity: 'manifest', entityId: req.params.id });
+  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_LAYOUT', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });
 
 exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
@@ -50,7 +50,7 @@ exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
   const rows = await loadShipments(req.params.id);
   const out = rows.map((r) => ({ Guia: r.data.guideId, Destinatario: r.data.consignee.name, Resultado: r.risk_color ?? '' }));
   send(res, workbook(out), 'Analisis_de_Riesgo.xlsx');
-  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id });
+  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });
 
 exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
@@ -63,5 +63,5 @@ exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
     client: { name: m.rows[0]?.client_name ?? '' },
   });
   send(res, workbook(reportRows), 'Reporte_General.xlsx');
-  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_REPORT', entity: 'manifest', entityId: req.params.id });
+  await recordAudit({ userId: req.user!.userId, action: 'EXPORT_REPORT', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });

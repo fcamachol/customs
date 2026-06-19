@@ -37,7 +37,7 @@ pedimentoRouter.post('/:id/pedimento', requireAuth, requireRole('admin', 'captur
     const prevalidation = prevalidatePedimento(ped);
     await query('UPDATE manifests SET pedimento=$1, prevalidation=$2 WHERE id=$3',
       [JSON.stringify(ped), JSON.stringify(prevalidation), req.params.id]);
-    await recordAudit({ userId: req.user!.userId, action: 'GENERATE_PEDIMENTO', entity: 'manifest', entityId: req.params.id, after: { numeroPedimento: ped.header.numeroPedimento, status: prevalidation.status } });
+    await recordAudit({ userId: req.user!.userId, action: 'GENERATE_PEDIMENTO', entity: 'manifest', entityId: req.params.id, after: { numeroPedimento: ped.header.numeroPedimento, status: prevalidation.status }, ip: req.ip });
     res.status(201).json({ pedimento: ped, prevalidation });
   } catch (err) {
     next(err);

@@ -15,6 +15,6 @@ manifestsRouter.post('/', requireAuth, async (req, res) => {
   for (const s of shipments) {
     await query(`INSERT INTO shipments (id, manifest_id, data) VALUES ($1,$2,$3)`, [s.id, manifestId, JSON.stringify(s)]);
   }
-  await recordAudit({ userId: req.user!.userId, action: 'UPLOAD_MANIFEST', entity: 'manifest', entityId: manifestId, after: { mawbReference, shipmentCount: shipments.length } });
+  await recordAudit({ userId: req.user!.userId, action: 'UPLOAD_MANIFEST', entity: 'manifest', entityId: manifestId, after: { mawbReference, shipmentCount: shipments.length }, ip: req.ip });
   res.status(201).json({ manifestId, shipmentCount: shipments.length, unmappedHeaders });
 });

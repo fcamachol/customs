@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
+import { verifyAuditChain } from '../services/auditVerify';
 
 export const auditRouter = Router();
 
@@ -34,4 +35,8 @@ auditRouter.get('/', requireAuth, requireRole('autoridad', 'admin'), async (req,
     params,
   );
   res.json(rows);
+});
+
+auditRouter.get('/verify', requireAuth, requireRole('autoridad', 'admin'), async (_req, res) => {
+  res.json(await verifyAuditChain());
 });

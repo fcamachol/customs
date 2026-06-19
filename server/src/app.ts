@@ -14,6 +14,7 @@ import { auditRouter } from './routes/audit';
 
 export function createApp(): Express {
   const app = express();
+  app.set('trust proxy', true);
   // Allow the browser client (different origin/port in dev) to call the API.
   // CORS_ORIGIN can be a comma-separated allowlist; defaults to permissive for dev.
   const origins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim());

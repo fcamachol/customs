@@ -8,3 +8,6 @@ coverage/
 !.env.example
 server/storage/
 server/.env
+
+# Browser QA session captures (not source)
+.playwright-mcp/

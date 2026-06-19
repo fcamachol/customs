@@ -6,8 +6,21 @@ export interface AuditEntry {
   before?: unknown; after?: unknown; ip?: string | null;
 }
 
+// Deterministic, whitespace-free JSON with recursively sorted object keys.
+// Arrays keep their order; primitives are emitted as-is. This makes the hashed
+// payload invariant to key order so the string computed on write matches the one
+// recomputed on verify after before/after round-trip through jsonb (which does
+// NOT preserve key insertion order).
+export function stableStringify(value: unknown): string {
+  if (value === null || value === undefined || typeof value !== 'object') return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
+
 export function canonicalPayload(e: AuditEntry, createdAtIso: string): string {
-  return JSON.stringify({
+  return stableStringify({
     userId: e.userId ?? null, action: e.action, entity: e.entity ?? null,
     entityId: e.entityId ?? null, before: e.before ?? null, after: e.after ?? null,
     ip: e.ip ?? null, createdAt: createdAtIso,
@@ -29,7 +42,7 @@ export async function recordAudit(e: AuditEntry): Promise<void> {
       `INSERT INTO audit_log (user_id, action, entity, entity_id, before, after, ip_address, prev_hash, hash, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [e.userId, e.action, e.entity ?? null, e.entityId ?? null,
-       e.before ? JSON.stringify(e.before) : null, e.after ? JSON.stringify(e.after) : null,
+       e.before != null ? JSON.stringify(e.before) : null, e.after != null ? JSON.stringify(e.after) : null,
        e.ip ?? null, prevHash, hash, createdAt]);
   });
 }

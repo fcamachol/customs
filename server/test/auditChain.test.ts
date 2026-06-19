@@ -15,6 +15,24 @@ describe('audit hash chain', () => {
     expect(rows[1].ip_address).toBe('10.0.0.2');
     expect((await verifyAuditChain()).ok).toBe(true);
   });
+  it('verifies intact for a multi-key after payload (order-invariant hash)', async () => {
+    await recordAudit({ userId: null, action: 'LOGIN', ip: '10.0.0.1' });
+    await recordAudit({
+      userId: null, action: 'RUN_RISK', entity: 'manifest', entityId: 'm1', ip: '10.0.0.2',
+      after: { analizados: 3, aprobados: 1, validarEnPrevio: 1, rojos: 1 },
+    });
+    expect((await verifyAuditChain()).ok).toBe(true);
+  });
+  it('treats leading NULL-hash rows as a pre-chain era and verifies the rest', async () => {
+    // seed a legacy row written before the hash-chain migration (no hash)
+    await query(
+      `INSERT INTO audit_log (user_id, action, entity, entity_id) VALUES (null, 'LEGACY', null, null)`);
+    await recordAudit({ userId: null, action: 'LOGIN', ip: '10.0.0.1' });
+    await recordAudit({ userId: null, action: 'RUN_RISK', entity: 'manifest', entityId: 'm1', ip: '10.0.0.2' });
+    const result = await verifyAuditChain();
+    expect(result.ok).toBe(true);
+    expect(result.chainStartsAtId).toBeDefined();
+  });
   it('detects tampering when a payload is mutated', async () => {
     await recordAudit({ userId: null, action: 'LOGIN', ip: '10.0.0.1' });
     // simulate storage-layer tampering by disabling the append-only trigger

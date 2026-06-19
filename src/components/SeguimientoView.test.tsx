@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import SeguimientoView from './SeguimientoView';
 
-vi.mock('../api', () => ({ apiGet: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../api', () => ({
+  apiGet: vi.fn(() => Promise.resolve([])),
+  apiPost: vi.fn(() => Promise.resolve({ ok: true })),
+}));
 
 describe('SeguimientoView', () => {
   it('renders the search field and pedimento capture labels', () => {

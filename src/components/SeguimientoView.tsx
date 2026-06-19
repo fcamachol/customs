@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { FormEvent, ChangeEvent, DragEvent } from 'react';
 import { Search, Upload } from 'lucide-react';
-import { apiGet } from '../api';
+import { apiGet, apiPost } from '../api';
 import { Card, Field, Input, Button } from './ui';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
@@ -100,11 +100,25 @@ export default function SeguimientoView() {
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleSave(e: FormEvent) {
+  async function handleSave(e: FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
     setSaveError(null);
-    setSaveSuccess(true);
+    setSaveSuccess(false);
+    try {
+      await apiPost(`/api/manifests/${selectedId}/import-data`, {
+        cveT1: form.claveT1,
+        patente: form.patente,
+        agenteAduanal: form.agenteAduanal,
+        tasaImportacion: form.tasaImportacion,
+        fechaEntrada: form.fechaEntrada,
+        claveAduanaEntrada: form.claveAduanaEntrada,
+        claveAduanaDespacho: form.claveAduanaDespacho,
+      });
+      setSaveSuccess(true);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Error al guardar.');
+    }
   }
 
   function handleDragOver(e: DragEvent) {
@@ -212,9 +226,6 @@ export default function SeguimientoView() {
       {/* Block 2 — Pedimento capture */}
       <Card className={`p-6 shadow-sm transition-opacity ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
         <h2 className="mb-4 text-sm font-bold text-slate-700 uppercase tracking-wide">Captura de pedimento</h2>
-        <p className="text-[11px] font-medium text-amber-700">
-          Vista previa — la persistencia se conectará al backend.
-        </p>
         <form onSubmit={handleSave} className="mt-4 space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Pedimento" htmlFor="pedimento">
@@ -332,7 +343,7 @@ export default function SeguimientoView() {
           )}
           {saveSuccess && (
             <p className="rounded-lg border border-navy-200 bg-navy-50 px-4 py-2 text-sm font-medium text-navy-700">
-              Datos capturados (vista previa).
+              Datos de importación guardados correctamente.
             </p>
           )}
 

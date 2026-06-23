@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { T1Provider } from './context/T1Context';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Sidebar } from './components/Sidebar';
 import { PageHeader } from './components/ui';
@@ -58,7 +57,7 @@ function AuthenticatedApp() {
 function AuthGate() {
   const { user } = useAuth();
   if (!user) return <LoginView />;
-  return (<T1Provider><AuthenticatedApp /></T1Provider>);
+  return <AuthenticatedApp />;
 }
 
 export default function App() {

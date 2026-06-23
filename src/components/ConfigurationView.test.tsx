@@ -2,8 +2,6 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import ConfigurationView from './ConfigurationView';
 import { AuthProvider } from '../context/AuthContext';
-import { T1Provider } from '../context/T1Context';
-
 // Mock api module — must be hoisted before any imports
 vi.mock('../api', () => ({
   apiGet: vi.fn(async (path: string) => {
@@ -28,9 +26,7 @@ beforeEach(() => {
 
 function Wrapper({ children }: { children: import('react').ReactNode }) {
   return (
-    <AuthProvider>
-      <T1Provider>{children}</T1Provider>
-    </AuthProvider>
+    <AuthProvider>{children}</AuthProvider>
   );
 }
 

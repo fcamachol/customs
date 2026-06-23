@@ -24,40 +24,39 @@ function ship(over: Partial<Shipment> = {}): Shipment {
 }
 
 describe('scoreManifest', () => {
-  it('consignatario does NOT fire at 2 same-name rows (threshold is >=3)', () => {
-    // Two rows, same consignee name → row count = 2, threshold >=3 → should NOT fire
-    const twoShips = [
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 1' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 2' } }),
-    ];
-    const twoOut = scoreManifest(twoShips, {});
-    expect(twoOut[0].incidences).not.toContain('Varios paquetes por consignatario');
-    expect(twoOut[0].color).toBe('verde');
+  it('a single clean shipment (valid RFC, normal qty/value) scores verde', () => {
+    const out = scoreManifest([ship()], {});
+    expect(out[0].band).toBe('verde');
+    expect(out[0].color).toBe('verde'); // back-compat alias
+    expect(out[0].reasons).toHaveLength(0);
+    expect(out[0].incidences).toHaveLength(0); // back-compat alias
   });
 
-  it('consignatario fires at 3 same-name rows (threshold >=3, row-based)', () => {
-    // Three rows, same consignee name → row count = 3 → SHOULD fire
-    const threeShips = [
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 1' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 2' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 3' } }),
-    ];
-    const threeOut = scoreManifest(threeShips, {});
-    expect(threeOut[0].incidences).toContain('Varios paquetes por consignatario');
-  });
-
-  it('direccion fires at 2 same-address rows (threshold >=2, row-based)', () => {
-    // Two rows sharing the same address → row count = 2 → SHOULD fire
+  it('smurfing signal fires when >= 3 distinct entities share one address', () => {
+    // Three different RFC-identified consignees at the same address → distinct=3 → fires
     const ships = [
       ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle X' } }),
-      ship({ consignee: { name: 'Bob', rfc: 'PERJ800101AA8', address: 'Calle X' } }),
+      ship({ consignee: { name: 'Bob', rfc: 'BOBC800202BB9', address: 'Calle X' } }),
+      ship({ consignee: { name: 'Car', rfc: 'CARC800303CC0', address: 'Calle X' } }),
     ];
     const out = scoreManifest(ships, {});
-    expect(out[0].incidences).toContain('Misma dirección de entrega');
+    // all three rows share the address → addressDistinctConsignees=3 ≥ threshold=3
+    expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Misma dirección de entrega')]));
   });
 
-  it('severity override: prohibidos alone forces rojo even when score < 2', () => {
-    // Only fired signal is prohibidos (score=1, normally verde) — must be rojo
+  it('smurfing signal does NOT fire for only 2 distinct entities at one address', () => {
+    const ships = [
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle X' } }),
+      ship({ consignee: { name: 'Bob', rfc: 'BOBC800202BB9', address: 'Calle X' } }),
+    ];
+    const out = scoreManifest(ships, {});
+    // distinct=2 < threshold=3 → no fire
+    expect(out[0].incidences).not.toEqual(expect.arrayContaining([expect.stringContaining('Misma dirección de entrega')]));
+    expect(out[0].band).toBe('verde');
+  });
+
+  it('severity override: prohibidos alone forces rojo regardless of weighted score', () => {
+    // Only fired signal is prohibidos → forcesBand='rojo' regardless of numeric score
     const s = ship({ description: 'armas de fuego' });
     const out = scoreManifest(
       [s],
@@ -65,8 +64,10 @@ describe('scoreManifest', () => {
       { prohibitedKeywords: ['armas'] },
     );
     expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Artículos prohibidos')]));
-    expect(out[0].score).toBe(1); // score is still 1 (count-based)
-    expect(out[0].color).toBe('rojo'); // but color is forced rojo by severity override
+    expect(out[0].band).toBe('rojo');
+    expect(out[0].color).toBe('rojo'); // back-compat alias
+    // score is 0-100 weighted (prohibidos = 60/218 * 100 ≈ 28)
+    expect(out[0].score).toBeGreaterThan(0);
   });
 
   it('severity override: pirateria alone forces rojo', () => {
@@ -77,22 +78,38 @@ describe('scoreManifest', () => {
       { piracyBrands: ['gucci'] },
     );
     expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Piratería')]));
-    expect(out[0].color).toBe('rojo');
+    expect(out[0].band).toBe('rojo');
+    expect(out[0].color).toBe('rojo'); // back-compat alias
   });
 
-  it('score 2-3 with no critical signal -> amarillo', () => {
-    // Two flags: invalid RFC (short) + value too high — no prohibidos/pirateria
+  it('invalid RFC + value too high produces rojo in the weighted engine', () => {
+    // id signal (25 pts) + monto signal (20 pts) = 45/218*100 ≈ 20.6 → ≥ rojo threshold (17)
     const s = ship({ customsValueUsd: 5000, consignee: { name: 'Bob', rfc: 'BAD', address: 'Calle 9' } });
     const out = scoreManifest([s], {});
-    expect(out[0].score).toBeGreaterThanOrEqual(2);
-    expect(out[0].color).toBe('amarillo');
-    // Confirm no critical signals were fired
-    expect(out[0].incidences).not.toEqual(expect.arrayContaining([expect.stringContaining('Artículos prohibidos')]));
-    expect(out[0].incidences).not.toEqual(expect.arrayContaining([expect.stringContaining('Piratería')]));
+    expect(out[0].score).toBeGreaterThan(0);
+    expect(out[0].band).toBe('rojo');
+    expect(out[0].color).toBe('rojo'); // back-compat alias
+    // Confirm no critical (forcesBand) signals were fired
+    expect(out[0].reasons.every((r) => !r.forcesBand)).toBe(true);
   });
 
-  it('ruleset_version is set on every scored shipment', () => {
-    const out = scoreManifest([ship({})], {});
+  it('missing description or value produces gris (data-sufficiency)', () => {
+    const noDesc = ship({ description: '' });
+    const out = scoreManifest([noDesc], {});
+    expect(out[0].band).toBe('gris');
+    expect(out[0].color).toBe('gris'); // back-compat alias
+  });
+
+  it('ruleset_version and ruleset_hash are set on every scored shipment', () => {
+    const out = scoreManifest([ship()], {});
     expect(out[0].ruleset_version).toBe('2026-06');
+    expect(out[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('reasons array and incidences back-compat alias are populated for flagged rows', () => {
+    const s = ship({ description: 'armas ilegales' });
+    const out = scoreManifest([s], {}, { prohibitedKeywords: ['armas'] });
+    expect(out[0].reasons.length).toBeGreaterThan(0);
+    expect(out[0].incidences).toEqual(out[0].reasons.map((r) => r.detail));
   });
 });

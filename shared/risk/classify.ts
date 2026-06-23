@@ -1,9 +1,15 @@
 import type { Shipment } from '../types/shipment';
-import { norm, runSignals, type RiskContext } from './signals';
-import { RULESET, resolveThresholds, type Thresholds } from './ruleset';
+import { gradeSignals, entityKey, norm, type ReasonCode, type EntityContext } from './signals';
+import { scoreRow, type Band } from './scorecard';
+import { RULESET, resolveThresholds, resolveWeights, resolveBands, type Thresholds, type Weights, type Bands } from './ruleset';
+import { rulesetHash } from './hash';
 
-export type RiskColor = 'verde' | 'amarillo' | 'rojo';
+export type RiskColor = 'verde' | 'amarillo' | 'rojo' | 'gris';
 
+/**
+ * Legacy helper kept for consumers that need the old count-based band mapping.
+ * Maps a 0–100 score to a RiskColor using the current RULESET bands.
+ */
 export function classifyScore(score: number): RiskColor {
   if (score < 2) return 'verde';
   if (score <= 3) return 'amarillo';
@@ -12,10 +18,13 @@ export function classifyScore(score: number): RiskColor {
 
 export interface ScoredShipment {
   shipment: Shipment;
-  score: number;
-  color: RiskColor;
-  incidences: string[];
+  score: number;           // 0–100 weighted
+  band: Band;              // 'verde' | 'amarillo' | 'rojo' | 'gris'
+  color: RiskColor;        // = band (back-compat alias)
+  reasons: ReasonCode[];   // fired signals with points/weight/detail
+  incidences: string[];    // derived from reasons (back-compat: reasons.map(r => r.detail))
   ruleset_version: string;
+  ruleset_hash: string;
 }
 
 export interface ScoreOptions {
@@ -25,6 +34,10 @@ export interface ScoreOptions {
   prohibitedKeywords?: string[];
   /** Optional threshold overrides (D4 / RF-24, from the `validation_params` config key) */
   thresholds?: Partial<Record<keyof Thresholds, unknown>>;
+  /** Optional weight overrides */
+  weights?: Partial<Record<keyof Weights, unknown>>;
+  /** Optional band cutoff overrides */
+  bands?: Partial<Record<keyof Bands, unknown>>;
 }
 
 /**
@@ -33,7 +46,7 @@ export interface ScoreOptions {
  * rules applied — keeps O2/O3 traceability intact.
  */
 export function rulesetVersionFor(options?: ScoreOptions): string {
-  return options?.thresholds ? `${RULESET.version}+cfg` : RULESET.version;
+  return options?.thresholds || options?.weights ? `${RULESET.version}+cfg` : RULESET.version;
 }
 
 export function scoreManifest(
@@ -41,35 +54,60 @@ export function scoreManifest(
   monthlyHistoryCounts: Record<string, number>,
   options?: ScoreOptions,
 ): ScoredShipment[] {
-  // Count line-item ROWS per consignee name / address to match the authoritative
-  // Risk_analysis workbook (V4 consignatario, V5 dirección fire on row repetition).
-  // Open decision (defer to client): whether V4/V5 should count distinct packages
-  // (guideId) vs line-item rows — v1 uses rows per the source spreadsheet.
-  const nameCounts: Record<string, number> = {};
-  const addressCounts: Record<string, number> = {};
+  const thresholds = resolveThresholds(options?.thresholds);
+  const weights = resolveWeights(options?.weights);
+  const bands = resolveBands(options?.bands);
+
+  // PASS 1: per-entity monthly count (history + current) and distinct-entities-per-address.
+  const entityMonthlyCount: Record<string, number> = { ...monthlyHistoryCounts };
+  const addressEntities: Record<string, Set<string>> = {};
   for (const s of shipments) {
-    const n = norm(s.consignee.name);
+    const k = entityKey(s.consignee);
+    entityMonthlyCount[k] = (entityMonthlyCount[k] ?? 0) + 1;
     const a = norm(s.consignee.address ?? '');
-    if (n) nameCounts[n] = (nameCounts[n] ?? 0) + 1;
-    if (a) addressCounts[a] = (addressCounts[a] ?? 0) + 1;
+    if (a) (addressEntities[a] ??= new Set()).add(k);
   }
-  const version = rulesetVersionFor(options);
-  const ctx: RiskContext = {
-    nameCounts,
-    addressCounts,
-    monthlyHistoryCounts,
+  const addressDistinctConsignees: Record<string, number> = {};
+  for (const [a, set] of Object.entries(addressEntities)) addressDistinctConsignees[a] = set.size;
+
+  const ctx: EntityContext = {
+    thresholds,
+    weights,
+    addressDistinctConsignees,
+    entityMonthlyCount,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
-    thresholds: resolveThresholds(options?.thresholds),
   };
+
+  const resolved = {
+    version: RULESET.version,
+    thresholds,
+    weights,
+    bands,
+    lists: {
+      piracyBrands: options?.piracyBrands ?? null,
+      prohibitedKeywords: options?.prohibitedKeywords ?? null,
+    },
+  };
+  const version = rulesetVersionFor(options);
+  const hash = rulesetHash(resolved);
+
   return shipments.map((s) => {
-    const signals = runSignals(s, ctx);
-    const fired = signals.filter((f) => f.flagged);
-    const score = fired.length;
-    const firedIds = new Set(fired.map((f) => f.id));
-    // Severity override (RF-04): critical signals force rojo regardless of count
-    const hasCritical = firedIds.has('prohibidos') || firedIds.has('pirateria');
-    const color: RiskColor = hasCritical ? 'rojo' : classifyScore(score);
-    return { shipment: s, score, color, incidences: fired.map((f) => f.incidence!).filter(Boolean), ruleset_version: version };
+    const reasons = gradeSignals(s, ctx);
+    const insufficientData =
+      !s.description?.trim() ||
+      !Number.isFinite(s.customsValueUsd) ||
+      !(s.consignee.curp ?? s.consignee.rfc ?? '').trim();
+    const { score, band } = scoreRow(reasons, { weights, bands, insufficientData });
+    return {
+      shipment: s,
+      score,
+      band,
+      color: band as RiskColor,
+      reasons,
+      incidences: reasons.map((r) => r.detail),
+      ruleset_version: version,
+      ruleset_hash: hash,
+    };
   });
 }

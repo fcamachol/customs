@@ -15,13 +15,12 @@ describe('distribution', () => {
   it('clean shipments are verde; multi-flag shipments are rojo', () => {
     const clean = Array.from({ length: 10 }, (_, i) => ship(i, {}));
     const out = scoreManifest(clean, {});
-    expect(out.every((s) => s.color === 'verde')).toBe(true);
+    expect(out.every((s) => s.band === 'verde')).toBe(true);
 
     const dirty = scoreManifest(
       [ship(99, { quantity: 11, customsValueUsd: 5000, description: 'maquillaje Gucci', consignee: { name: 'x', rfc: 'BAD' } })],
       { x: 4 },
     );
-    expect(dirty[0].color).toBe('rojo');
-    expect(dirty[0].score).toBeGreaterThanOrEqual(4);
+    expect(dirty[0].band).toBe('rojo');
   });
 });

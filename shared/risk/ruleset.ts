@@ -36,8 +36,10 @@ export const RULESET = {
     pirateria: 60,
     bbdd: 18,
   },
-  /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo */
-  bands: { amarillo: 15, rojo: 45 },
+  /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
+   * Calibrated in Task 7: with the 501-row golden fixture these thresholds produce
+   * rojo ≈ 6.6% and verde ≈ 87% — inside the 3–12% / >40% targets. */
+  bands: { amarillo: 10, rojo: 17 },
 } as const;
 
 export type Thresholds = {

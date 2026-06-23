@@ -58,14 +58,23 @@ export function scoreManifest(
   const weights = resolveWeights(options?.weights);
   const bands = resolveBands(options?.bands);
 
-  // PASS 1: per-entity monthly count (history + current) and distinct-entities-per-address.
-  const entityMonthlyCount: Record<string, number> = { ...monthlyHistoryCounts };
+  // PASS 1: per-name monthly count (history + current) and distinct-entities-per-address.
+  //
+  // monthlyNameCount is keyed by norm(consignee.name) to match the name-keyed rows
+  // stored in monthly_history (server/src/services/monthlyHistory.ts). Using entityKey
+  // here would cause a key-space mismatch: the DB history would be seeded under
+  // "juan perez" but the lookup in gradeSignals would use "PERJ800101AA8", so cross-
+  // manifest bbdd recurrence would never fire for RFC/CURP-bearing consignees.
+  const monthlyNameCount: Record<string, number> = { ...monthlyHistoryCounts };
   const addressEntities: Record<string, Set<string>> = {};
   for (const s of shipments) {
-    const k = entityKey(s.consignee);
-    entityMonthlyCount[k] = (entityMonthlyCount[k] ?? 0) + 1;
+    const nameKey = norm(s.consignee.name);
+    monthlyNameCount[nameKey] = (monthlyNameCount[nameKey] ?? 0) + 1;
+    // addressEntities tracks DISTINCT entity identities per address (smurfing check).
+    // entityKey remains correct here: RFC/CURP distinguishes real distinct individuals.
+    const ek = entityKey(s.consignee);
     const a = norm(s.consignee.address ?? '');
-    if (a) (addressEntities[a] ??= new Set()).add(k);
+    if (a) (addressEntities[a] ??= new Set()).add(ek);
   }
   const addressDistinctConsignees: Record<string, number> = {};
   for (const [a, set] of Object.entries(addressEntities)) addressDistinctConsignees[a] = set.size;
@@ -74,7 +83,7 @@ export function scoreManifest(
     thresholds,
     weights,
     addressDistinctConsignees,
-    entityMonthlyCount,
+    monthlyNameCount,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
   };

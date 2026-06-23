@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runSignals, type RiskContext, gradeSignals, entityKey, type EntityContext } from './signals';
+import { runSignals, type RiskContext, gradeSignals, type EntityContext } from './signals';
 import type { Shipment } from '../types/shipment';
 import { RULESET } from './ruleset';
 
@@ -75,7 +75,7 @@ function gradeShip(over: Partial<Shipment> & { name: string; rfc?: string; curp?
 }
 const ctx = (over: Partial<EntityContext> = {}): EntityContext => ({
   thresholds: RULESET.thresholds, weights: RULESET.weights,
-  addressDistinctConsignees: {}, entityMonthlyCount: {}, ...over,
+  addressDistinctConsignees: {}, monthlyNameCount: {}, ...over,
 });
 
 describe('gradeSignals', () => {
@@ -91,11 +91,13 @@ describe('gradeSignals', () => {
     expect(p.forcesBand).toBe('rojo');
   });
 
-  it('Ficha-124 bbdd fires only when entity monthly count > 3, graded by excess', () => {
-    const k = entityKey({ rfc: 'PERJ800101AA8', name: 'A' });
-    const none = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ entityMonthlyCount: { [k]: 3 } }));
+  it('Ficha-124 bbdd fires only when monthly name count > 3, graded by excess', () => {
+    // monthlyNameCount is keyed by norm(consignee.name) — NOT by entityKey — so that
+    // it aligns with the name-keyed monthly_history loaded from the DB.
+    // norm('A') === 'a'
+    const none = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ monthlyNameCount: { a: 3 } }));
     expect(none.find((c) => c.signalId === 'bbdd')).toBeUndefined();
-    const fires = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ entityMonthlyCount: { [k]: 6 } }));
+    const fires = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ monthlyNameCount: { a: 6 } }));
     expect(fires.find((c) => c.signalId === 'bbdd')!.points).toBeGreaterThan(0);
   });
 

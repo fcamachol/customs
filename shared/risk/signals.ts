@@ -70,8 +70,13 @@ export interface EntityContext {
   weights: Weights;
   /** Distinct consignee count per normalized address (smurfing indicator). */
   addressDistinctConsignees: Record<string, number>;
-  /** Monthly operation count per entity key (history + current) for Ficha-124. */
-  entityMonthlyCount: Record<string, number>;
+  /**
+   * Monthly operation count per **normalized consignee name** (history + current)
+   * for Ficha-124. Keyed by `norm(name)` to match the name-keyed monthly_history
+   * DB rows. Do NOT use entityKey here — RFC/CURP keys would never match the
+   * name-keyed history loaded from the server.
+   */
+  monthlyNameCount: Record<string, number>;
   piracyBrands?: string[];
   prohibitedKeywords?: string[];
 }
@@ -150,8 +155,9 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
     add('pirateria', 1, `Piratería (${brand})`, { matched: brand }, 'rojo');
   }
 
-  // bbdd (Ficha-124): fires only when entityMonthlyCount > 3, graded by excess over 3
-  const mc = ctx.entityMonthlyCount[entityKey(s.consignee)] ?? 0;
+  // bbdd (Ficha-124): fires only when monthlyNameCount > 3, graded by excess over 3.
+  // Keyed by normalized consignee name (consistent with name-keyed DB history).
+  const mc = ctx.monthlyNameCount[norm(s.consignee.name)] ?? 0;
   if (mc > 3) {
     add('bbdd', (mc - 3) / 3, 'Varias importaciones en el mes', { monthlyCount: mc });
   }

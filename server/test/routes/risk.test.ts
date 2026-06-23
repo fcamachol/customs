@@ -124,6 +124,37 @@ describe('POST /api/manifests/:id/risk', () => {
     }
   });
 
+  it('bbdd regression: cross-manifest monthly recurrence fires for RFC-bearing consignee (Ficha-124)', async () => {
+    // RED evidence (before fix): the server stored history keyed by norm(name) but
+    // classify.ts seeded entityMonthlyCount by entityKey (RFC), so lookup never matched.
+    // A consignee with RFC 'PERJ800101AA8' and 3 prior ops + 1 current → total 4 → bbdd
+    // MUST fire. This test would have FAILED before the name-keying fix.
+
+    // Seed a prior manifest's history: "recurrente" seen 3× in same period
+    const priorManifest = await query(`INSERT INTO manifests (mawb_reference) VALUES ('369-prior') RETURNING id`);
+    const priorId = priorManifest.rows[0].id as string;
+    await query(
+      `INSERT INTO monthly_history (consignee_name_norm, period, manifest_id, seen_count)
+       VALUES ('recurrente', '2025-06', $1, 3)`,
+      [priorId],
+    );
+
+    // Current manifest has 1 shipment from the same consignee (name normalizes to 'recurrente')
+    await addShipment('Recurrente', 100, 'g-bbdd');
+
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/risk`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ period: '2025-06' });
+
+    expect(res.status).toBe(200);
+    const row = res.body.rows.find((r: { consignee: string }) => r.consignee === 'Recurrente');
+    expect(row).toBeDefined();
+    // Must carry the bbdd incidence or a non-verde band attributable to bbdd
+    const hasRecurrence = (row.motivo as string).includes('Varias importaciones en el mes');
+    expect(hasRecurrence).toBe(true);
+  });
+
   it('PK-fix regression: risk_color is persisted to the correct table row when data.id != table PK', async () => {
     // Insert a shipment where the table row PK differs from the id field inside the JSON data.
     // Before the fix, the UPDATE used sc.shipment.id (data JSON field) in WHERE id=...,

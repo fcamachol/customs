@@ -23,7 +23,21 @@ export const RULESET = {
     consignatario: 3,
     direccion: 2,
     importacionesMes: 4,
+    /** Distinct consignees per address (smurfing signal) */
+    addressDistinctConsignees: 3,
   },
+  /** Per-signal point weights; calibrated in Task 7 so the 501-row fixture lands rojo ~5-10% */
+  weights: {
+    id: 25,
+    cantidad: 15,
+    monto: 20,
+    direcciones: 20,
+    prohibidos: 60,
+    pirateria: 60,
+    bbdd: 18,
+  },
+  /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo */
+  bands: { amarillo: 15, rojo: 45 },
 } as const;
 
 export type Thresholds = {
@@ -33,6 +47,7 @@ export type Thresholds = {
   consignatario: number;
   direccion: number;
   importacionesMes: number;
+  addressDistinctConsignees: number;
 };
 
 /**
@@ -48,4 +63,55 @@ export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, u
     if (typeof v === 'number' && Number.isFinite(v) && v >= 0) base[key] = v;
   }
   return base;
+}
+
+/**
+ * Per-signal point weights.
+ * Note: `consignatarios` is NOT in Weights — it is subsumed into the `bbdd` (Ficha-124)
+ * recurrence signal in Task 5. `direcciones` is the smurfing signal (distinct consignees
+ * per address).
+ */
+export type Weights = Record<
+  'id' | 'cantidad' | 'monto' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd',
+  number
+>;
+
+/** Score band cutoffs in the 0–100 range. */
+export type Bands = { amarillo: number; rojo: number };
+
+/**
+ * Merge admin-configurable weight overrides over the built-in defaults.
+ * Negative and non-finite values are rejected (config floors) so a misconfigured
+ * catalog can never disable a signal.
+ */
+export function resolveWeights(overrides?: Partial<Record<keyof Weights, unknown>>): Weights {
+  const base: Weights = { ...RULESET.weights };
+  if (!overrides) return base;
+  for (const k of Object.keys(base) as (keyof Weights)[]) {
+    const v = overrides[k];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) base[k] = v;
+  }
+  return base;
+}
+
+/**
+ * Merge admin-configurable band overrides over the built-in defaults.
+ * Values outside [0, 100] are rejected, and inverted bands (rojo <= amarillo)
+ * cause a full fallback to the defaults.
+ */
+export function resolveBands(overrides?: Partial<Record<keyof Bands, unknown>>): Bands {
+  const base: Bands = { ...RULESET.bands };
+  if (!overrides) return base;
+  const next: Bands = { ...base };
+  for (const k of ['amarillo', 'rojo'] as (keyof Bands)[]) {
+    const v = overrides[k];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) next[k] = v;
+  }
+  if (next.rojo <= next.amarillo) return base; // inverted -> reject all
+  return next;
+}
+
+/** Returns the maximum possible raw score for the given weights (sum of all values). */
+export function maxPoints(w: Weights): number {
+  return Object.values(w).reduce((a, b) => a + b, 0);
 }

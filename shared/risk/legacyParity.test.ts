@@ -32,7 +32,38 @@ describe('legacy parity (reproduces Risk analysis 17 feb 25.xlsx)', () => {
       ship({ name: 'Solo', rfc: 'PERJ800101AA8', address: 'addr-c' }),
     ], new Set());
     expect(rows[0].incidences).toContain('Varios paquetes por consignatario');
+    expect(rows[1].incidences).toContain('Varios paquetes por consignatario');
     expect(rows[2].incidences).not.toContain('Varios paquetes por consignatario');
+  });
+
+  it('address signal fires when two rows share the same address', () => {
+    const rows = scoreLegacyParity([
+      ship({ name: 'Alice', rfc: 'PERJ800101AA8', address: 'Calle Falsa 123' }),
+      ship({ name: 'Bob',   rfc: 'PERJ800101AA8', address: 'Calle Falsa 123' }),
+      ship({ name: 'Carol', rfc: 'PERJ800101AA8', address: 'Avenida Real 456' }),
+    ], new Set());
+    expect(rows[0].incidences).toContain('Misma dirección de entrega');
+    expect(rows[1].incidences).toContain('Misma dirección de entrega');
+    expect(rows[2].incidences).not.toContain('Misma dirección de entrega');
+  });
+
+  it('piracy brand fires for known brand, not for benign description', () => {
+    const rows = scoreLegacyParity([
+      ship({ name: 'A', rfc: 'PERJ800101AA8', address: 'addr-a', description: 'Nike shoes' }),
+      ship({ name: 'B', rfc: 'PERJ800101AA8', address: 'addr-b', description: 'handmade sandals' }),
+    ], new Set());
+    expect(rows[0].incidences).toContain('Piratería');
+    expect(rows[1].incidences).not.toContain('Piratería');
+  });
+
+  it('Amarillo band: exactly 2 or 3 signals', () => {
+    // qty>10 (+1) and bad RFC (+1) → suma=2 → Amarillo
+    const rows = scoreLegacyParity([
+      ship({ name: 'Solo', rfc: 'BAD', address: 'unique-addr', quantity: 11, customsValueUsd: 100 }),
+    ], new Set());
+    expect(rows[0].suma).toBeGreaterThanOrEqual(2);
+    expect(rows[0].suma).toBeLessThanOrEqual(3);
+    expect(rows[0].resultado).toBe('Amarillo');
   });
 
   it('bands: <2 Verde, 2-3 Amarillo, >=4 Rojo', () => {

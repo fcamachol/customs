@@ -50,3 +50,15 @@ describe('POST /api/manifests (multipart staging)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /api/manifests/:id/staging', () => {
+  it('returns staging rows with statuses and redacts PII', async () => {
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-2').attach('file', xlsxBuffer([HEADER, GOOD, BAD]), 'm.xlsx');
+    const res = await request(app).get(`/api/manifests/${up.body.manifestId}/staging`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.rows.length).toBe(2);
+    expect(res.body.rows.map((r: any) => r.status).sort()).toEqual(['error', 'warning']);
+    expect(JSON.stringify(res.body)).not.toContain('AERA790828HBSRBR04'); // raw PII not leaked
+  });
+});

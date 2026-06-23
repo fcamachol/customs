@@ -54,6 +54,18 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
   });
 });
 
+// GET /api/manifests/:id/staging — return staging rows + statuses (PII-redacted)
+manifestsRouter.get('/:id/staging', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
+  const { rows } = await query<{ row_index: number; status: string; errors: unknown; warnings: unknown }>(
+    'SELECT row_index, status, errors, warnings FROM manifest_staging_rows WHERE manifest_id=$1 ORDER BY row_index', [req.params.id]);
+  const counts = { total: rows.length, valid: 0, warning: 0, error: 0 };
+  for (const r of rows) (counts as Record<string, number>)[r.status]++;
+  res.json({
+    rows: rows.map((r) => ({ rowIndex: r.row_index, status: r.status, errors: r.errors, warnings: r.warnings })),
+    counts,
+  });
+});
+
 // POST /api/manifests/:id/client — associate a client to a manifest
 manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
   const { id } = req.params;

@@ -122,7 +122,18 @@ catalogsRouter.delete(
 
 // ─── Config endpoints ───────────────────────────────────────────────────────
 
-const ALLOWED_CONFIG_KEYS = new Set(['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties']);
+const ALLOWED_CONFIG_KEYS = new Set([
+  'prohibited',
+  'piracy_brands',
+  'branding',
+  'validation_params',
+  'denied_parties',
+  'tasa_vigencias',        // §10 — parametrizable tasa-global vigencias (super_admin only to edit)
+  'pedimento_scan_policy', // RF-08/RF-10 — PDF/QR scan sensitivity policy
+]);
+
+// §10: editing tasa-global vigencias is restricted to super_admin (everything else is admin).
+const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias']);
 
 // GET /api/catalogs/config/:key — any authenticated role
 catalogsRouter.get('/config/:key', requireAuth, async (req, res) => {
@@ -144,6 +155,11 @@ catalogsRouter.put(
     const { key } = req.params;
     if (!ALLOWED_CONFIG_KEYS.has(key)) {
       res.status(400).json({ error: 'Unknown config key' });
+      return;
+    }
+    // §10: tasa-global vigencias may only be edited by super_admin.
+    if (SUPER_ADMIN_CONFIG_KEYS.has(key) && req.user!.role !== 'super_admin') {
+      res.status(403).json({ error: 'Solo el Super Admin puede modificar las vigencias de tasa global' });
       return;
     }
     const value = req.body?.value;
@@ -169,3 +185,58 @@ catalogsRouter.put(
     res.json(rows[0]);
   },
 );
+
+// ─── Validated-RFCs catalog (D3) ────────────────────────────────────────────
+
+// GET /api/catalogs/validated-rfcs — any authenticated role
+catalogsRouter.get('/validated-rfcs', requireAuth, async (_req, res) => {
+  const { rows } = await query(
+    'SELECT id, id_ref, rfc, curp, name, created_by, created_at FROM validated_rfcs ORDER BY id_ref',
+  );
+  res.json(rows);
+});
+
+// POST /api/catalogs/validated-rfcs — admin (super_admin via superset)
+catalogsRouter.post('/validated-rfcs', requireAuth, requireRole('admin'), async (req, res) => {
+  const { id_ref, rfc, curp, name } = req.body ?? {};
+  if (!id_ref) {
+    res.status(400).json({ error: 'id_ref is required' });
+    return;
+  }
+  const { rows } = await query(
+    `INSERT INTO validated_rfcs (id_ref, rfc, curp, name, created_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id_ref) DO UPDATE SET rfc=$2, curp=$3, name=$4
+     RETURNING id, id_ref, rfc, curp, name, created_by, created_at`,
+    [id_ref, rfc ?? null, curp ?? null, name ?? null, req.user!.userId],
+  );
+  await recordAudit({
+    userId: req.user!.userId,
+    action: 'UPSERT_VALIDATED_RFC',
+    entity: 'validated_rfc',
+    entityId: rows[0].id,
+    after: rows[0],
+    ip: req.ip,
+  });
+  res.status(201).json(rows[0]);
+});
+
+// DELETE /api/catalogs/validated-rfcs/:id — admin only
+catalogsRouter.delete('/validated-rfcs/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  const before = await query('SELECT * FROM validated_rfcs WHERE id=$1', [id]);
+  if (before.rows.length === 0) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  await query('DELETE FROM validated_rfcs WHERE id=$1', [id]);
+  await recordAudit({
+    userId: req.user!.userId,
+    action: 'DELETE_VALIDATED_RFC',
+    entity: 'validated_rfc',
+    entityId: id,
+    before: before.rows[0],
+    ip: req.ip,
+  });
+  res.json({ ok: true });
+});

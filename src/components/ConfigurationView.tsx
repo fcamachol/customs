@@ -1,51 +1,39 @@
 /**
- * ConfigurationView — T1 Simulator & Registry Configuration + DB-driven Catalogs
+ * ConfigurationView — DB-driven catalogs, branding, validation params,
+ * validated RFCs, and global-rate vigencias (RF-24 / D3 / D4 / §10).
  *
- * Features:
- *   - 78/LA Registry Simulator (ANAM authorization requirements)
- *   - Tax rate configuration (33.5% / 19% / historical)
- *   - SAT exchange rate
- *   - De minimis thresholds
- *   - RRNA sensitivity modes
- *   - Manual shipment injection
- *   - DB-driven catalog editing (prohibited keywords, piracy brands, branding)
+ * Navigation lives in the global sidebar (collapsible "Configuración" parent); this
+ * component renders the single domain selected there, showing its complete view:
+ *   · cfg_motor:     Parámetros de validación + Listas de exclusión (V6/V7)
+ *   · cfg_clientes:  Clientes (master data)
+ *   · cfg_rfcs:      RFCs validados
+ *   · cfg_empresa:   Identidad / branding
+ *   · cfg_tasa:      Tasa global (vigencias) — Super Admin only
+ * Mutations require an Administrador role; Tasa global is reserved for the Super
+ * Admin. Non-admins see read-only fields and a notice card.
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
-  Settings,
-  Plus,
-  RefreshCw,
-  Database,
-  AlertOctagon,
-  Check,
-  Lock,
-  ShieldCheck,
-  DollarSign,
-  Globe,
-  Sliders,
-  Info,
-  TrendingUp,
   Tag,
+  AlertOctagon,
   Building2,
+  Sliders,
+  ShieldCheck,
+  ScrollText,
   Save,
+  Plus,
+  Trash2,
+  Lock,
 } from 'lucide-react';
-import { useT1 } from '../context/T1Context';
 import { useAuth } from '../context/AuthContext';
-import { T1Shipment } from '../types/t1';
-import { assignGenericHsCode } from '../constants/genericHscodes';
-import { detectRRNA } from '../engine/rrnaDetector';
-import { generateShipmentId } from '../utils/formatters';
-import { apiGet, apiPut } from '../api';
+import { apiGet, apiPut, apiPost, apiDelete } from '../api';
+import { Card, Button, Field, Input, Textarea } from './ui';
+import type { ConfigSection } from '../nav';
 
 interface Props {
+  domain: ConfigSection;
   onToast: (msg: string) => void;
-}
-
-interface BrandingConfig {
-  logoUrl?: string;
-  rfc?: string;
-  companyName?: string;
 }
 
 interface ConfigResponse<T> {
@@ -53,554 +41,828 @@ interface ConfigResponse<T> {
   value: T | null;
 }
 
-export default function ConfigurationView({ onToast }: Props) {
-  const { state, dispatch } = useT1();
+interface BrandingConfig {
+  companyName?: string;
+  rfc?: string;
+  logoUrl?: string;
+}
+
+interface ClientPlatform {
+  commercialName?: string;
+  countryOfOrigin?: string;
+  legalName?: string;
+  email?: string;
+}
+
+interface Client {
+  id: string;
+  name: string;
+  tax_id?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  platform?: ClientPlatform;
+}
+
+interface ValidationParams {
+  cantidad: number;
+  montoMin: number;
+  montoMax: number;
+  consignatario: number;
+  direccion: number;
+  importacionesMes: number;
+}
+
+interface ValidatedRfc {
+  id: string;
+  id_ref: string;
+  rfc?: string;
+  curp?: string;
+  name?: string;
+}
+
+type OriginType = 'GENERAL' | 'TMEC';
+interface TasaVigencia {
+  startDate: string;
+  originType: OriginType;
+  rate: number;
+}
+
+const DEFAULT_PARAMS: ValidationParams = {
+  cantidad: 10,
+  montoMin: 1,
+  montoMax: 2500,
+  consignatario: 3,
+  direccion: 2,
+  importacionesMes: 4,
+};
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : 'Error inesperado';
+}
+
+export default function ConfigurationView({ domain, onToast }: Props) {
   const { user } = useAuth();
-  const { tax } = state;
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const isSuperAdmin = user?.role === 'super_admin';
 
-  const isAdmin = user?.role === 'admin';
+  const [saving, setSaving] = useState(false);
 
-  const [exchangeRate, setExchangeRate] = useState(tax.exchangeRate.toString());
-  const [rrnaMode, setRrnaMode] = useState<'STRICT' | 'NORMAL' | 'RELAXED'>('NORMAL');
-
-  // Manual injection form
-  const [guideId, setGuideId] = useState('MX-T1-001');
-  const [consignee, setConsignee] = useState('Juan Pérez');
-  const [rfc, setRfc] = useState('PEGJ800101ABC');
-  const [desc, setDesc] = useState('Smartphone case');
-  const [value, setValue] = useState('45');
-  const [origin, setOrigin] = useState('US');
-  const [qty, setQty] = useState('1');
-  const [unit, setUnit] = useState('PCE');
-
-  // DB-driven catalog state
+  // Catálogos
   const [prohibitedText, setProhibitedText] = useState('');
   const [brandsText, setBrandsText] = useState('');
-  const [brandingLogoUrl, setBrandingLogoUrl] = useState('');
-  const [brandingRfc, setBrandingRfc] = useState('');
-  const [brandingCompanyName, setBrandingCompanyName] = useState('');
-  const [configLoading, setConfigLoading] = useState(true);
-  const [configSaving, setConfigSaving] = useState(false);
+  const [clients, setClients] = useState<Client[]>([]);
 
-  // Load config on mount
+  // Branding
+  const [companyName, setCompanyName] = useState('');
+  const [rfc, setRfc] = useState('');
+  const [logoUrl, setLogoUrl] = useState('');
+
+  // Parámetros de validación
+  const [params, setParams] = useState<ValidationParams>(DEFAULT_PARAMS);
+
+  // RFCs validados
+  const [rfcs, setRfcs] = useState<ValidatedRfc[]>([]);
+
+  // Tasa global
+  const [vigencias, setVigencias] = useState<TasaVigencia[]>([]);
+
+  // Load all config on mount; each fetch is independent and non-fatal.
   useEffect(() => {
-    async function loadConfig() {
-      setConfigLoading(true);
-      try {
-        const [prohibRes, brandsRes, brandingRes] = await Promise.all([
-          apiGet<ConfigResponse<string[]>>('/api/catalogs/config/prohibited'),
-          apiGet<ConfigResponse<string[]>>('/api/catalogs/config/piracy_brands'),
-          apiGet<ConfigResponse<BrandingConfig>>('/api/catalogs/config/branding'),
-        ]);
-        if (prohibRes.value) setProhibitedText(prohibRes.value.join('\n'));
-        if (brandsRes.value) setBrandsText(brandsRes.value.join('\n'));
-        if (brandingRes.value) {
-          setBrandingLogoUrl(brandingRes.value.logoUrl ?? '');
-          setBrandingRfc(brandingRes.value.rfc ?? '');
-          setBrandingCompanyName(brandingRes.value.companyName ?? '');
-        }
-      } catch {
-        // Not fatal — user may not be authed yet or config is unset
-      } finally {
-        setConfigLoading(false);
-      }
+    let active = true;
+    async function load() {
+      await Promise.all([
+        apiGet<ConfigResponse<string[]>>('/api/catalogs/config/prohibited')
+          .then((r) => { if (active && r.value) setProhibitedText(r.value.join('\n')); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<string[]>>('/api/catalogs/config/piracy_brands')
+          .then((r) => { if (active && r.value) setBrandsText(r.value.join('\n')); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<BrandingConfig>>('/api/catalogs/config/branding')
+          .then((r) => {
+            if (active && r.value) {
+              setCompanyName(r.value.companyName ?? '');
+              setRfc(r.value.rfc ?? '');
+              setLogoUrl(r.value.logoUrl ?? '');
+            }
+          })
+          .catch(() => {}),
+        apiGet<ConfigResponse<ValidationParams>>('/api/catalogs/config/validation_params')
+          .then((r) => { if (active && r.value) setParams({ ...DEFAULT_PARAMS, ...r.value }); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<TasaVigencia[]>>('/api/catalogs/config/tasa_vigencias')
+          .then((r) => { if (active && Array.isArray(r.value)) setVigencias(r.value); })
+          .catch(() => {}),
+        apiGet<Client[]>('/api/catalogs/clients')
+          .then((r) => { if (active) setClients(r); })
+          .catch(() => {}),
+        apiGet<ValidatedRfc[]>('/api/catalogs/validated-rfcs')
+          .then((r) => { if (active) setRfcs(r); })
+          .catch(() => {}),
+      ]);
     }
-    loadConfig();
+    load();
+    return () => { active = false; };
   }, []);
 
-  const handleSaveProhibited = async () => {
+  function refreshClients() {
+    apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => {});
+  }
+  function refreshRfcs() {
+    apiGet<ValidatedRfc[]>('/api/catalogs/validated-rfcs').then(setRfcs).catch(() => {});
+  }
+
+  // --- Catálogos save handlers ---
+  async function saveProhibited() {
     if (!isAdmin) return;
-    setConfigSaving(true);
+    setSaving(true);
     try {
-      const keywords = prohibitedText.split('\n').map((s) => s.trim()).filter(Boolean);
-      await apiPut('/api/catalogs/config/prohibited', { value: keywords });
+      const value = prohibitedText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/prohibited', { value });
       onToast('Lista de prohibidos guardada');
-    } catch (e: any) {
-      onToast(`Error: ${e.message}`);
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
     } finally {
-      setConfigSaving(false);
+      setSaving(false);
     }
-  };
+  }
 
-  const handleSaveBrands = async () => {
+  async function saveBrands() {
     if (!isAdmin) return;
-    setConfigSaving(true);
+    setSaving(true);
     try {
-      const brands = brandsText.split('\n').map((s) => s.trim()).filter(Boolean);
-      await apiPut('/api/catalogs/config/piracy_brands', { value: brands });
-      onToast('Marcas de piratería guardadas');
-    } catch (e: any) {
-      onToast(`Error: ${e.message}`);
+      const value = brandsText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/piracy_brands', { value });
+      onToast('Lista de piratería guardada');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
     } finally {
-      setConfigSaving(false);
+      setSaving(false);
     }
-  };
+  }
 
-  const handleSaveBranding = async () => {
+  async function saveBranding() {
     if (!isAdmin) return;
-    setConfigSaving(true);
+    setSaving(true);
     try {
-      const branding: BrandingConfig = {
-        logoUrl: brandingLogoUrl.trim() || undefined,
-        rfc: brandingRfc.trim() || undefined,
-        companyName: brandingCompanyName.trim() || undefined,
+      const value: BrandingConfig = {
+        companyName: companyName.trim() || undefined,
+        rfc: rfc.trim() || undefined,
+        logoUrl: logoUrl.trim() || undefined,
       };
-      await apiPut('/api/catalogs/config/branding', { value: branding });
+      await apiPut('/api/catalogs/config/branding', { value });
       onToast('Datos de empresa guardados');
-    } catch (e: any) {
-      onToast(`Error: ${e.message}`);
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
     } finally {
-      setConfigSaving(false);
+      setSaving(false);
     }
-  };
+  }
 
-  const handleInject = () => {
-    if (!isAdmin) {
-      onToast('Solo administrador puede inyectar guías');
-      return;
+  async function saveParams() {
+    if (!isAdmin) return;
+    setSaving(true);
+    try {
+      const value: ValidationParams = {
+        cantidad: Number(params.cantidad) || 0,
+        montoMin: Number(params.montoMin) || 0,
+        montoMax: Number(params.montoMax) || 0,
+        consignatario: Number(params.consignatario) || 0,
+        direccion: Number(params.direccion) || 0,
+        importacionesMes: Number(params.importacionesMes) || 0,
+      };
+      await apiPut('/api/catalogs/config/validation_params', { value });
+      onToast('Parámetros de validación guardados');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
     }
+  }
 
-    const shipment: T1Shipment = {
-      id: generateShipmentId(),
-      guideId: guideId.trim(),
-      mawbReference: 'MANUAL-INJECT',
-      consigneeName: consignee.trim(),
-      consigneeRfc: rfc.trim().toUpperCase(),
-      description: desc.trim(),
-      declaredValueUsd: parseFloat(value) || 0,
-      quantity: parseInt(qty) || 1,
-      unit: unit.toUpperCase(),
-      weightKg: 0.5,
-      originCountry: origin.toUpperCase(),
-      transportMode: 'AIR',
-      status: 'PENDING',
-      genericHsCode: assignGenericHsCode(unit),
-      rrnaFlags: [],
-    };
-
-    shipment.rrnaFlags = detectRRNA(shipment);
-    if (shipment.rrnaFlags.length > 0) shipment.status = 'RRNA_BLOCKED';
-    if (shipment.declaredValueUsd > 2500) shipment.status = 'EXCEEDS_THRESHOLD';
-
-    dispatch({
-      type: 'UPLOAD_MANIFEST',
-      payload: {
-        shipments: [...state.manifest.shipments, shipment],
-        fileName: 'MANUAL_INJECT',
-        mawbReference: state.manifest.mawbReference || 'MANUAL',
-      },
-    });
-
-    onToast(`Guía ${guideId} inyectada`);
-
-    // Auto increment
-    const parts = guideId.split('-');
-    if (parts.length >= 2) {
-      const last = parts[parts.length - 1];
-      const num = parseInt(last, 10);
-      if (!isNaN(num)) {
-        parts[parts.length - 1] = String(num + 1).padStart(last.length, '0');
-        setGuideId(parts.join('-'));
-      }
+  async function saveVigencias(rows: TasaVigencia[]) {
+    if (!isSuperAdmin) return;
+    setSaving(true);
+    try {
+      await apiPut('/api/catalogs/config/tasa_vigencias', { value: rows });
+      onToast('Vigencias de tasa global guardadas');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
     }
-  };
-
-  const handleSetExchangeRate = () => {
-    const rate = parseFloat(exchangeRate);
-    if (rate > 0) {
-      dispatch({ type: 'SET_EXCHANGE_RATE', payload: rate });
-      onToast(`Tipo de cambio actualizado: $${rate.toFixed(2)} MXN/USD`);
-    }
-  };
-
-  const handleReset = () => {
-    dispatch({ type: 'CLEAR_MANIFEST' });
-    onToast('Todos los datos reiniciados');
-  };
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white border border-outline-variant p-6 rounded-xl flex items-center gap-4 shadow-sm">
-        <div className="p-3 bg-primary text-white rounded-lg">
-          <Settings className="w-6 h-6" />
-        </div>
-        <div>
-          <h2 className="text-lg font-bold">Configuración T1 & Simulador</h2>
-          <p className="text-xs text-on-surface-variant">
-            Parámetros del motor RGCE, tasas globales, catálogos de riesgo y datos de empresa.
-          </p>
-        </div>
-      </div>
-
       {!isAdmin && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 flex gap-3 text-xs">
-          <Lock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-extrabold">Configuración restringida</p>
-            <p className="mt-1">Cambie a rol Admin para modificar parámetros fiscales e inyectar guías.</p>
+        <Card className="flex gap-3 border-amber-200 bg-amber-50 p-4">
+          <Lock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div className="text-sm text-amber-900">
+            <p className="font-bold">Configuración restringida — requiere rol Administrador</p>
+            <p className="mt-1 text-amber-800">Los campos se muestran en modo solo lectura.</p>
           </div>
+        </Card>
+      )}
+
+      {/* The selected sidebar destination renders its complete view here. */}
+      {domain === 'cfg_motor' && (
+        <div className="space-y-6">
+          <ParametrosTab isAdmin={isAdmin} saving={saving} params={params} setParams={setParams} onSave={saveParams} />
+          <ListasTab
+            isAdmin={isAdmin}
+            saving={saving}
+            prohibitedText={prohibitedText}
+            setProhibitedText={setProhibitedText}
+            brandsText={brandsText}
+            setBrandsText={setBrandsText}
+            onSaveProhibited={saveProhibited}
+            onSaveBrands={saveBrands}
+          />
         </div>
       )}
 
-      {/* DB-driven catalogs — Admin only */}
-      <section className="space-y-4">
-        <h3 className="text-xs font-bold text-primary uppercase tracking-wider flex items-center gap-2">
-          <Database className="w-4 h-4" />
-          Catálogos de Riesgo (BD)
-        </h3>
-        {configLoading ? (
-          <p className="text-xs text-on-surface-variant">Cargando configuración...</p>
+      {domain === 'cfg_clientes' && (
+        <ClientesTab isAdmin={isAdmin} clients={clients} onClientsChanged={refreshClients} onToast={onToast} />
+      )}
+
+      {domain === 'cfg_rfcs' && (
+        <RfcsTab isAdmin={isAdmin} rfcs={rfcs} onChanged={refreshRfcs} onToast={onToast} />
+      )}
+
+      {domain === 'cfg_empresa' && (
+        <BrandingTab
+          isAdmin={isAdmin}
+          saving={saving}
+          companyName={companyName}
+          setCompanyName={setCompanyName}
+          rfc={rfc}
+          setRfc={setRfc}
+          logoUrl={logoUrl}
+          setLogoUrl={setLogoUrl}
+          onSave={saveBranding}
+        />
+      )}
+
+      {domain === 'cfg_tasa' && (
+        <TasaTab
+          isSuperAdmin={isSuperAdmin}
+          saving={saving}
+          vigencias={vigencias}
+          setVigencias={setVigencias}
+          onSave={saveVigencias}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---------- Shared bits ---------- */
+
+function SectionHeader({ icon: Icon, children }: { icon: typeof Tag; children: ReactNode }) {
+  return (
+    <h3 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-slate-700">
+      <Icon className="h-4 w-4 text-navy-700" />
+      {children}
+    </h3>
+  );
+}
+
+/* ---------- Listas de exclusión (V6 prohibidos · V7 piratería) ---------- */
+
+interface ListasProps {
+  isAdmin: boolean;
+  saving: boolean;
+  prohibitedText: string;
+  setProhibitedText: (v: string) => void;
+  brandsText: string;
+  setBrandsText: (v: string) => void;
+  onSaveProhibited: () => void;
+  onSaveBrands: () => void;
+}
+
+function ListasTab(props: ListasProps) {
+  const {
+    isAdmin, saving, prohibitedText, setProhibitedText,
+    brandsText, setBrandsText, onSaveProhibited, onSaveBrands,
+  } = props;
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={AlertOctagon}>Artículos prohibidos (V6)</SectionHeader>
+        <p className="mb-2 text-xs text-slate-500">Una palabra clave por línea. Vacío usa la lista predeterminada del motor.</p>
+        <Textarea
+          rows={8}
+          value={prohibitedText}
+          onChange={(e) => setProhibitedText(e.target.value)}
+          disabled={!isAdmin}
+          className="font-mono text-xs disabled:bg-slate-50"
+          placeholder={'maquillaje\nliquido\nautoparte'}
+        />
+        <Button className="mt-3" onClick={onSaveProhibited} disabled={!isAdmin || saving}>
+          <Save className="h-4 w-4" /> Guardar
+        </Button>
+      </Card>
+
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={Tag}>Marcas de piratería (V7)</SectionHeader>
+        <p className="mb-2 text-xs text-slate-500">Una marca por línea. Vacío usa la lista predeterminada del motor.</p>
+        <Textarea
+          rows={8}
+          value={brandsText}
+          onChange={(e) => setBrandsText(e.target.value)}
+          disabled={!isAdmin}
+          className="font-mono text-xs disabled:bg-slate-50"
+          placeholder={'Nike\nAdidas\nGucci'}
+        />
+        <Button className="mt-3" onClick={onSaveBrands} disabled={!isAdmin || saving}>
+          <Save className="h-4 w-4" /> Guardar
+        </Button>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------- Clientes (master data) ---------- */
+
+interface ClientesProps {
+  isAdmin: boolean;
+  clients: Client[];
+  onClientsChanged: () => void;
+  onToast: (msg: string) => void;
+}
+
+function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesProps) {
+  const empty: ClientForm = {
+    name: '', tax_id: '', address: '', phone: '', email: '',
+    commercialName: '', countryOfOrigin: '', legalName: '', platformEmail: '',
+  };
+  const [form, setForm] = useState<ClientForm>(empty);
+  const [adding, setAdding] = useState(false);
+
+  async function addClient() {
+    if (!isAdmin || !form.name.trim()) return;
+    setAdding(true);
+    try {
+      await apiPost('/api/catalogs/clients', {
+        name: form.name.trim(),
+        tax_id: form.tax_id.trim(),
+        address: form.address.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        platform: {
+          commercialName: form.commercialName.trim(),
+          countryOfOrigin: form.countryOfOrigin.trim(),
+          legalName: form.legalName.trim(),
+          email: form.platformEmail.trim(),
+        },
+      });
+      onToast('Cliente agregado');
+      setForm(empty);
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeClient(id: string) {
+    if (!isAdmin) return;
+    try {
+      await apiDelete('/api/catalogs/clients/' + id);
+      onToast('Cliente eliminado');
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={Building2}>Clientes</SectionHeader>
+        <p className="mb-4 text-xs text-slate-500">
+          Datos recurrentes de remitente y plataforma, reutilizados al generar el Reporte General.
+        </p>
+
+        {clients.length === 0 ? (
+          <p className="py-4 text-sm text-slate-400">Sin clientes registrados.</p>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Prohibited keywords */}
-            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
-                <AlertOctagon className="w-4 h-4" />
-                Palabras Prohibidas
-              </h4>
-              <p className="text-[10px] text-on-surface-variant mb-2">Una por línea. Vacío = usar lista predeterminada.</p>
-              <textarea
-                value={prohibitedText}
-                onChange={(e) => setProhibitedText(e.target.value)}
-                disabled={!isAdmin}
-                rows={8}
-                className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100 resize-none"
-                placeholder="maquillaje\nliquido\nautoparte..."
-              />
-              <button
-                onClick={handleSaveProhibited}
-                disabled={!isAdmin || configSaving}
-                className="mt-2 w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Guardar
-              </button>
-            </div>
-
-            {/* Piracy brands */}
-            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Tag className="w-4 h-4" />
-                Marcas de Piratería
-              </h4>
-              <p className="text-[10px] text-on-surface-variant mb-2">Una por línea. Vacío = usar lista predeterminada.</p>
-              <textarea
-                value={brandsText}
-                onChange={(e) => setBrandsText(e.target.value)}
-                disabled={!isAdmin}
-                rows={8}
-                className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100 resize-none"
-                placeholder="Nike\nAdidas\nGucci..."
-              />
-              <button
-                onClick={handleSaveBrands}
-                disabled={!isAdmin || configSaving}
-                className="mt-2 w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Guardar
-              </button>
-            </div>
-
-            {/* Branding */}
-            <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-              <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Building2 className="w-4 h-4" />
-                Datos de Empresa
-              </h4>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">Nombre de Empresa</label>
-                  <input
-                    value={brandingCompanyName}
-                    onChange={(e) => setBrandingCompanyName(e.target.value)}
-                    disabled={!isAdmin}
-                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                    placeholder="Capital Centennials"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">RFC</label>
-                  <input
-                    value={brandingRfc}
-                    onChange={(e) => setBrandingRfc(e.target.value.toUpperCase())}
-                    disabled={!isAdmin}
-                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
-                    placeholder="CAP010101ABC"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">URL del Logo</label>
-                  <input
-                    value={brandingLogoUrl}
-                    onChange={(e) => setBrandingLogoUrl(e.target.value)}
-                    disabled={!isAdmin}
-                    className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                    placeholder="https://..."
-                  />
-                </div>
-                <button
-                  onClick={handleSaveBranding}
-                  disabled={!isAdmin || configSaving}
-                  className="w-full bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-3 py-1.5 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  Guardar
-                </button>
-              </div>
-            </div>
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">Nombre</th>
+                  <th className="px-3 py-2 font-semibold">RFC / Tax ID</th>
+                  <th className="px-3 py-2 font-semibold">Plataforma</th>
+                  <th className="px-3 py-2 font-semibold">Email</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {clients.map((c) => (
+                  <tr key={c.id}>
+                    <td className="px-3 py-2 font-medium text-slate-800">{c.name}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{c.tax_id || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{c.platform?.commercialName || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{c.email || '—'}</td>
+                    <td className="px-3 py-2 text-right">
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => removeClient(c.id)}
+                          className="text-slate-400 transition hover:text-red-600"
+                          aria-label="Eliminar cliente"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
-      </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Tax & Exchange Rate */}
-        <section className="lg:col-span-5 space-y-6">
-          {/* Exchange rate */}
-          <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-primary uppercase tracking-wider mb-4 flex items-center gap-2">
-              <DollarSign className="w-4 h-4" />
-              Tipo de Cambio SAT
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-bold text-on-surface-variant uppercase block mb-1">
-                  Tipo de cambio (MXN/USD)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={exchangeRate}
-                    onChange={(e) => setExchangeRate(e.target.value)}
-                    disabled={!isAdmin}
-                    className="flex-1 p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono font-bold disabled:bg-slate-100"
-                  />
-                  <button
-                    onClick={handleSetExchangeRate}
-                    disabled={!isAdmin}
-                    className="bg-primary text-on-primary px-4 py-2 text-xs font-bold rounded hover:opacity-90 disabled:opacity-50 transition-all"
-                  >
-                    Actualizar
-                  </button>
-                </div>
-              </div>
-              <p className="text-[10px] text-on-surface-variant">
-                Valor actual: <span className="font-bold">${tax.exchangeRate.toFixed(2)} MXN/USD</span>
-              </p>
+        {isAdmin && (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">Agregar cliente</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Field label="Nombre *" htmlFor="cl-name">
+                <Input id="cl-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </Field>
+              <Field label="RFC / Tax ID" htmlFor="cl-tax">
+                <Input id="cl-tax" value={form.tax_id} onChange={(e) => setForm({ ...form, tax_id: e.target.value })} />
+              </Field>
+              <Field label="Teléfono" htmlFor="cl-phone">
+                <Input id="cl-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </Field>
+              <Field label="Dirección" htmlFor="cl-addr">
+                <Input id="cl-addr" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+              </Field>
+              <Field label="Email" htmlFor="cl-email">
+                <Input id="cl-email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </Field>
+              <Field label="Plataforma (nombre comercial)" htmlFor="cl-pcom">
+                <Input id="cl-pcom" value={form.commercialName} onChange={(e) => setForm({ ...form, commercialName: e.target.value })} />
+              </Field>
+              <Field label="País de origen" htmlFor="cl-pcoo">
+                <Input id="cl-pcoo" value={form.countryOfOrigin} onChange={(e) => setForm({ ...form, countryOfOrigin: e.target.value })} />
+              </Field>
+              <Field label="Razón social" htmlFor="cl-plegal">
+                <Input id="cl-plegal" value={form.legalName} onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
+              </Field>
+              <Field label="Email plataforma" htmlFor="cl-pemail">
+                <Input id="cl-pemail" value={form.platformEmail} onChange={(e) => setForm({ ...form, platformEmail: e.target.value })} />
+              </Field>
             </div>
+            <Button className="mt-3" onClick={addClient} disabled={adding || !form.name.trim()}>
+              <Plus className="h-4 w-4" /> Agregar cliente
+            </Button>
           </div>
-
-          {/* Tax rates info */}
-          <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-primary uppercase tracking-wider mb-4 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Tasas Globales Vigentes (RGCE 3.7.35)
-            </h3>
-            <div className="space-y-3">
-              <RateRow label="Estándar (Resto del Mundo)" rate="33.5%" color="red" desc="Aplica a origen no-USMCA con valor >$50 USD" />
-              <RateRow label="USMCA Preferencial" rate="19.0%" color="blue" desc="EE.UU./Canadá, valor >$117 y ≤$2,500" />
-              <RateRow label="De Minimis Exento" rate="0%" color="emerald" desc="≤$50 USD bajo tratados internacionales" />
-            </div>
-          </div>
-
-          {/* RRNA sensitivity */}
-          <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-primary uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Sliders className="w-4 h-4" />
-              Sensibilidad RRNA
-            </h3>
-            <div className="grid grid-cols-3 gap-2">
-              {(['STRICT', 'NORMAL', 'RELAXED'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => isAdmin && setRrnaMode(mode)}
-                  disabled={!isAdmin}
-                  className={`px-3 py-2 rounded text-[10px] font-bold transition-all ${
-                    rrnaMode === mode
-                      ? 'bg-primary text-white shadow-sm'
-                      : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'
-                  } disabled:opacity-50`}
-                >
-                  {mode === 'STRICT' ? 'Estricto' : mode === 'NORMAL' ? 'Normal' : 'Relajado'}
-                </button>
-              ))}
-            </div>
-            <p className="text-[10px] text-on-surface-variant mt-2">
-              {rrnaMode === 'STRICT'
-                ? 'Detecta más falsos positivos pero máxima seguridad.'
-                : rrnaMode === 'NORMAL'
-                ? 'Balance entre precisión y recall.'
-                : 'Menos detecciones, más permisivo.'}
-            </p>
-          </div>
-        </section>
-
-        {/* Right: Manual injection + 78/LA simulator */}
-        <section className="lg:col-span-7 space-y-6">
-          {/* 78/LA Registry Simulator */}
-          <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-primary uppercase tracking-wider mb-4 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4" />
-              Simulador de Registro 78/LA (ANAM)
-            </h3>
-            <p className="text-[11px] text-on-surface-variant mb-4">
-              Requisitos para que una empresa de mensajería obtenga el registro ante ANAM para operar T1:
-            </p>
-            <div className="space-y-2">
-              <RequirementRow met label="RFC activo y domicilio fiscal en México" />
-              <RequirementRow met label="e.firma vigente de representantes legales" />
-              <RequirementRow met label="Opinión de cumplimiento positiva (SAT)" />
-              <RequirementRow met label="No estar en lista de EFOS (Art. 69-B CFF)" />
-              <RequirementRow label="Inversión en activos fijos ≥ $1,000,000 USD" />
-              <RequirementRow label="Fianza fiscal ≥ $15,000,000 MXN" />
-              <RequirementRow label="Concesión Art. 14 / 14-A de la Ley Aduanera" />
-              <RequirementRow label="CCTV y controles de acceso aprobados por SAT" />
-              <RequirementRow label="Sistema de candados electrónicos con GPS" />
-              <RequirementRow label="Acceso en línea para ANAM al sistema de riesgos" />
-            </div>
-          </div>
-
-          {/* Manual injection form */}
-          <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-sm">
-            <h3 className="text-xs font-bold text-primary uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Database className="w-4 h-4" />
-              Inyección Manual de Guía T1
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Guía ID</label>
-                <input
-                  value={guideId}
-                  onChange={(e) => setGuideId(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Consignatario</label>
-                <input
-                  value={consignee}
-                  onChange={(e) => setConsignee(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">RFC</label>
-                <input
-                  value={rfc}
-                  onChange={(e) => setRfc(e.target.value.toUpperCase())}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Valor USD</label>
-                <input
-                  type="number"
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Descripción</label>
-                <input
-                  value={desc}
-                  onChange={(e) => setDesc(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Origen (ISO)</label>
-                <input
-                  value={origin}
-                  onChange={(e) => setOrigin(e.target.value.toUpperCase())}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary font-mono disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">Cantidad</label>
-                <input
-                  type="number"
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-on-surface-variant uppercase block mb-1">UOM</label>
-                <select
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value)}
-                  disabled={!isAdmin}
-                  className="w-full p-2 border border-outline rounded text-xs outline-none focus:border-primary disabled:bg-slate-100"
-                >
-                  <option value="PCE">Piezas (PCE)</option>
-                  <option value="KGM">Kilogramos (KGM)</option>
-                  <option value="LTR">Litros (LTR)</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button
-                onClick={handleInject}
-                disabled={!isAdmin}
-                className="flex-1 bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 px-4 py-2 text-xs font-bold rounded transition-all flex items-center justify-center gap-1.5"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Inyectar Guía T1
-              </button>
-              <button
-                onClick={handleReset}
-                disabled={!isAdmin}
-                className="bg-white border border-outline text-secondary hover:bg-surface-container disabled:opacity-50 px-4 py-2 text-xs font-bold rounded transition-all flex items-center gap-1.5"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Reiniciar Todo
-              </button>
-            </div>
-          </div>
-        </section>
-      </div>
+        )}
+      </Card>
     </div>
   );
 }
 
-function RateRow({ label, rate, color, desc }: { label: string; rate: string; color: string; desc: string }) {
-  const colorMap: Record<string, { badge: string; text: string }> = {
-    red: { badge: 'bg-red-100 text-red-800', text: 'text-red-600' },
-    blue: { badge: 'bg-blue-100 text-blue-800', text: 'text-blue-600' },
-    emerald: { badge: 'bg-emerald-100 text-emerald-800', text: 'text-emerald-600' },
-  };
-  const c = colorMap[color] || colorMap.red;
+interface ClientForm {
+  name: string;
+  tax_id: string;
+  address: string;
+  phone: string;
+  email: string;
+  commercialName: string;
+  countryOfOrigin: string;
+  legalName: string;
+  platformEmail: string;
+}
 
+/* ---------- Branding ---------- */
+
+interface BrandingProps {
+  isAdmin: boolean;
+  saving: boolean;
+  companyName: string;
+  setCompanyName: (v: string) => void;
+  rfc: string;
+  setRfc: (v: string) => void;
+  logoUrl: string;
+  setLogoUrl: (v: string) => void;
+  onSave: () => void;
+}
+
+function BrandingTab(props: BrandingProps) {
+  const { isAdmin, saving, companyName, setCompanyName, rfc, setRfc, logoUrl, setLogoUrl, onSave } = props;
   return (
-    <div className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
-      <div>
-        <span className="text-xs font-bold text-primary">{label}</span>
-        <p className="text-[10px] text-on-surface-variant mt-0.5">{desc}</p>
+    <Card className="max-w-xl p-6 shadow-sm">
+      <SectionHeader icon={Building2}>Datos de empresa</SectionHeader>
+      <div className="space-y-4">
+        <Field label="Nombre de empresa" htmlFor="br-name">
+          <Input id="br-name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} disabled={!isAdmin} placeholder="Capital Centennials" />
+        </Field>
+        <Field label="RFC" htmlFor="br-rfc">
+          <Input id="br-rfc" value={rfc} onChange={(e) => setRfc(e.target.value.toUpperCase())} disabled={!isAdmin} className="font-mono" placeholder="CAP010101ABC" />
+        </Field>
+        <Field label="URL del logo" htmlFor="br-logo">
+          <Input id="br-logo" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} disabled={!isAdmin} placeholder="https://..." />
+        </Field>
+        <Button onClick={onSave} disabled={!isAdmin || saving}>
+          <Save className="h-4 w-4" /> Guardar
+        </Button>
       </div>
-      <span className={`px-2.5 py-1 rounded text-xs font-black ${c.badge}`}>{rate}</span>
-    </div>
+    </Card>
   );
 }
 
-function RequirementRow({ met, label }: { met?: boolean; label: string }) {
+/* ---------- Parámetros de validación ---------- */
+
+interface ParametrosProps {
+  isAdmin: boolean;
+  saving: boolean;
+  params: ValidationParams;
+  setParams: (v: ValidationParams) => void;
+  onSave: () => void;
+}
+
+const PARAM_FIELDS: { key: keyof ValidationParams; label: string; help: string }[] = [
+  { key: 'cantidad', label: 'Máx. productos por partida', help: 'Cantidad máxima de productos por partida.' },
+  { key: 'montoMin', label: 'Valor mínimo USD', help: 'Valor declarado mínimo aceptable.' },
+  { key: 'montoMax', label: 'Valor máximo USD (subvaluación)', help: 'Umbral de valor máximo / subvaluación.' },
+  { key: 'consignatario', label: 'Repeticiones de consignatario', help: 'Repeticiones para alertar por consignatario.' },
+  { key: 'direccion', label: 'Repeticiones de dirección', help: 'Repeticiones de dirección para alertar.' },
+  { key: 'importacionesMes', label: 'Umbral importaciones / mes', help: 'Operaciones por consignatario en el mes que disparan la alerta (Ficha 124: >3, por lo que 4).' },
+];
+
+function ParametrosTab({ isAdmin, saving, params, setParams, onSave }: ParametrosProps) {
   return (
-    <div className="flex items-center gap-2 text-xs">
-      {met ? (
-        <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+    <Card className="p-6 shadow-sm">
+      <SectionHeader icon={Sliders}>Parámetros de validación</SectionHeader>
+      <p className="mb-4 text-xs text-slate-500">
+        Vacío/0 usa los valores predeterminados del motor. Los cambios aplican a la siguiente corrida de riesgo y
+        sellan la versión del ruleset configurada.
+      </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {PARAM_FIELDS.map((f) => (
+          <div key={String(f.key)}>
+            <Field label={f.label} htmlFor={`vp-${f.key}`}>
+              <Input
+                id={`vp-${f.key}`}
+                type="number"
+                value={params[f.key]}
+                onChange={(e) => setParams({ ...params, [f.key]: e.target.value === '' ? 0 : Number(e.target.value) })}
+                disabled={!isAdmin}
+                className="font-mono disabled:bg-slate-50"
+              />
+            </Field>
+            <p className="mt-1 text-[11px] text-slate-400">{f.help}</p>
+          </div>
+        ))}
+      </div>
+      <Button className="mt-4" onClick={onSave} disabled={!isAdmin || saving}>
+        <Save className="h-4 w-4" /> Guardar
+      </Button>
+    </Card>
+  );
+}
+
+/* ---------- RFCs validados ---------- */
+
+interface RfcsProps {
+  isAdmin: boolean;
+  rfcs: ValidatedRfc[];
+  onChanged: () => void;
+  onToast: (msg: string) => void;
+}
+
+function RfcsTab({ isAdmin, rfcs, onChanged, onToast }: RfcsProps) {
+  const [idRef, setIdRef] = useState('');
+  const [rfc, setRfc] = useState('');
+  const [curp, setCurp] = useState('');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function add() {
+    if (!isAdmin || !idRef.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/api/catalogs/validated-rfcs', {
+        id_ref: idRef.trim(),
+        rfc: rfc.trim(),
+        curp: curp.trim(),
+        name: name.trim(),
+      });
+      onToast('RFC validado guardado');
+      setIdRef(''); setRfc(''); setCurp(''); setName('');
+      onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    if (!isAdmin) return;
+    try {
+      await apiDelete('/api/catalogs/validated-rfcs/' + id);
+      onToast('RFC validado eliminado');
+      onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  return (
+    <Card className="p-6 shadow-sm">
+      <SectionHeader icon={ShieldCheck}>RFCs validados</SectionHeader>
+      <p className="mb-4 text-xs text-slate-500">
+        El manifiesto trae solo un ID; esta tabla provee el RFC/CURP validado para el reporte T1.
+      </p>
+
+      {rfcs.length === 0 ? (
+        <p className="py-4 text-sm text-slate-400">Sin RFCs validados.</p>
       ) : (
-        <AlertOctagon className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-semibold">ID CNNE</th>
+                <th className="px-3 py-2 font-semibold">RFC</th>
+                <th className="px-3 py-2 font-semibold">CURP</th>
+                <th className="px-3 py-2 font-semibold">Nombre</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rfcs.map((r) => (
+                <tr key={r.id}>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.id_ref}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.rfc || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.curp || '—'}</td>
+                  <td className="px-3 py-2 text-slate-700">{r.name || '—'}</td>
+                  <td className="px-3 py-2 text-right">
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => remove(r.id)}
+                        className="text-slate-400 transition hover:text-red-600"
+                        aria-label="Eliminar RFC validado"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
-      <span className={met ? 'text-emerald-700 font-medium' : 'text-on-surface-variant'}>{label}</span>
-    </div>
+
+      {isAdmin && (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">Agregar RFC validado</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="ID del CNNE *" htmlFor="vr-idref">
+              <Input id="vr-idref" value={idRef} onChange={(e) => setIdRef(e.target.value)} className="font-mono" />
+            </Field>
+            <Field label="RFC" htmlFor="vr-rfc">
+              <Input id="vr-rfc" value={rfc} onChange={(e) => setRfc(e.target.value.toUpperCase())} className="font-mono" />
+            </Field>
+            <Field label="CURP" htmlFor="vr-curp">
+              <Input id="vr-curp" value={curp} onChange={(e) => setCurp(e.target.value.toUpperCase())} className="font-mono" />
+            </Field>
+            <Field label="Nombre" htmlFor="vr-name">
+              <Input id="vr-name" value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+          </div>
+          <Button className="mt-3" onClick={add} disabled={busy || !idRef.trim()}>
+            <Plus className="h-4 w-4" /> Agregar
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ---------- Tasa global (vigencias) ---------- */
+
+interface TasaProps {
+  isSuperAdmin: boolean;
+  saving: boolean;
+  vigencias: TasaVigencia[];
+  setVigencias: (v: TasaVigencia[]) => void;
+  onSave: (rows: TasaVigencia[]) => void;
+}
+
+function TasaTab({ isSuperAdmin, saving, vigencias, setVigencias, onSave }: TasaProps) {
+  const [startDate, setStartDate] = useState('');
+  const [originType, setOriginType] = useState<OriginType>('GENERAL');
+  const [rate, setRate] = useState('');
+
+  function addRow() {
+    if (!isSuperAdmin || !startDate || rate.trim() === '') return;
+    const row: TasaVigencia = { startDate, originType, rate: Number(rate) };
+    const next = [...vigencias, row];
+    setVigencias(next);
+    setStartDate(''); setRate(''); setOriginType('GENERAL');
+  }
+
+  function removeRow(idx: number) {
+    if (!isSuperAdmin) return;
+    setVigencias(vigencias.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <Card className="p-6 shadow-sm">
+      <SectionHeader icon={ScrollText}>Tasa global (vigencias)</SectionHeader>
+
+      {!isSuperAdmin && (
+        <div className="mb-4 flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p>Solo el Super Admin puede editar las vigencias de tasa global.</p>
+        </div>
+      )}
+
+      <p className="mb-4 text-xs text-slate-500">
+        Mensajería 2025: GENERAL 33.5% (0.335), T-MEC 19% (0.19). Capture la tasa como número (0.335 o 33.5).
+      </p>
+
+      {vigencias.length === 0 ? (
+        <p className="py-4 text-sm text-slate-400">Sin vigencias configuradas.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Vigente desde</th>
+                <th className="px-3 py-2 font-semibold">Origen</th>
+                <th className="px-3 py-2 font-semibold">Tasa</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {vigencias.map((v, i) => (
+                <tr key={`${v.startDate}-${v.originType}-${i}`}>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-600">{v.startDate}</td>
+                  <td className="px-3 py-2 text-slate-700">{v.originType}</td>
+                  <td className="px-3 py-2 font-mono text-slate-700">{v.rate}</td>
+                  <td className="px-3 py-2 text-right">
+                    {isSuperAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => removeRow(i)}
+                        className="text-slate-400 transition hover:text-red-600"
+                        aria-label="Eliminar vigencia"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {isSuperAdmin && (
+        <>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">Agregar vigencia</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label="Vigente desde" htmlFor="tv-date">
+                <Input id="tv-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </Field>
+              <Field label="Origen" htmlFor="tv-origin">
+                <select
+                  id="tv-origin"
+                  value={originType}
+                  onChange={(e) => setOriginType(e.target.value as OriginType)}
+                  className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/25"
+                >
+                  <option value="GENERAL">GENERAL</option>
+                  <option value="TMEC">TMEC</option>
+                </select>
+              </Field>
+              <Field label="Tasa (0.335 o 33.5)" htmlFor="tv-rate">
+                <Input id="tv-rate" type="number" step="any" value={rate} onChange={(e) => setRate(e.target.value)} className="font-mono" />
+              </Field>
+            </div>
+            <Button variant="secondary" className="mt-3" onClick={addRow} disabled={!startDate || rate.trim() === ''}>
+              <Plus className="h-4 w-4" /> Agregar fila
+            </Button>
+          </div>
+
+          <Button className="mt-4" onClick={() => onSave(vigencias)} disabled={saving}>
+            <Save className="h-4 w-4" /> Guardar vigencias
+          </Button>
+        </>
+      )}
+    </Card>
   );
 }

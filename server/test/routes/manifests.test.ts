@@ -62,3 +62,30 @@ describe('GET /api/manifests/:id/staging', () => {
     expect(JSON.stringify(res.body)).not.toContain('AERA790828HBSRBR04'); // raw PII not leaked
   });
 });
+
+describe('POST /api/manifests/:id/promote', () => {
+  it('promotes valid+warning rows to shipments and is idempotent on re-upload', async () => {
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-3').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    const id = up.body.manifestId;
+    const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(prom.status).toBe(200);
+    expect(prom.body.promoted).toBe(1);
+    let ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [id]);
+    expect(ships.rows[0].n).toBe(1);
+    const man = await query('SELECT ingestion_status FROM manifests WHERE id=$1', [id]);
+    expect(man.rows[0].ingestion_status).toBe('promoted');
+    // second promote is rejected (state machine guard)
+    const again = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(again.status).toBe(409);
+  });
+
+  it('refuses promotion while error rows remain', async () => {
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-4').attach('file', xlsxBuffer([HEADER, GOOD, BAD]), 'm.xlsx');
+    const prom = await request(app).post(`/api/manifests/${up.body.manifestId}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(prom.status).toBe(422);
+    const ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [up.body.manifestId]);
+    expect(ships.rows[0].n).toBe(0);
+  });
+});

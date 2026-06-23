@@ -6,6 +6,7 @@ import { recordAudit } from '../services/audit';
 import { encryptConsignee } from '../crypto/fieldCrypto';
 import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
+import { computeLock } from '../services/manifestLock';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const MAX_ROWS = 5000; // synchronous ceiling (async deferred to Increment 2)
@@ -64,6 +65,37 @@ manifestsRouter.get('/:id/staging', requireAuth, requireRole('admin', 'capturist
     rows: rows.map((r) => ({ rowIndex: r.row_index, status: r.status, errors: r.errors, warnings: r.warnings })),
     counts,
   });
+});
+
+// POST /api/manifests/:id/promote — gold-layer promotion gate
+manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
+  const id = req.params.id;
+  const man = await query<{ ingestion_status: string; file_id: string | null; prevalidation: { status?: string } | null }>(
+    'SELECT ingestion_status, file_id, prevalidation FROM manifests WHERE id=$1', [id]);
+  if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+  const m = man.rows[0];
+  if (!computeLock({ prevalidation: m.prevalidation, file_id: m.file_id }).editable) { res.status(409).json({ error: 'Manifiesto bloqueado' }); return; }
+  if (m.ingestion_status !== 'staged') { res.status(409).json({ error: `No se puede promover desde estado '${m.ingestion_status}'` }); return; }
+
+  const staged = await query<{ row_index: number; idempotency_key: string; data: unknown; status: string }>(
+    `SELECT row_index, idempotency_key, data, status FROM manifest_staging_rows WHERE manifest_id=$1`, [id]);
+  if (staged.rows.some((r) => r.status === 'error')) { res.status(422).json({ error: 'Hay filas con errores; corríjalas antes de promover' }); return; }
+  const promotable = staged.rows.filter((r) => r.status === 'valid' || r.status === 'warning');
+  if (!promotable.length) { res.status(422).json({ error: 'No hay filas promovibles' }); return; }
+
+  for (const r of promotable) {
+    await query(
+      `INSERT INTO shipments (id, manifest_id, data, idempotency_key)
+       VALUES (gen_random_uuid(), $1, $2, $3)
+       ON CONFLICT (manifest_id, idempotency_key)
+       DO UPDATE SET data = EXCLUDED.data, risk_score = NULL, risk_color = NULL, risk_incidences = NULL`,
+      [id, JSON.stringify(r.data), r.idempotency_key]);
+  }
+  await query(`UPDATE manifest_staging_rows SET promoted_at = now() WHERE manifest_id=$1 AND status IN ('valid','warning')`, [id]);
+  await query(`UPDATE manifests SET ingestion_status='promoted', risk_stale=true WHERE id=$1`, [id]);
+  await recordAudit({ userId: req.user!.userId, action: 'PROMOTE_MANIFEST', entity: 'manifest', entityId: id, after: { promoted: promotable.length }, ip: req.ip });
+
+  res.json({ promoted: promotable.length });
 });
 
 // POST /api/manifests/:id/client — associate a client to a manifest

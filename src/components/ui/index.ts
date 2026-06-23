@@ -6,3 +6,4 @@ export { Stepper } from './Stepper';
 export { PageHeader } from './PageHeader';
 export { EmptyState } from './EmptyState';
 export { FileCard } from './FileCard';
+export { Modal } from './Modal';

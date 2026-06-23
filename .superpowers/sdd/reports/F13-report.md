@@ -116,3 +116,43 @@ All targets met.
 None. The recalibration is well within the documented targets. The band changes (`amarillo: 10→8`, `rojo: 17→15`) are conservative and documented in `ruleset.ts` comments with the post-F13 distribution numbers.
 
 F20 coordination note is in place in both `signals.ts` (`entityValueTotal`) and `classify.ts` (`entityValueTotal` build loop).
+
+---
+
+## Fix — Review Finding: Recalibration Overreached (2026-06-23)
+
+### Finding
+
+A careful review instrumented the 501-row golden fixture and found `agregado` fires on ZERO golden rows. The `amarillo: 10→8` cutoff change swept ~199 benign rows (single `monto`/`cantidad` flag, score 8) from verde into amarillo, reclassifying ~40% of all shipments. The root cause: with weight 20 (`= monto`), a 2×$2,499 split scored exactly 8 — identical to one benign over-quantity row — forcing the cutoff down to avoid missing split pairs.
+
+### Root cause
+
+`agregado` weight 20 + maxPoints 238 → split score = 20/238×100 ≈ 8.4, which falls below amarillo=10. This forced the amarillo cutoff to 8 to capture split cases, unintentionally sweeping benign rows.
+
+### Fix applied
+
+1. **`shared/risk/ruleset.ts`**: Reverted `amarillo` band cutoff to **10** (original value). Kept `rojo: 15` (required to restore rojo ≥ 3% after maxPoints increase). Raised `agregado` weight **20 → 30** so a genuine split pair (2×$2,499, excess ≈ 1.0) scores 30/248×100 ≈ **12.1** → lands in amarillo [10, 15) without touching the band cutoff. Updated maxPoints: 218 → 248.
+
+2. **`shared/risk/ruleset.test.ts`**: Updated literal maxPoints guard `238 → 248`.
+
+3. **`shared/risk/classify.test.ts`**: Strengthened the split-pair test from `band ≠ verde` to `band === 'amarillo'` (with `agregado` reason present).
+
+### Verification
+
+```
+npx vitest run shared/risk/ruleset.test.ts shared/risk/signals.test.ts shared/risk/classify.test.ts shared/risk/enhanced.test.ts shared/pedimento/prevalidate.test.ts
+```
+
+Result: **47 tests passed** (5 test files).
+
+### 501-row golden distribution (post-fix, bands {amarillo:10,rojo:15})
+
+| Band | Count | % | Target |
+|------|-------|---|--------|
+| verde | 436 | 87.0% | > 40% ✓ |
+| amarillo | 31 | 6.2% | — |
+| rojo | 34 | 6.8% | 3–12% ✓ |
+| gris | 0 | 0% | — |
+| **Total** | **501** | | |
+
+`agregado` fires on **zero** golden rows — raising its weight only nudged maxPoints, slightly compressing (lowering) existing golden scores. All benign rows remain verde.

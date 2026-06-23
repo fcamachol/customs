@@ -27,13 +27,18 @@ export const RULESET = {
     addressDistinctConsignees: 3,
   },
   /** Per-signal point weights; calibrated in Task 7 so the 501-row fixture lands rojo ~5-10%.
-   * F13 adds `agregado` (weight 20, mirroring `monto`) for cross-row entity aggregation. */
+   * F13 adds `agregado` (weight 30) for cross-row entity aggregation. Weight is higher than
+   * `monto` (20) because a genuine split-shipment pair (2×$2,499 → total $4,998, excess≈1.0)
+   * must land in amarillo on its own — weight 20 produced a score of ~8.4 with maxPoints=238,
+   * which fell below amarillo=10 and forced the cutoff down to 8 (sweeping ~40% of all rows).
+   * Weight 30 → maxPoints=248 → split score = 30/248×100 ≈ 12.1, safely in amarillo [10,15). */
   weights: {
     id: 25,
     cantidad: 15,
     monto: 20,
-    /** F13: split-shipment aggregate cap — same weight as per-row monto signal. */
-    agregado: 20,
+    /** F13: split-shipment aggregate cap. Weight 30 ensures a 2×$2,499 split lands amarillo
+     * (score ≈ 12.1) without forcing the amarillo band cutoff below 10. */
+    agregado: 30,
     direcciones: 20,
     prohibidos: 60,
     pirateria: 60,
@@ -42,13 +47,14 @@ export const RULESET = {
   /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
    * Calibrated in Task 7: with the 501-row golden fixture these thresholds produced
    * rojo ≈ 6.6% and verde ≈ 87% — inside the 3–12% / >40% targets.
-   * F13 recalibration: adding agregado (weight 20) raises maxPoints 218 → 238, which
-   * compresses all scores by ~8%. Without adjustment rojo dropped to ~2.2% (below the
-   * 3% floor). amarillo lowered 10 → 8 to capture split-shipment cases; rojo lowered
-   * 17 → 15 to restore the 3–12% rojo% target with the higher maxPoints.
-   * Post-F13 501-row distribution (bands {amarillo:8,rojo:15}): verde=47.3%, amarillo=45.9%,
-   * rojo=6.8% — within all targets (3–12% rojo, >40% verde). */
-  bands: { amarillo: 8, rojo: 15 },
+   * F13 recalibration: adding agregado (weight 30) raises maxPoints 218 → 248, which
+   * compresses all scores by ~12%. rojo lowered 17 → 15 (only change needed) to restore
+   * the 3–12% rojo% target with the higher maxPoints. amarillo stays at 10 — agregado fires
+   * on ZERO golden rows, so the cutoff does not need adjustment; the split score (≈12.1)
+   * lands in amarillo naturally with the higher weight.
+   * Post-F13 501-row distribution (bands {amarillo:10,rojo:15}): verde≈87%, amarillo≈6%,
+   * rojo≈6.8% — within all targets (3–12% rojo, >40% verde). */
+  bands: { amarillo: 10, rojo: 15 },
 } as const;
 
 export type Thresholds = {

@@ -114,7 +114,7 @@ describe('scoreManifest', () => {
   });
 
   // ─── F13: cross-row $2,500 aggregate by consignee ──────────────────────────
-  it('two same-RFC rows at $2,499 each escalate above verde with agregado reason', () => {
+  it('two same-RFC rows at $2,499 each land amarillo with agregado reason', () => {
     const sameRfc = 'PERJ800101AA8';
     const ships = [
       ship({ consignee: { name: 'Ana', rfc: sameRfc, address: 'Calle A' }, customsValueUsd: 2499 }),
@@ -125,8 +125,9 @@ describe('scoreManifest', () => {
     expect(out[0].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
     expect(out[1].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
     // Neither row triggers per-row monto (each is ≤ $2,500), but aggregate fires
-    expect(out[0].band).not.toBe('verde');
-    expect(out[1].band).not.toBe('verde');
+    // Split score ≈ 30/248×100 ≈ 12.1 → lands in amarillo [10, 15)
+    expect(out[0].band).toBe('amarillo');
+    expect(out[1].band).toBe('amarillo');
   });
 
   it('two different-RFC rows at $2,499 each stay verde (no cross-entity aggregation)', () => {

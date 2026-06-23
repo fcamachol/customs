@@ -88,6 +88,13 @@ export interface PedimentoPartida {
   identifiers?: string[];                    // EP/EN/XP + codes
   contribuciones: { concepto: string; tasa: number; importe: number }[];
   observation: string;                       // GUIA … VALOR … USD NOMBRE … RFC-CURP …
+  /**
+   * F13: entity key for this consignee (set by `buildPedimento` via `entityKey()`).
+   * Optional so already-persisted pedimentos without this field still parse correctly.
+   * The prevalidator falls back to parsing the RFC-CURP segment from `observation`,
+   * then `seq:<secuencia>`, so both new and legacy pedimentos aggregate correctly.
+   */
+  consigneeKey?: string;
 }
 
 export interface Pedimento {

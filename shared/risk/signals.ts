@@ -54,7 +54,7 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
 
 // ─── Task 5: Graded, entity-aware signals with reason codes ──────────────────
 
-export type SignalId = 'id' | 'cantidad' | 'monto' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd';
+export type SignalId = 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd';
 
 export interface ReasonCode {
   signalId: SignalId;
@@ -77,6 +77,14 @@ export interface EntityContext {
    * name-keyed history loaded from the server.
    */
   monthlyNameCount: Record<string, number>;
+  /**
+   * F13: Aggregate customs value (USD) per entity key across all rows of the current
+   * manifest. Keyed by `entityKey(consignee)` (RFC/CURP when present, else `name:<normalized>`).
+   *
+   * TODO(F20): when blind-index tokenization lands, `entityValueTotal` must key on the
+   * same tokenized identity as F20's tokenization. Coordinate the key derivation here.
+   */
+  entityValueTotal?: Record<string, number>;
   piracyBrands?: string[];
   prohibitedKeywords?: string[];
 }
@@ -129,6 +137,19 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
     add('monto', 1, 'Valor declarado incorrecto (muy bajo)', { value: s.customsValueUsd });
   } else if (s.customsValueUsd > t.montoMax) {
     add('monto', (s.customsValueUsd - t.montoMax) / t.montoMax, 'Valor declarado incorrecto (muy alto)', { value: s.customsValueUsd });
+  }
+
+  // agregado (F13): cross-row split-shipment cap — fires when the aggregate value
+  // for this entity key across all manifest rows exceeds montoMax (RULESET.montoMax = $2,500).
+  // The per-row `monto` cap above is the floor; this is additive.
+  // Cross-reference: RULESET.thresholds.montoMax = 2500 (SPLIT_CAP_USD in prevalidate.ts).
+  if (ctx.entityValueTotal) {
+    const ek = entityKey(s.consignee);
+    const total = ctx.entityValueTotal[ek] ?? s.customsValueUsd;
+    if (total > t.montoMax) {
+      add('agregado', (total - t.montoMax) / t.montoMax, 'Valor agregado por consignatario excede el umbral',
+        { entityTotal: total, cap: t.montoMax });
+    }
   }
 
   // direcciones: smurfing signal — distinct entities at one address ≥ threshold

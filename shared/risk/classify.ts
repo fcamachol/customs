@@ -58,7 +58,8 @@ export function scoreManifest(
   const weights = resolveWeights(options?.weights);
   const bands = resolveBands(options?.bands);
 
-  // PASS 1: per-name monthly count (history + current) and distinct-entities-per-address.
+  // PASS 1: per-name monthly count (history + current), distinct-entities-per-address,
+  // and per-entity aggregate customs value (F13: split-shipment cap).
   //
   // monthlyNameCount is keyed by norm(consignee.name) to match the name-keyed rows
   // stored in monthly_history (server/src/services/monthlyHistory.ts). Using entityKey
@@ -67,6 +68,9 @@ export function scoreManifest(
   // manifest bbdd recurrence would never fire for RFC/CURP-bearing consignees.
   const monthlyNameCount: Record<string, number> = { ...monthlyHistoryCounts };
   const addressEntities: Record<string, Set<string>> = {};
+  // F13: aggregate customs value per entity key across manifest rows.
+  // TODO(F20): must key on the same tokenized identity when F20 blind-index lands.
+  const entityValueTotal: Record<string, number> = {};
   for (const s of shipments) {
     const nameKey = norm(s.consignee.name);
     monthlyNameCount[nameKey] = (monthlyNameCount[nameKey] ?? 0) + 1;
@@ -75,6 +79,8 @@ export function scoreManifest(
     const ek = entityKey(s.consignee);
     const a = norm(s.consignee.address ?? '');
     if (a) (addressEntities[a] ??= new Set()).add(ek);
+    // F13: accumulate per-entity total value (skip non-finite to avoid NaN pollution)
+    entityValueTotal[ek] = (entityValueTotal[ek] ?? 0) + (Number.isFinite(s.customsValueUsd) ? s.customsValueUsd : 0);
   }
   const addressDistinctConsignees: Record<string, number> = {};
   for (const [a, set] of Object.entries(addressEntities)) addressDistinctConsignees[a] = set.size;
@@ -84,6 +90,7 @@ export function scoreManifest(
     weights,
     addressDistinctConsignees,
     monthlyNameCount,
+    entityValueTotal,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
   };

@@ -94,4 +94,51 @@ describe('prevalidatePedimento', () => {
     expect(r.status).toBe('REJECTED');
     expect(r.errors.join(' ')).toMatch(/contribuci/i);
   });
+
+  // ─── F13: cross-row $2,500 aggregate by consignee ──────────────────────────
+  it('rejects when two same-consignee partidas at $2,499 each exceed the $2,500 aggregate cap', () => {
+    const p = basePedimento();
+    // Two partidas for the same consignee (keyed by consigneeKey), each $2,499
+    p.partidas = [
+      {
+        secuencia: 1, fraccion: '99010001', umc: '6', cantidadUmc: 1,
+        paisVendedor: 'CHN', paisOrigenDestino: 'CHN',
+        description: 'CAMISA', valorAduanaUsd: 2499, contribuciones: [],
+        observation: 'GUIA 1 VALOR 2499.00 USD NOMBRE Ana RFC-CURP TOMM020922D40',
+        consigneeKey: 'tomm020922d40',
+      },
+      {
+        secuencia: 2, fraccion: '99010001', umc: '6', cantidadUmc: 1,
+        paisVendedor: 'CHN', paisOrigenDestino: 'CHN',
+        description: 'PANTALON', valorAduanaUsd: 2499, contribuciones: [],
+        observation: 'GUIA 2 VALOR 2499.00 USD NOMBRE Ana RFC-CURP TOMM020922D40',
+        consigneeKey: 'tomm020922d40',
+      },
+    ];
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('REJECTED');
+    expect(r.errors.some((e) => /agregado/i.test(e) || /fraccionado/i.test(e))).toBe(true);
+  });
+
+  it('approves when two different-consignee partidas are each at $2,499 (no cross-entity aggregation)', () => {
+    const p = basePedimento();
+    p.partidas = [
+      {
+        secuencia: 1, fraccion: '99010001', umc: '6', cantidadUmc: 1,
+        paisVendedor: 'CHN', paisOrigenDestino: 'CHN',
+        description: 'CAMISA', valorAduanaUsd: 2499, contribuciones: [],
+        observation: 'GUIA 1 VALOR 2499.00 USD NOMBRE Ana RFC-CURP TOMM020922D40',
+        consigneeKey: 'tomm020922d40',
+      },
+      {
+        secuencia: 2, fraccion: '99010001', umc: '6', cantidadUmc: 1,
+        paisVendedor: 'CHN', paisOrigenDestino: 'CHN',
+        description: 'PANTALON', valorAduanaUsd: 2499, contribuciones: [],
+        observation: 'GUIA 2 VALOR 2499.00 USD NOMBRE Bob RFC-CURP GUMM710831UYA',
+        consigneeKey: 'gumm710831uya',
+      },
+    ];
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('APPROVED');
+  });
 });

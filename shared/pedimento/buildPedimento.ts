@@ -2,6 +2,7 @@ import type { Shipment } from '../types/shipment';
 import type { Pedimento, PedimentoHeader, PedimentoPartida } from '../types/pedimento';
 import { genericFractionFor } from './fraction';
 import { partidaObservation } from './observation';
+import { entityKey } from '../risk/signals';
 
 export interface BuildOptions {
   numeroPedimento: string;
@@ -34,6 +35,8 @@ export function buildPedimento(shipments: Shipment[], opts: BuildOptions): Pedim
       guideId: s.guideId, valueUsd: s.customsValueUsd,
       consigneeName: s.consignee.name, id: (s.consignee.curp ?? s.consignee.rfc),
     }),
+    // F13: entity key for aggregate split-shipment cap in the prevalidator
+    consigneeKey: entityKey(s.consignee),
   }));
 
   const valorDolares = shipments.reduce((a, s) => a + s.customsValueUsd, 0);

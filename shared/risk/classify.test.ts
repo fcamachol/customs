@@ -112,4 +112,33 @@ describe('scoreManifest', () => {
     expect(out[0].reasons.length).toBeGreaterThan(0);
     expect(out[0].incidences).toEqual(out[0].reasons.map((r) => r.detail));
   });
+
+  // ─── F13: cross-row $2,500 aggregate by consignee ──────────────────────────
+  it('two same-RFC rows at $2,499 each escalate above verde with agregado reason', () => {
+    const sameRfc = 'PERJ800101AA8';
+    const ships = [
+      ship({ consignee: { name: 'Ana', rfc: sameRfc, address: 'Calle A' }, customsValueUsd: 2499 }),
+      ship({ consignee: { name: 'Ana', rfc: sameRfc, address: 'Calle A' }, customsValueUsd: 2499 }),
+    ];
+    const out = scoreManifest(ships, {});
+    // Both rows share the same entity key → total $4,998 → agregado fires
+    expect(out[0].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
+    expect(out[1].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
+    // Neither row triggers per-row monto (each is ≤ $2,500), but aggregate fires
+    expect(out[0].band).not.toBe('verde');
+    expect(out[1].band).not.toBe('verde');
+  });
+
+  it('two different-RFC rows at $2,499 each stay verde (no cross-entity aggregation)', () => {
+    // Use two RFCs that both pass checksum validation so no id signal fires
+    const ships = [
+      ship({ consignee: { name: 'Ana', rfc: 'ADM130509UQ0', address: 'Calle A' }, customsValueUsd: 2499 }),
+      ship({ consignee: { name: 'Bob', rfc: 'GUMM710831UYA', address: 'Calle B' }, customsValueUsd: 2499 }),
+    ];
+    const out = scoreManifest(ships, {});
+    expect(out[0].reasons.every((r) => r.signalId !== 'agregado')).toBe(true);
+    expect(out[1].reasons.every((r) => r.signalId !== 'agregado')).toBe(true);
+    expect(out[0].band).toBe('verde');
+    expect(out[1].band).toBe('verde');
+  });
 });

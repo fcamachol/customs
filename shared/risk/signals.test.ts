@@ -109,4 +109,30 @@ describe('gradeSignals', () => {
       ctx({ addressDistinctConsignees: { shared: 5 } }));
     expect(smurf.find((c) => c.signalId === 'direcciones')!.points).toBeGreaterThan(0);
   });
+
+  // ─── F13: agregado — cross-row aggregate value by consignee ────────────────
+  it('agregado fires when entityValueTotal for one RFC sums above $2,500', () => {
+    // Two rows of $2,499 each for the same RFC → total $4,998 → fires
+    const s = gradeShip({ name: 'A', rfc: 'PERJ800101AA8', customsValueUsd: 2499 });
+    const ek = 'PERJ800101AA8'; // entityKey uses cleanId → uppercase
+    const codes = gradeSignals(s, ctx({ entityValueTotal: { [ek]: 4998 } }));
+    const ag = codes.find((c) => c.signalId === 'agregado');
+    expect(ag).toBeDefined();
+    expect(ag!.points).toBeGreaterThan(0);
+    expect(ag!.evidence).toMatchObject({ entityTotal: 4998, cap: 2500 });
+  });
+
+  it('agregado does NOT fire when two distinct RFCs each sum to $2,499', () => {
+    // RFC A total $2,499 — under cap — no fire
+    const sA = gradeShip({ name: 'Ana', rfc: 'PERJ800101AA8', customsValueUsd: 2499 });
+    const ekA = 'PERJ800101AA8';
+    const codesA = gradeSignals(sA, ctx({ entityValueTotal: { [ekA]: 2499 } }));
+    expect(codesA.find((c) => c.signalId === 'agregado')).toBeUndefined();
+
+    // RFC B total $2,499 — also under cap — no fire
+    const sB = gradeShip({ name: 'Bob', rfc: 'ADM130509UQ0', customsValueUsd: 2499 });
+    const ekB = 'ADM130509UQ0';
+    const codesB = gradeSignals(sB, ctx({ entityValueTotal: { [ekB]: 2499 } }));
+    expect(codesB.find((c) => c.signalId === 'agregado')).toBeUndefined();
+  });
 });

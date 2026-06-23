@@ -26,20 +26,29 @@ export const RULESET = {
     /** Distinct consignees per address (smurfing signal) */
     addressDistinctConsignees: 3,
   },
-  /** Per-signal point weights; calibrated in Task 7 so the 501-row fixture lands rojo ~5-10% */
+  /** Per-signal point weights; calibrated in Task 7 so the 501-row fixture lands rojo ~5-10%.
+   * F13 adds `agregado` (weight 20, mirroring `monto`) for cross-row entity aggregation. */
   weights: {
     id: 25,
     cantidad: 15,
     monto: 20,
+    /** F13: split-shipment aggregate cap — same weight as per-row monto signal. */
+    agregado: 20,
     direcciones: 20,
     prohibidos: 60,
     pirateria: 60,
     bbdd: 18,
   },
   /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
-   * Calibrated in Task 7: with the 501-row golden fixture these thresholds produce
-   * rojo ≈ 6.6% and verde ≈ 87% — inside the 3–12% / >40% targets. */
-  bands: { amarillo: 10, rojo: 17 },
+   * Calibrated in Task 7: with the 501-row golden fixture these thresholds produced
+   * rojo ≈ 6.6% and verde ≈ 87% — inside the 3–12% / >40% targets.
+   * F13 recalibration: adding agregado (weight 20) raises maxPoints 218 → 238, which
+   * compresses all scores by ~8%. Without adjustment rojo dropped to ~2.2% (below the
+   * 3% floor). amarillo lowered 10 → 8 to capture split-shipment cases; rojo lowered
+   * 17 → 15 to restore the 3–12% rojo% target with the higher maxPoints.
+   * Post-F13 501-row distribution (bands {amarillo:8,rojo:15}): verde=47.3%, amarillo=45.9%,
+   * rojo=6.8% — within all targets (3–12% rojo, >40% verde). */
+  bands: { amarillo: 8, rojo: 15 },
 } as const;
 
 export type Thresholds = {
@@ -71,10 +80,10 @@ export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, u
  * Per-signal point weights.
  * Note: `consignatarios` is NOT in Weights — it is subsumed into the `bbdd` (Ficha-124)
  * recurrence signal in Task 5. `direcciones` is the smurfing signal (distinct consignees
- * per address).
+ * per address). `agregado` (F13) is the cross-row split-shipment aggregate cap.
  */
 export type Weights = Record<
-  'id' | 'cantidad' | 'monto' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd',
+  'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd',
   number
 >;
 

@@ -27,7 +27,8 @@ export function buildPedimento(shipments: Shipment[], opts: BuildOptions): Pedim
     description: s.description,
     valorAduanaUsd: s.customsValueUsd,
     precioPagado: s.customsValueUsd,
-    contribuciones: [{ concepto: 'IVA', tasa: 19, importe: Math.round(s.customsValueUsd * opts.tipoCambio * 0.19 * 100) / 100 }],
+    // T1/IMD pedimentos must carry no contributions (regla de no contribución)
+    contribuciones: [],
     observation: partidaObservation({
       guideId: s.guideId, valueUsd: s.customsValueUsd,
       consigneeName: s.consignee.name, id: (s.consignee.curp ?? s.consignee.rfc),

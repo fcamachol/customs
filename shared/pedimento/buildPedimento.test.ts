@@ -25,5 +25,6 @@ describe('buildPedimento', () => {
     expect(ped.header.totalBultos).toBe(2);
     expect(ped.partidas[0].observation).toMatch(/^GUIA .+ VALOR 100.00 USD NOMBRE JUAN PEREZ RFC-CURP TOMM020922D40$/);
     expect(ped.partidas[0].paisVendedor).toBe('CHN');
+    expect(ped.partidas[0].contribuciones).toEqual([]);
   });
 });

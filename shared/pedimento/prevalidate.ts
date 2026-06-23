@@ -34,6 +34,7 @@ export function prevalidatePedimento(p: Pedimento): PrevalidationResult {
     if (!/^GUIA .+ VALOR .+ USD NOMBRE .+ RFC-CURP .+$/.test(pa.observation)) {
       warnings.push(`Partida ${pa.secuencia}: formato de observación no estándar.`);
     }
+    if (p.header.clave === 'T1' && pa.contribuciones && pa.contribuciones.length) errors.push(`Partida ${pa.secuencia}: T1/IMD no admite contribuciones (regla de no contribución).`);
   });
 
   return { status: errors.length ? 'REJECTED' : 'APPROVED', errors, warnings };

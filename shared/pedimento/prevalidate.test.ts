@@ -33,7 +33,7 @@ function basePedimento(): Pedimento {
     },
     partidas: [{
       secuencia: 1, fraccion: '99010001', umc: '6', cantidadUmc: 1, paisVendedor: 'CHN', paisOrigenDestino: 'CHN',
-      description: 'TRAJE', valorAduanaUsd: 120, contribuciones: [{ concepto: 'IVA', tasa: 19, importe: 22 }],
+      description: 'TRAJE', valorAduanaUsd: 120, contribuciones: [],
       observation: 'GUIA 1 VALOR 120.00 USD NOMBRE X RFC-CURP TOMM020922D40',
     }],
   };
@@ -59,5 +59,12 @@ describe('prevalidatePedimento', () => {
     expect(r.status).toBe('APPROVED');
     expect(r.errors.join(' ')).not.toMatch(/importador/i);
     expect(r.warnings.join(' ')).toMatch(/dígito verificador/i);
+  });
+  it('rejects a T1 partida carrying contributions', () => {
+    const p = basePedimento();
+    p.partidas[0].contribuciones = [{ concepto: 'IVA', tasa: 19, importe: 22 }];
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('REJECTED');
+    expect(r.errors.join(' ')).toMatch(/contribuci/i);
   });
 });

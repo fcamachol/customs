@@ -7,6 +7,7 @@ import { encryptConsignee } from '../crypto/fieldCrypto';
 import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
 import { computeLock } from '../services/manifestLock';
+import { withTransaction } from '../db/tx';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const MAX_ROWS = 5000; // synchronous ceiling (async deferred to Increment 2)
@@ -83,16 +84,18 @@ manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturis
   const promotable = staged.rows.filter((r) => r.status === 'valid' || r.status === 'warning');
   if (!promotable.length) { res.status(422).json({ error: 'No hay filas promovibles' }); return; }
 
-  for (const r of promotable) {
-    await query(
-      `INSERT INTO shipments (id, manifest_id, data, idempotency_key)
-       VALUES (gen_random_uuid(), $1, $2, $3)
-       ON CONFLICT (manifest_id, idempotency_key)
-       DO UPDATE SET data = EXCLUDED.data, risk_score = NULL, risk_color = NULL, risk_incidences = NULL`,
-      [id, JSON.stringify(r.data), r.idempotency_key]);
-  }
-  await query(`UPDATE manifest_staging_rows SET promoted_at = now() WHERE manifest_id=$1 AND status IN ('valid','warning')`, [id]);
-  await query(`UPDATE manifests SET ingestion_status='promoted', risk_stale=true WHERE id=$1`, [id]);
+  await withTransaction(async (q) => {
+    for (const r of promotable) {
+      await q(
+        `INSERT INTO shipments (id, manifest_id, data, idempotency_key)
+         VALUES (gen_random_uuid(), $1, $2, $3)
+         ON CONFLICT (manifest_id, idempotency_key)
+         DO UPDATE SET data = EXCLUDED.data, risk_score = NULL, risk_color = NULL, risk_incidences = NULL`,
+        [id, JSON.stringify(r.data), r.idempotency_key]);
+    }
+    await q(`UPDATE manifest_staging_rows SET promoted_at = now() WHERE manifest_id=$1 AND status IN ('valid','warning')`, [id]);
+    await q(`UPDATE manifests SET ingestion_status='promoted', risk_stale=true WHERE id=$1`, [id]);
+  });
   await recordAudit({ userId: req.user!.userId, action: 'PROMOTE_MANIFEST', entity: 'manifest', entityId: id, after: { promoted: promotable.length }, ip: req.ip });
 
   res.json({ promoted: promotable.length });

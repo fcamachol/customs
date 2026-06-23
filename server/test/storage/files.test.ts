@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { saveFile } from '../../src/storage/files';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
@@ -16,5 +17,14 @@ describe('file storage', () => {
     const { rows } = await query('SELECT kind, size_bytes FROM files WHERE id=$1', [meta.id]);
     expect(rows[0].kind).toBe('manifest');
     expect(Number(rows[0].size_bytes)).toBe(buf.length);
+  });
+
+  it('stores and returns a SHA-256 content hash', async () => {
+    const bytes = Buffer.from('hello manifest');
+    const expected = createHash('sha256').update(bytes).digest('hex');
+    const meta = await saveFile({ kind: 'manifest', originalName: 'm.xlsx', bytes, uploadedBy: null });
+    expect(meta.contentHash).toBe(expected);
+    const { rows } = await query('SELECT content_hash FROM files WHERE id=$1', [meta.id]);
+    expect(rows[0].content_hash).toBe(expected);
   });
 });

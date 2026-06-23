@@ -85,5 +85,9 @@ describe('RegistroView', () => {
       '/api/manifests/m1/risk',
     ]);
     expect(mUpload).toHaveBeenCalledWith('/api/manifests', expect.any(FormData));
+    // Verify FormData contents: clientName and mawbReference must reach the upload
+    const fd = mUpload.mock.calls[0][1] as FormData;
+    expect(fd.get('clientName')).toBe('ACME');
+    expect(fd.get('mawbReference')).toBe('369-94705516');
   });
 });

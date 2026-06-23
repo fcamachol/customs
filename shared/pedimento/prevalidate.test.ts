@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { isValidTaxId, prevalidatePedimento } from './prevalidate';
+import { isValidTaxIdStrict } from '../parsing/taxId';
 import type { Pedimento } from '../types/pedimento';
 
 describe('isValidTaxId', () => {
-  it('accepts a 13-char RFC and an 18-char CURP', () => {
+  it('accepts a 13-char RFC and an 18-char CURP (shape only)', () => {
     expect(isValidTaxId('TOMM020922D40')).toBe(true);          // 13
     expect(isValidTaxId('AERA790828HBSRBR04')).toBe(true);     // 18
     expect(isValidTaxId('SHORT')).toBe(false);
+  });
+});
+
+describe('isValidTaxIdStrict', () => {
+  it('also enforces the check digit', () => {
+    expect(isValidTaxIdStrict('AERA790828HBSRBR04')).toBe(true);  // valid CURP
+    expect(isValidTaxIdStrict('ADM130509UQ0')).toBe(true);        // valid RFC
+    expect(isValidTaxIdStrict('PERJ800101AAA')).toBe(false);      // shape ok, checksum wrong
   });
 });
 
@@ -43,5 +52,12 @@ describe('prevalidatePedimento', () => {
   it('rejects a non-9901 fracción', () => {
     const p = basePedimento(); p.partidas[0].fraccion = '12345678';
     expect(prevalidatePedimento(p).status).toBe('REJECTED');
+  });
+  it('warns (does not reject) on a shape-valid importer RFC with a wrong check digit', () => {
+    const p = basePedimento(); p.header.importer.rfc = 'PERJ800101AAA'; // shape ok, checksum wrong
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('APPROVED');
+    expect(r.errors.join(' ')).not.toMatch(/importador/i);
+    expect(r.warnings.join(' ')).toMatch(/dígito verificador/i);
   });
 });

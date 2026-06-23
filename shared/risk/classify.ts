@@ -1,6 +1,6 @@
 import type { Shipment } from '../types/shipment';
 import { norm, runSignals, type RiskContext } from './signals';
-import { RULESET } from './ruleset';
+import { RULESET, resolveThresholds, type Thresholds } from './ruleset';
 
 export type RiskColor = 'verde' | 'amarillo' | 'rojo';
 
@@ -23,11 +23,22 @@ export interface ScoreOptions {
   piracyBrands?: string[];
   /** Optional override list for prohibited keywords (falls back to built-in list when omitted) */
   prohibitedKeywords?: string[];
+  /** Optional threshold overrides (D4 / RF-24, from the `validation_params` config key) */
+  thresholds?: Partial<Record<keyof Thresholds, unknown>>;
+}
+
+/**
+ * The ruleset version stamped on each scored row. When admin threshold overrides are active,
+ * the version is suffixed with `+cfg` so an audited run records that configured (not default)
+ * rules applied — keeps O2/O3 traceability intact.
+ */
+export function rulesetVersionFor(options?: ScoreOptions): string {
+  return options?.thresholds ? `${RULESET.version}+cfg` : RULESET.version;
 }
 
 export function scoreManifest(
   shipments: Shipment[],
-  monthlyHistoryNames: Set<string>,
+  monthlyHistoryCounts: Record<string, number>,
   options?: ScoreOptions,
 ): ScoredShipment[] {
   // Count line-item ROWS per consignee name / address to match the authoritative
@@ -42,12 +53,14 @@ export function scoreManifest(
     if (n) nameCounts[n] = (nameCounts[n] ?? 0) + 1;
     if (a) addressCounts[a] = (addressCounts[a] ?? 0) + 1;
   }
+  const version = rulesetVersionFor(options);
   const ctx: RiskContext = {
     nameCounts,
     addressCounts,
-    monthlyHistoryNames,
+    monthlyHistoryCounts,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
+    thresholds: resolveThresholds(options?.thresholds),
   };
   return shipments.map((s) => {
     const signals = runSignals(s, ctx);
@@ -57,6 +70,6 @@ export function scoreManifest(
     // Severity override (RF-04): critical signals force rojo regardless of count
     const hasCritical = firedIds.has('prohibidos') || firedIds.has('pirateria');
     const color: RiskColor = hasCritical ? 'rojo' : classifyScore(score);
-    return { shipment: s, score, color, incidences: fired.map((f) => f.incidence!).filter(Boolean), ruleset_version: RULESET.version };
+    return { shipment: s, score, color, incidences: fired.map((f) => f.incidence!).filter(Boolean), ruleset_version: version };
   });
 }

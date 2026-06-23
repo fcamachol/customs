@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
-import { scoreManifest } from '../../../shared/risk/classify';
-import { RULESET } from '../../../shared/risk/ruleset';
-import { deleteManifestHistory, loadHistoryNames, recordNames } from '../services/monthlyHistory';
+import { scoreManifest, rulesetVersionFor } from '../../../shared/risk/classify';
+import type { Thresholds } from '../../../shared/risk/ruleset';
+import { deleteManifestHistory, loadHistoryCounts, recordNames } from '../services/monthlyHistory';
 import { buildRiskWorkbook } from '../services/artifacts';
 import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
@@ -27,10 +27,13 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
   // Load optional catalog overrides from config (fallback to built-in defaults when unset)
   const prohibitedKeywords = await loadConfig<string[]>('prohibited');
   const piracyBrands = await loadConfig<string[]>('piracy_brands');
+  // D4 / RF-24: admin-configurable thresholds (umbrales) from the validation_params catalog
+  const thresholds = await loadConfig<Partial<Record<keyof Thresholds, unknown>>>('validation_params');
 
   await deleteManifestHistory(req.params.id);
-  const history = await loadHistoryNames(period, req.params.id);
-  const scored = scoreManifest(shipments, history, { prohibitedKeywords, piracyBrands });
+  const history = await loadHistoryCounts(period, req.params.id);
+  const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds };
+  const scored = scoreManifest(shipments, history, scoreOptions);
 
   for (const sc of scored) {
     await query('UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3 WHERE id=$4',
@@ -63,7 +66,8 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
     bytes: riskBuffer,
     uploadedBy: req.user!.userId,
   });
-  await query('UPDATE manifests SET risk_file_id=$1, ruleset_version=$2 WHERE id=$3', [riskFile.id, RULESET.version, req.params.id]);
+  // Clear risk_stale: the persisted score now matches the current data again.
+  await query('UPDATE manifests SET risk_file_id=$1, ruleset_version=$2, risk_stale=false WHERE id=$3', [riskFile.id, rulesetVersionFor(scoreOptions), req.params.id]);
 
   await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 

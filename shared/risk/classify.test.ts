@@ -18,7 +18,7 @@ function ship(over: Partial<Shipment> = {}): Shipment {
     id: Math.random().toString(), mawbReference: 'M', description: 'camisa',
     hsCode: '9901000100', quantity: 1, unit: 'PCE', customsValueUsd: 100, currency: 'USD',
     originCountry: 'CN', guideId: 'g',
-    consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 1' },
+    consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 1' },
     sender: { name: 'S' }, platform: { commercialName: 'P' }, ...over,
   } as Shipment;
 }
@@ -27,10 +27,10 @@ describe('scoreManifest', () => {
   it('consignatario does NOT fire at 2 same-name rows (threshold is >=3)', () => {
     // Two rows, same consignee name → row count = 2, threshold >=3 → should NOT fire
     const twoShips = [
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 1' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 2' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 1' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 2' } }),
     ];
-    const twoOut = scoreManifest(twoShips, new Set());
+    const twoOut = scoreManifest(twoShips, {});
     expect(twoOut[0].incidences).not.toContain('Varios paquetes por consignatario');
     expect(twoOut[0].color).toBe('verde');
   });
@@ -38,21 +38,21 @@ describe('scoreManifest', () => {
   it('consignatario fires at 3 same-name rows (threshold >=3, row-based)', () => {
     // Three rows, same consignee name → row count = 3 → SHOULD fire
     const threeShips = [
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 1' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 2' } }),
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle 3' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 1' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 2' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle 3' } }),
     ];
-    const threeOut = scoreManifest(threeShips, new Set());
+    const threeOut = scoreManifest(threeShips, {});
     expect(threeOut[0].incidences).toContain('Varios paquetes por consignatario');
   });
 
   it('direccion fires at 2 same-address rows (threshold >=2, row-based)', () => {
     // Two rows sharing the same address → row count = 2 → SHOULD fire
     const ships = [
-      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AAA', address: 'Calle X' } }),
-      ship({ consignee: { name: 'Bob', rfc: 'PERJ800101AAA', address: 'Calle X' } }),
+      ship({ consignee: { name: 'Ana', rfc: 'PERJ800101AA8', address: 'Calle X' } }),
+      ship({ consignee: { name: 'Bob', rfc: 'PERJ800101AA8', address: 'Calle X' } }),
     ];
-    const out = scoreManifest(ships, new Set());
+    const out = scoreManifest(ships, {});
     expect(out[0].incidences).toContain('Misma dirección de entrega');
   });
 
@@ -61,7 +61,7 @@ describe('scoreManifest', () => {
     const s = ship({ description: 'armas de fuego' });
     const out = scoreManifest(
       [s],
-      new Set(),
+      {},
       { prohibitedKeywords: ['armas'] },
     );
     expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Artículos prohibidos')]));
@@ -73,7 +73,7 @@ describe('scoreManifest', () => {
     const s = ship({ description: 'bolso gucci falso' });
     const out = scoreManifest(
       [s],
-      new Set(),
+      {},
       { piracyBrands: ['gucci'] },
     );
     expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Piratería')]));
@@ -83,7 +83,7 @@ describe('scoreManifest', () => {
   it('score 2-3 with no critical signal -> amarillo', () => {
     // Two flags: invalid RFC (short) + value too high — no prohibidos/pirateria
     const s = ship({ customsValueUsd: 5000, consignee: { name: 'Bob', rfc: 'BAD', address: 'Calle 9' } });
-    const out = scoreManifest([s], new Set());
+    const out = scoreManifest([s], {});
     expect(out[0].score).toBeGreaterThanOrEqual(2);
     expect(out[0].color).toBe('amarillo');
     // Confirm no critical signals were fired
@@ -92,7 +92,7 @@ describe('scoreManifest', () => {
   });
 
   it('ruleset_version is set on every scored shipment', () => {
-    const out = scoreManifest([ship({})], new Set());
+    const out = scoreManifest([ship({})], {});
     expect(out[0].ruleset_version).toBe('2026-06');
   });
 });

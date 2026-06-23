@@ -13,7 +13,7 @@ async function addShipment(name: string, value: number, guideId = name) {
   const s = {
     id: crypto.randomUUID(), mawbReference: '369-1', description: 'camisa', hsCode: '9901000100',
     quantity: 1, unit: 'PCE', customsValueUsd: value, currency: 'USD', originCountry: 'CN', guideId,
-    consignee: { name, rfc: 'PERJ800101AAA', address: 'Calle 1' }, sender: { name: 'S' }, platform: { commercialName: 'P' },
+    consignee: { name, rfc: 'PERJ800101AA8', address: 'Calle 1' }, sender: { name: 'S' }, platform: { commercialName: 'P' },
   };
   await query('INSERT INTO shipments (id, manifest_id, data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 }

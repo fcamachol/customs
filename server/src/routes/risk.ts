@@ -9,6 +9,7 @@ import { buildRiskWorkbook } from '../services/artifacts';
 import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
 import { decryptShipment } from '../crypto/fieldCrypto';
+import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
 
 export const riskRouter = Router();
 
@@ -35,18 +36,22 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
   const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds };
   const scored = scoreManifest(shipments, history, scoreOptions);
 
-  for (const sc of scored) {
-    await query('UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3 WHERE id=$4',
-      [sc.score, sc.color, JSON.stringify(sc.incidences), sc.shipment.id]);
+  // FIX: use rows[i].id (table PK) not sc.shipment.id (data JSON field) — they can differ.
+  for (const [i, sc] of scored.entries()) {
+    await query(
+      'UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3, risk_reasons=$4, ruleset_hash=$5 WHERE id=$6',
+      [sc.score, sc.color, JSON.stringify(sc.incidences), JSON.stringify(sc.reasons), sc.ruleset_hash, rows[i].id],
+    );
   }
   await recordNames(shipments.map((s) => s.consignee.name), period, req.params.id);
 
-  // PRD 3-bucket mapping (D2): aprobados=verde, noIdentificados=amarillo, validarEnPrevio=rojo
+  // PRD 3-bucket mapping (D2): aprobados=verde, noIdentificados=amarillo, validarEnPrevio=rojo, sinDatos=gris
   const summary = {
     analizados: scored.length,
     aprobados: scored.filter((s) => s.color === 'verde').length,
     noIdentificados: scored.filter((s) => s.color === 'amarillo').length,
     validarEnPrevio: scored.filter((s) => s.color === 'rojo').length,
+    sinDatos: scored.filter((s) => s.color === 'gris').length,
   };
 
   // Load branding config for XLS header
@@ -71,14 +76,20 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
 
   await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 
+  // Legacy parity: build the set of normalized consignee names from the monthly history keys
+  // (history is Record<normalizedName, count> — the keys are already normalized)
+  const monthlyDbNames = new Set(Object.keys(history));
+  const legacyRows = scoreLegacyParity(shipments, monthlyDbNames);
+
   res.json({
-    rows: scored.map((s) => ({
+    rows: scored.map((s, i) => ({
       mwb: s.shipment.mawbReference,
       guide: s.shipment.guideId,
       consignee: s.shipment.consignee.name,
       senderCity: s.shipment.sender.address ?? '',
       senderCountry: s.shipment.platform.countryOfOrigin ?? s.shipment.originCountry,
       resultado: s.color,
+      resultadoLegacy: legacyRows[i].resultado,
       motivo: s.incidences.join('; '),
     })),
     summary,

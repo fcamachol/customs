@@ -48,14 +48,22 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
     // Required numbers (strict — no silent coercion)
     const valueRaw = get('core.customsValueUsd');
     const v = parseNumberStrict(valueRaw);
-    if (!v.ok) err('customsValueUsd', v.code === 'ambiguous_locale' ? 'value_ambiguous' : 'value_not_a_number',
-      v.code === 'ambiguous_locale' ? 'Valor ambiguo (separador de miles/decimal)' : 'Valor declarado no numérico', valueRaw);
-    else if (v.value <= 0) err('customsValueUsd', 'value_non_positive', 'Valor debe ser > 0 (declare valor reconstruido si es muestra sin valor comercial)', valueRaw);
+    if (!v.ok) {
+      const vErr = v as { ok: false; code: 'not_a_number' | 'ambiguous_locale' };
+      err('customsValueUsd', vErr.code === 'ambiguous_locale' ? 'value_ambiguous' : 'value_not_a_number',
+        vErr.code === 'ambiguous_locale' ? 'Valor ambiguo (separador de miles/decimal)' : 'Valor declarado no numérico', valueRaw);
+    } else if (v.value <= 0) {
+      err('customsValueUsd', 'value_non_positive', 'Valor debe ser > 0 (declare valor reconstruido si es muestra sin valor comercial)', valueRaw);
+    }
 
     const qtyRaw = get('core.quantity');
     const q = parseNumberStrict(qtyRaw);
-    if (!q.ok) err('quantity', q.code === 'ambiguous_locale' ? 'quantity_ambiguous' : 'quantity_not_a_number', 'Cantidad no numérica', qtyRaw);
-    else if (q.value <= 0) err('quantity', 'quantity_non_positive', 'Cantidad debe ser > 0', qtyRaw);
+    if (!q.ok) {
+      const qErr = q as { ok: false; code: 'not_a_number' | 'ambiguous_locale' };
+      err('quantity', qErr.code === 'ambiguous_locale' ? 'quantity_ambiguous' : 'quantity_not_a_number', 'Cantidad no numérica', qtyRaw);
+    } else if (q.value <= 0) {
+      err('quantity', 'quantity_non_positive', 'Cantidad debe ser > 0', qtyRaw);
+    }
 
     // Currency
     const currencyRaw = get('core.currency');

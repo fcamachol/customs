@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
 import type { FormEvent, ChangeEvent, DragEvent } from 'react';
-import { Search, Upload } from 'lucide-react';
+import { Search, Upload, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } from 'lucide-react';
 import { apiGet, apiPost } from '../api';
-import { Card, Field, Input, Button } from './ui';
+import { Card, Field, Input, Button, StatusPill } from './ui';
+import type { Resultado } from './ui';
+import { ReportTabs } from './ReportTabs';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
@@ -30,6 +32,18 @@ interface PedimentoForm {
   claveAduanaDespacho: string;
 }
 
+// RF-08/RF-10 — pedimento scan verdict returned by the upload endpoint.
+type ScanVerdict = 'clean' | 'suspicious' | 'blocked' | 'unscannable';
+interface ScanFinding { motor: string; code: string; severity: string; message: string }
+interface ScanResult { verdict: ScanVerdict; findings: ScanFinding[]; motors: { rf08: ScanVerdict; rf10: ScanVerdict } }
+
+const SCAN_META: Record<ScanVerdict, { resultado: Resultado; label: string; icon: typeof ShieldCheck; note: string }> = {
+  clean:       { resultado: 'verde',    label: 'Sin contenido activo', icon: ShieldCheck,    note: 'El PDF no contiene comandos ejecutables ni códigos QR sospechosos.' },
+  suspicious:  { resultado: 'amarillo', label: 'Revisar hallazgos',     icon: ShieldAlert,    note: 'Se detectó contenido potencialmente activo. Revisar antes de continuar.' },
+  blocked:     { resultado: 'rojo',     label: 'Bloqueado',             icon: ShieldX,        note: 'El PDF fue rechazado por contener contenido activo no permitido.' },
+  unscannable: { resultado: 'gris',     label: 'No analizable',         icon: ShieldQuestion, note: 'No fue posible analizar parte del documento (p. ej. códigos QR).' },
+};
+
 const EMPTY_FORM: PedimentoForm = {
   pedimento: '',
   tasaImportacion: '',
@@ -55,6 +69,9 @@ export default function SeguimientoView() {
   const [form, setForm] = useState<PedimentoForm>(EMPTY_FORM);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [lock, setLock] = useState<{ editable: boolean; reason: string | null }>({ editable: true, reason: null });
+  const [version, setVersion] = useState<number>(0);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Block 3 — PDF upload
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -62,6 +79,7 @@ export default function SeguimientoView() {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [scan, setScan] = useState<ScanResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleSearch(e: FormEvent) {
@@ -72,6 +90,7 @@ export default function SeguimientoView() {
     setRecords([]);
     setSaveSuccess(false);
     setUploadSuccess(false);
+    setScan(null);
     setPdfFile(null);
     setSearchLoading(true);
     try {
@@ -84,7 +103,7 @@ export default function SeguimientoView() {
     }
   }
 
-  function handleSelect(r: RecordSummary) {
+  async function handleSelect(r: RecordSummary) {
     setSelectedId(r.id);
     setSelectedLabel(`${r.mawbReference} — ${r.clientName}`);
     setForm(EMPTY_FORM);
@@ -92,7 +111,36 @@ export default function SeguimientoView() {
     setSaveSuccess(false);
     setUploadError(null);
     setUploadSuccess(false);
+    setScan(null);
     setPdfFile(null);
+    setLock({ editable: true, reason: null });
+    setVersion(0);
+    setRefreshKey((k) => k + 1);
+    // Pre-load any previously-captured import data + lock state (edit-before-lock).
+    try {
+      const detail = await apiGet<{
+        importData: Record<string, string> | null;
+        importDataVersion: number;
+        lock: { editable: boolean; reason: string | null };
+      }>(`/api/records/${r.id}`);
+      setVersion(detail.importDataVersion ?? 0);
+      setLock(detail.lock ?? { editable: true, reason: null });
+      const d = detail.importData;
+      if (d) {
+        setForm({
+          ...EMPTY_FORM,
+          tasaImportacion: d.tasaImportacion ?? '',
+          fechaEntrada: d.fechaEntrada ?? '',
+          claveT1: d.cveT1 ?? '',
+          agenteAduanal: d.agenteAduanal ?? '',
+          patente: d.patente ?? '',
+          claveAduanaEntrada: d.claveAduanaEntrada ?? '',
+          claveAduanaDespacho: d.claveAduanaDespacho ?? '',
+        });
+      }
+    } catch {
+      // Non-fatal: leave the form empty if the detail can't be loaded.
+    }
   }
 
   function handleFormChange(e: ChangeEvent<HTMLInputElement>) {
@@ -106,7 +154,7 @@ export default function SeguimientoView() {
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      await apiPost(`/api/manifests/${selectedId}/import-data`, {
+      const resp = await apiPost<{ version: number }>(`/api/manifests/${selectedId}/import-data`, {
         cveT1: form.claveT1,
         patente: form.patente,
         agenteAduanal: form.agenteAduanal,
@@ -114,8 +162,11 @@ export default function SeguimientoView() {
         fechaEntrada: form.fechaEntrada,
         claveAduanaEntrada: form.claveAduanaEntrada,
         claveAduanaDespacho: form.claveAduanaDespacho,
+        version,
       });
+      setVersion(resp.version);
       setSaveSuccess(true);
+      setRefreshKey((k) => k + 1); // refresh the on-screen Reporte General + risk-stale banner
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Error al guardar.');
     }
@@ -149,6 +200,7 @@ export default function SeguimientoView() {
     setUploadLoading(true);
     setUploadError(null);
     setUploadSuccess(false);
+    setScan(null);
     try {
       const fd = new FormData();
       fd.append('file', pdfFile);
@@ -157,8 +209,9 @@ export default function SeguimientoView() {
         headers: authHeaders(),
         body: fd,
       });
+      const data = await res.json().catch(() => ({}));
+      if (data?.scan) setScan(data.scan as ScanResult); // present on both success and 422 (blocked)
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? res.statusText);
       }
       setUploadSuccess(true);
@@ -169,7 +222,7 @@ export default function SeguimientoView() {
     }
   }
 
-  const disabled = !selectedId;
+  const disabled = !selectedId || !lock.editable;
 
   return (
     <div className="space-y-6">
@@ -223,9 +276,17 @@ export default function SeguimientoView() {
         )}
       </Card>
 
+      {/* On-screen reports — review the data while capturing/correcting the pedimento */}
+      {selectedId && <ReportTabs recordId={selectedId} refreshKey={refreshKey} />}
+
       {/* Block 2 — Pedimento capture */}
-      <Card className={`p-6 shadow-sm transition-opacity ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
+      <Card className={`p-6 shadow-sm transition-opacity ${!selectedId ? 'opacity-50 pointer-events-none' : ''}`}>
         <h2 className="mb-4 text-sm font-bold text-slate-700 uppercase tracking-wide">Captura de pedimento</h2>
+        {selectedId && !lock.editable && (
+          <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
+            {lock.reason ?? 'Este registro está bloqueado para edición.'}
+          </p>
+        )}
         <form onSubmit={handleSave} className="mt-4 space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Pedimento" htmlFor="pedimento">
@@ -402,6 +463,37 @@ export default function SeguimientoView() {
             Pedimento PDF subido correctamente.
           </p>
         )}
+
+        {/* RF-08/RF-10 — security scan verdict */}
+        {scan && (() => {
+          const meta = SCAN_META[scan.verdict] ?? SCAN_META.unscannable;
+          const Icon = meta.icon;
+          return (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center gap-3">
+                <Icon className="h-5 w-5 text-slate-500" />
+                <span className="text-sm font-semibold text-slate-700">Análisis de seguridad del PDF</span>
+                <StatusPill resultado={meta.resultado} label={meta.label} />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">{meta.note}</p>
+              {scan.findings.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {scan.findings.map((f, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs">
+                      <span className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                        f.severity === 'critical' ? 'bg-red-500' : f.severity === 'warning' ? 'bg-amber-500' : 'bg-slate-400'
+                      }`} />
+                      <span className="text-slate-600">
+                        <span className="font-mono text-[11px] text-slate-400">{f.motor === 'RF10_QR_TROJAN' ? 'QR' : 'PDF'}</span>{' '}
+                        {f.message}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
 
         {pdfFile && (
           <div className="mt-4">

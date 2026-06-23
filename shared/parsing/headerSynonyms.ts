@@ -9,7 +9,7 @@ const TABLE: Record<string, string> = {
   'unidad de medida': 'core.unit',
   'valor en aduana declarado': 'core.customsValueUsd',
   'moneda': 'core.currency',
-  'pais de procedencia': 'core.originCountry',
+  'pais de procedencia': 'core.procedenceCountry',
   'fecha de arribo a territorio nacional': 'core.arrivalDate',
   'no de guia aerea o documento de transporte': 'core.guideId',
   'tasa global o cuota aplicada': 'core.appliedRate',
@@ -43,7 +43,7 @@ const TABLE: Record<string, string> = {
   'codigo de ciudad del remitente': 'sender.cityCode',
   'nombre del pais del remitente': 'sender.countryName',
   'codigo de pais del remitente': 'sender.countryCode',
-  'id': 'consignee.rfc',
+  'id': 'consignee.taxId', // generic ID — classified (RFC vs CURP) & routed at parse time
   'destinatario cnne': 'consignee.name',
   'email': 'consignee.email',
   'direccion de cnne': 'consignee.address',

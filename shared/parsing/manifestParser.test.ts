@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseManifestRows } from './manifestParser';
+import { parseManifestRows, mapRowToShipment } from './manifestParser';
 
 const rows = [
   {
@@ -22,9 +22,27 @@ describe('parseManifestRows', () => {
     const out = parseManifestRows(rows, 'MAWB-1');
     expect(out.shipments[0].consignee.rfc).toBe('TOMM020922D40');
     expect(out.shipments[0].consignee.address).toBe('Calle 1 Depto 2');
-    expect(out.shipments[0].originCountry).toBe('CN');
+    expect(out.shipments[0].procedenceCountry).toBe('CN'); // was originCountry
+    expect(out.shipments[0].originCountry).toBe('');        // no manufacture-origin column → empty
     expect(out.shipments[0].sender.name).toBe('SHEIN HK');
     expect(out.shipments[0].platform.commercialName).toBe('SHEIN');
+  });
+  it('routes a generic ID column to CURP when the value is an 18-char CURP', () => {
+    const { shipments } = parseManifestRows(
+      [{ 'ID': 'AERA790828HBSRBR04', 'Destinatario (CNNE)': 'Aarón Agustín Arce Robles' }], 'M');
+    expect(shipments[0].consignee.curp).toBe('AERA790828HBSRBR04');
+    expect(shipments[0].consignee.rfc).toBe('');
+  });
+  it('routes a generic ID column to RFC when the value is an RFC', () => {
+    const { shipments } = parseManifestRows(
+      [{ 'ID': 'PERJ800101AA8', 'Destinatario (CNNE)': 'Ana' }], 'M');
+    expect(shipments[0].consignee.rfc).toBe('PERJ800101AA8');
+    expect(shipments[0].consignee.curp).toBeUndefined();
+  });
+  it('derives procedenceCountry from the sender country column', () => {
+    const { shipments } = parseManifestRows(
+      [{ 'Código de país del remitente': 'CN', 'Destinatario (CNNE)': 'Juan' }], 'M');
+    expect(shipments[0].procedenceCountry).toBe('CN');
   });
   it('reports unmapped headers instead of dropping silently', () => {
     const out = parseManifestRows([{ 'Columna Rara': 'x', 'RFC': 'AAA010101AAA' }], 'M');

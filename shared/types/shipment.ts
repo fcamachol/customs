@@ -46,7 +46,8 @@ export interface ShipmentCore {          // cols 1–16
   unit: string;
   customsValueUsd: number;
   currency: string;
-  originCountry: string;
+  originCountry: string;       // país de origen (manufactured) — NOT derivable from shipper
+  procedenceCountry?: string;  // país de procedencia (shipped-from) — from sender country
   arrivalDate?: string;
   guideId: string;
   appliedRate?: number;

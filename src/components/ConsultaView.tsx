@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Search, FileText } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
 import { Card, Input, Button, FileCard } from './ui';
+import { ReportTabs } from './ReportTabs';
 
 interface RecordSummary {
   id: string;
@@ -30,6 +31,17 @@ export default function ConsultaView() {
   const [detail, setDetail] = useState<RecordDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Load all records on mount so newly-created analyses appear without clicking "Buscar".
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    apiGet<RecordSummary[]>('/api/records?q=')
+      .then((r) => { if (active) setRecords(r); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al buscar registros.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -111,6 +123,8 @@ export default function ConsultaView() {
           ))}
         </ul>
       )}
+
+      {detail && <ReportTabs recordId={detail.id} />}
 
       {detail && (
         <Card className="p-5 shadow-sm">

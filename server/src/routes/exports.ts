@@ -2,14 +2,15 @@ import { Router } from 'express';
 import * as XLSX from 'xlsx';
 import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
-import { canSeeAll } from '../auth/access';
 import { recordAudit } from '../services/audit';
-import type { Claims } from '../auth/token';
-import { toLayoutRows } from '../../../shared/export/layoutExport';
-import { buildReportRows } from '../../../shared/export/reportBuilder';
-import type { Shipment } from '../../../shared/types/shipment';
 import { saveFile, readFileById } from '../storage/files';
-import { decryptShipment } from '../crypto/fieldCrypto';
+import {
+  assertManifestAccess,
+  loadShipments,
+  layoutRowsFor,
+  buildRiskXlsxRows,
+  buildReportRowsForManifest,
+} from '../services/reportData';
 
 export const exportsRouter = Router();
 
@@ -26,24 +27,10 @@ function send(res: any, buf: Buffer, name: string) {
   res.send(buf);
 }
 
-// Returns true if the user may access the given manifest (admin/autoridad always; capturista only own).
-async function assertManifestAccess(manifestId: string, user: Claims): Promise<boolean> {
-  if (canSeeAll(user.role)) return true;
-  const { rows } = await query<{ created_by: string | null }>(
-    'SELECT created_by FROM manifests WHERE id=$1', [manifestId]);
-  return rows.length > 0 && rows[0].created_by === user.userId;
-}
-
-async function loadShipments(manifestId: string): Promise<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }[]> {
-  const { rows } = await query<{ data: Shipment; risk_color: string | null; risk_incidences: string[] | null }>(
-    'SELECT data, risk_color, risk_incidences FROM shipments WHERE manifest_id=$1', [manifestId]);
-  return rows.map((r) => ({ ...r, data: decryptShipment(r.data) }));
-}
-
 exportsRouter.get('/:id/layout.xlsx', requireAuth, async (req, res) => {
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
   const rows = await loadShipments(req.params.id);
-  send(res, workbook(toLayoutRows(rows.map((r) => r.data))), 'LayOut_sistema.xlsx');
+  send(res, workbook(layoutRowsFor(rows)), 'LayOut_sistema.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_LAYOUT', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });
 
@@ -65,8 +52,7 @@ exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
 
   // Fallback: regenerate (no stored file yet)
   const rows = await loadShipments(req.params.id);
-  const out = rows.map((r) => ({ Guia: r.data.guideId, Destinatario: r.data.consignee.name, Resultado: r.risk_color ?? '', Motivo: (r.risk_incidences ?? []).join('; ') }));
-  send(res, workbook(out), 'Analisis_de_Riesgo.xlsx');
+  send(res, workbook(buildRiskXlsxRows(rows)), 'Analisis_de_Riesgo.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id, ip: req.ip });
 });
 
@@ -86,29 +72,9 @@ exportsRouter.get('/:id/report.xlsx', requireAuth, async (req, res) => {
     }
   }
 
-  // Generate + persist
-  const m = await query(
-    `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email, c.platform
-     FROM manifests m
-     LEFT JOIN clients c ON c.id = m.client_id
-     WHERE m.id = $1`,
-    [req.params.id],
-  );
-  const manifest = m.rows[0] ?? {};
+  // Generate + persist (shared builder — identical rows to the on-screen Reporte General)
   const rows = await loadShipments(req.params.id);
-  const reportRows = buildReportRows({
-    shipments: rows.map((r) => r.data),
-    riskByGuide: Object.fromEntries(rows.map((r) => [r.data.guideId, { color: r.risk_color ?? '', incidences: r.risk_incidences ?? [] }])),
-    importData: manifest.import_data ?? undefined,
-    client: manifest.name ? {
-      name: manifest.name,
-      tax_id: manifest.tax_id ?? undefined,
-      address: manifest.address ?? undefined,
-      phone: manifest.phone ?? undefined,
-      email: manifest.email ?? undefined,
-      platform: manifest.platform ?? undefined,
-    } : undefined,
-  });
+  const reportRows = await buildReportRowsForManifest(req.params.id, rows);
   const buf = workbook(reportRows);
 
   // Persist report artifact

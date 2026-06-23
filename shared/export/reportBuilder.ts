@@ -25,11 +25,20 @@ export interface ClientData {
   };
 }
 
+/** D3: validated RFC/CURP for a CNNE, keyed by the manifest ID (rfc/curp/id del CNNE). */
+export interface ValidatedRfc {
+  rfc?: string;
+  curp?: string;
+  name?: string;
+}
+
 export interface ReportInput {
   shipments: Shipment[];
   riskByGuide: Record<string, { color: string; incidences: string[] }>;
   importData?: ImportData;
   client?: ClientData;
+  /** D3 enrichment: lookup of validated RFC/CURP keyed by normalized consignee ID */
+  validatedRfcs?: Record<string, ValidatedRfc>;
 }
 
 export function buildReportRows(input: ReportInput): Record<string, string>[] {
@@ -41,6 +50,17 @@ export function buildReportRows(input: ReportInput): Record<string, string>[] {
 
     // Start with the full 34-column layout row
     const out: Record<string, string> = { ...row };
+
+    // D3: enrich the CNNE RFC/CURP from the validated-RFCs catalog when the manifest only carried
+    // an ID. Lookup by the consignee's id (rfc/curp/id), normalized; only fills empty cells.
+    if (input.validatedRfcs) {
+      const key = (shipment.consignee.rfc || shipment.consignee.curp || '').trim().toUpperCase();
+      const hit = key ? input.validatedRfcs[key] : undefined;
+      if (hit) {
+        if (hit.rfc && !out['Consignatario RFC']) out['Consignatario RFC'] = hit.rfc;
+        if (hit.curp && !out['Consignatario CURP']) out['Consignatario CURP'] = hit.curp;
+      }
+    }
 
     // Overlay import_data fields (authoritative)
     if (input.importData) {

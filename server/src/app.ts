@@ -8,6 +8,7 @@ import { riskRouter } from './routes/risk';
 import { pedimentoRouter } from './routes/pedimento';
 import { recordsRouter } from './routes/records';
 import { exportsRouter } from './routes/exports';
+import { reportsRouter } from './routes/reports';
 import { dashboardRouter } from './routes/dashboard';
 import { filesRouter } from './routes/files';
 import { auditRouter } from './routes/audit';
@@ -42,6 +43,7 @@ export function createApp(): Express {
   app.use('/api/manifests', pedimentoRouter);
   app.use('/api/records', recordsRouter);
   app.use('/api/records', exportsRouter);
+  app.use('/api/records', reportsRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/files', filesRouter);
   app.use('/api/audit', auditRouter);

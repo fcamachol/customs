@@ -19,8 +19,15 @@ const recordDetail = {
   },
 };
 
+const reportsBundle = {
+  risk: [], report: [], layout: [],
+  lock: { editable: true, reason: null },
+  riskStale: false, masked: false, generatedAt: '2026-01-01', contentHash: 'abc',
+};
+
 vi.mock('../api', () => ({
   apiGet: vi.fn(async (url: string) => {
+    if (url.includes('/reports.json')) return reportsBundle;
     if (url.includes('/api/records/rec-1')) return recordDetail;
     if (url.includes('/api/records')) return recordsList;
     throw new Error('not found');
@@ -53,10 +60,12 @@ describe('ConsultaView', () => {
     const recordButton = await screen.findByText(/MAWB-123/);
     fireEvent.click(recordButton);
 
+    // 'Análisis de Riesgo' / 'Reporte General' now also appear as on-screen tab labels, so use
+    // getAllByText for those; 'LayOut' and 'Pedimento' remain unique to the download FileCards.
     await waitFor(() => {
-      expect(screen.getByText('Análisis de Riesgo')).toBeTruthy();
+      expect(screen.getAllByText('Análisis de Riesgo').length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('Reporte General')).toBeTruthy();
+    expect(screen.getAllByText('Reporte General').length).toBeGreaterThan(0);
     expect(screen.getByText('LayOut')).toBeTruthy();
     expect(screen.getByText('Pedimento')).toBeTruthy();
   });

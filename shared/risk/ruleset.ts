@@ -81,15 +81,15 @@ export type Bands = { amarillo: number; rojo: number };
 
 /**
  * Merge admin-configurable weight overrides over the built-in defaults.
- * Negative and non-finite values are rejected (config floors) so a misconfigured
- * catalog can never disable a signal.
+ * Non-positive and non-finite values are rejected (config floors) so a misconfigured
+ * catalog can never disable a signal; a weight of zero would silently drop the signal.
  */
 export function resolveWeights(overrides?: Partial<Record<keyof Weights, unknown>>): Weights {
   const base: Weights = { ...RULESET.weights };
   if (!overrides) return base;
   for (const k of Object.keys(base) as (keyof Weights)[]) {
     const v = overrides[k];
-    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) base[k] = v;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) base[k] = v;
   }
   return base;
 }

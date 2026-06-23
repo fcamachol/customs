@@ -9,12 +9,24 @@ describe('ruleset weights/bands floors', () => {
     expect(w.id).toBe(10);                                  // valid override accepted
   });
 
+  it('rejects zero weight override — zero disables the signal (safety floor)', () => {
+    const w = resolveWeights({ prohibidos: 0 });
+    expect(w.prohibidos).toBe(RULESET.weights.prohibidos); // zero rejected → falls back to default
+  });
+
   it('rejects inverted bands (rojo must be > amarillo)', () => {
     const b = resolveBands({ amarillo: 80, rojo: 20 });
     expect(b).toEqual(RULESET.bands); // inverted -> fall back to defaults
   });
 
-  it('maxPoints sums all signal weights', () => {
+  it('rejects equal bands (rojo === amarillo is also inverted)', () => {
+    const b = resolveBands({ amarillo: 45, rojo: 45 });
+    expect(b).toEqual(RULESET.bands); // equal -> inverted check triggers -> fall back to defaults
+  });
+
+  it('maxPoints sums all signal weights — literal guard catches accidental future changes', () => {
+    // 25 + 15 + 20 + 20 + 60 + 60 + 18 = 218
+    expect(maxPoints(RULESET.weights)).toBe(218);
     expect(maxPoints(RULESET.weights)).toBe(
       Object.values(RULESET.weights).reduce((a, b) => a + b, 0),
     );

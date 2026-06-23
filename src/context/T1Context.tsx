@@ -168,7 +168,7 @@ function t1Reducer(state: T1AppState, action: T1Action): T1AppState {
         destino: '9',
         genericRfc: 'EDM930614781',
         fecha,
-        paisOrigen: validShipments[0]?.originCountry || 'US',
+        paisOrigen: validShipments[0]?.originCountry || '',
         transporte: state.manifest.transportMode === 'AIR' ? '1' : '2',
       };
 

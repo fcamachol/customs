@@ -33,6 +33,18 @@ export async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: authHeaders() });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  return res.json();
+}
+
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { ...authHeaders() }, body: form });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Error');
+  return res.json();
+}
+
 export async function apiDownload(path: string, filename: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(res.statusText);

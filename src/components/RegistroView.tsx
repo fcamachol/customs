@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { Upload, Check } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import { apiPost } from '../api';
+import { apiPost, apiUpload } from '../api';
 import { Stepper, Button, Field, Input } from './ui';
 import { RiskSummary, RiskResultTable, type RiskRow, type RiskSummaryData } from './RiskResultTable';
 
-interface ManifestResponse {
+interface StagingResponse {
   manifestId: string;
-  shipmentCount: number;
+  ingestionStatus: string;
+  counts: { total: number; valid: number; warning: number; error: number };
+  rejected: { rowIndex: number; field: string; message: string }[];
+  warnings: { rowIndex: number; field: string; message: string }[];
   unmappedHeaders: string[];
+  duplicateHeaders: string[];
 }
 
 interface RiskResponse {
@@ -37,6 +40,7 @@ export default function RegistroView() {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unmappedHeaders, setUnmappedHeaders] = useState<string[]>([]);
+  const [staging, setStaging] = useState<StagingResponse | null>(null);
   const [result, setResult] = useState<RiskResponse | null>(null);
 
   // Checklist animation state: how many validations are "checked"
@@ -60,6 +64,7 @@ export default function RegistroView() {
     setError(null);
     setResult(null);
     setUnmappedHeaders([]);
+    setStaging(null);
 
     if (!file) {
       setError('Selecciona un archivo de manifiesto.');
@@ -71,19 +76,23 @@ export default function RegistroView() {
     setCheckedCount(0);
 
     try {
-      const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(firstSheet, { defval: '' });
+      const form = new FormData();
+      form.append('file', file);
+      form.append('mawbReference', mawbReference);
+      if (clientName) form.append('clientName', clientName);
 
-      const manifest = await apiPost<ManifestResponse>('/api/manifests', {
-        mawbReference,
-        clientName,
-        rows,
-      });
-      setUnmappedHeaders(manifest.unmappedHeaders ?? []);
+      const stagingResult = await apiUpload<StagingResponse>('/api/manifests', form);
+      setUnmappedHeaders(stagingResult.unmappedHeaders ?? []);
+      setStaging(stagingResult);
 
-      const risk = await apiPost<RiskResponse>(`/api/manifests/${manifest.manifestId}/risk`, {});
+      if (stagingResult.counts.error > 0) {
+        // Stop at review step — operator must fix and re-upload
+        setCurrent(1);
+        return;
+      }
+
+      await apiPost(`/api/manifests/${stagingResult.manifestId}/promote`, {});
+      const risk = await apiPost<RiskResponse>(`/api/manifests/${stagingResult.manifestId}/risk`, {});
       setResult(risk);
 
       // Ensure all validations appear checked before moving to result
@@ -109,6 +118,19 @@ export default function RegistroView() {
       {unmappedHeaders.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
           Columnas no mapeadas: {unmappedHeaders.join(', ')}
+        </div>
+      )}
+
+      {staging && staging.counts.error > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+          <p className="font-medium text-amber-800">
+            {staging.counts.error} fila(s) con errores no se importarán. Corríjalas y vuelva a subir el archivo.
+          </p>
+          <ul className="mt-2 list-disc pl-5 text-amber-900">
+            {staging.rejected.slice(0, 50).map((r, i) => (
+              <li key={i}>Fila {r.rowIndex + 1} — {r.field}: {r.message}</li>
+            ))}
+          </ul>
         </div>
       )}
 

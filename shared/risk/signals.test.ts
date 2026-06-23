@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runSignals, type RiskContext } from './signals';
+import { runSignals, type RiskContext, gradeSignals, entityKey, type EntityContext } from './signals';
 import type { Shipment } from '../types/shipment';
+import { RULESET } from './ruleset';
 
 function ship(over: Partial<Shipment> = {}): Shipment {
   return {
@@ -58,5 +59,52 @@ describe('runSignals', () => {
     // 2 prior + 1 current = 3 total → not >3 → no longer fires on the first repeat
     const ctx: RiskContext = { nameCounts: { 'juan perez': 1 }, addressCounts: {}, monthlyHistoryCounts: { 'juan perez': 2 } };
     expect(runSignals(ship(), ctx).find((f) => f.id === 'bbdd')?.flagged).toBe(false);
+  });
+});
+
+// ─── gradeSignals — graded, entity-aware signals (Task 5) ───────────────────
+
+function gradeShip(over: Partial<Shipment> & { name: string; rfc?: string; curp?: string; address?: string }): Shipment {
+  const { name, rfc, curp, address, ...rest } = over;
+  return {
+    id: 'x', mawbReference: 'M', description: 'camisa', hsCode: '6109',
+    quantity: 1, unit: 'PCE', customsValueUsd: 100, currency: 'USD', originCountry: 'CN', guideId: 'g',
+    consignee: { name, rfc: rfc ?? '', curp, address }, sender: { name: 'S' }, platform: { commercialName: 'P' },
+    ...rest,
+  } as Shipment;
+}
+const ctx = (over: Partial<EntityContext> = {}): EntityContext => ({
+  thresholds: RULESET.thresholds, weights: RULESET.weights,
+  addressDistinctConsignees: {}, entityMonthlyCount: {}, ...over,
+});
+
+describe('gradeSignals', () => {
+  it('a normal repeat buyer (same name+address, in-band) fires NOTHING', () => {
+    const codes = gradeSignals(gradeShip({ name: 'Repeat', rfc: 'PERJ800101AA8', address: 'a' }), ctx());
+    expect(codes).toEqual([]);
+  });
+
+  it('prohibited hit fires full weight and forces rojo', () => {
+    const codes = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', description: 'pastilla' }), ctx());
+    const p = codes.find((c) => c.signalId === 'prohibidos')!;
+    expect(p.points).toBe(RULESET.weights.prohibidos);
+    expect(p.forcesBand).toBe('rojo');
+  });
+
+  it('Ficha-124 bbdd fires only when entity monthly count > 3, graded by excess', () => {
+    const k = entityKey({ rfc: 'PERJ800101AA8', name: 'A' });
+    const none = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ entityMonthlyCount: { [k]: 3 } }));
+    expect(none.find((c) => c.signalId === 'bbdd')).toBeUndefined();
+    const fires = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8' }), ctx({ entityMonthlyCount: { [k]: 6 } }));
+    expect(fires.find((c) => c.signalId === 'bbdd')!.points).toBeGreaterThan(0);
+  });
+
+  it('direcciones fires on many distinct entities at one address, not on a single repeat buyer', () => {
+    const single = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', address: 'shared' }),
+      ctx({ addressDistinctConsignees: { shared: 1 } }));
+    expect(single.find((c) => c.signalId === 'direcciones')).toBeUndefined();
+    const smurf = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', address: 'shared' }),
+      ctx({ addressDistinctConsignees: { shared: 5 } }));
+    expect(smurf.find((c) => c.signalId === 'direcciones')!.points).toBeGreaterThan(0);
   });
 });

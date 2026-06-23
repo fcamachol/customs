@@ -1,7 +1,7 @@
 import type { Shipment } from '../types/shipment';
 import { cleanId, validateTaxId } from '../parsing/taxId';
 import { matchesBrand, matchesProhibited } from './lists';
-import { resolveThresholds, type Thresholds } from './ruleset';
+import { resolveThresholds, type Thresholds, type Weights } from './ruleset';
 
 export interface RiskContext {
   nameCounts: Record<string, number>;
@@ -50,4 +50,111 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
     { id: 'bbdd', flagged: (ctx.monthlyHistoryCounts[name] ?? 0) + (ctx.nameCounts[name] ?? 0) >= t.importacionesMes, incidence: 'Varias importaciones en el mes' },
   ];
   return signals.map((r) => ({ ...r, incidence: r.flagged ? r.incidence : undefined }));
+}
+
+// ─── Task 5: Graded, entity-aware signals with reason codes ──────────────────
+
+export type SignalId = 'id' | 'cantidad' | 'monto' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd';
+
+export interface ReasonCode {
+  signalId: SignalId;
+  points: number;
+  weight: number;
+  detail: string;
+  evidence?: Record<string, unknown>;
+  forcesBand?: 'rojo';
+}
+
+export interface EntityContext {
+  thresholds: Thresholds;
+  weights: Weights;
+  /** Distinct consignee count per normalized address (smurfing indicator). */
+  addressDistinctConsignees: Record<string, number>;
+  /** Monthly operation count per entity key (history + current) for Ficha-124. */
+  entityMonthlyCount: Record<string, number>;
+  piracyBrands?: string[];
+  prohibitedKeywords?: string[];
+}
+
+/** Entity identity: RFC/CURP when present (deterministic), else normalized name. */
+export function entityKey(c: { rfc?: string; curp?: string; name: string }): string {
+  const id = cleanId(c.curp ?? c.rfc ?? '');
+  return id || `name:${norm(c.name)}`;
+}
+
+const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/**
+ * Graded, entity-aware signal evaluation.
+ * Returns one ReasonCode per fired signal (points > 0 only).
+ * A normal repeat buyer with a valid ID and in-band values fires nothing.
+ */
+export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
+  const t = ctx.thresholds;
+  const w = ctx.weights;
+  const out: ReasonCode[] = [];
+
+  const add = (
+    signalId: SignalId,
+    frac: number,
+    detail: string,
+    evidence?: Record<string, unknown>,
+    forces?: 'rojo',
+  ): void => {
+    const points = Math.round(w[signalId] * clamp01(frac));
+    if (points > 0) {
+      out.push({ signalId, points, weight: w[signalId], detail, evidence, forcesBand: forces });
+    }
+  };
+
+  // id: missing or shape/checksum invalid → full weight
+  const idRaw = cleanId(s.consignee.curp ?? s.consignee.rfc ?? '');
+  const idCheck = validateTaxId(idRaw);
+  if (!idRaw || !idCheck.shapeValid || !idCheck.checksumValid) {
+    add('id', 1, !idRaw ? 'Falta RFC/CURP' : 'RFC/CURP inválido', { id: idRaw });
+  }
+
+  // cantidad: graded by excess over threshold
+  if (s.quantity > t.cantidad) {
+    add('cantidad', (s.quantity - t.cantidad) / t.cantidad, 'Demasiados productos', { quantity: s.quantity });
+  }
+
+  // monto: below min → full weight; above max → graded by excess
+  if (s.customsValueUsd < t.montoMin) {
+    add('monto', 1, 'Valor declarado incorrecto (muy bajo)', { value: s.customsValueUsd });
+  } else if (s.customsValueUsd > t.montoMax) {
+    add('monto', (s.customsValueUsd - t.montoMax) / t.montoMax, 'Valor declarado incorrecto (muy alto)', { value: s.customsValueUsd });
+  }
+
+  // direcciones: smurfing signal — distinct entities at one address ≥ threshold
+  const normAddr = norm(s.consignee.address ?? '');
+  const distinctCount = normAddr ? (ctx.addressDistinctConsignees[normAddr] ?? 0) : 0;
+  if (distinctCount >= t.addressDistinctConsignees) {
+    add(
+      'direcciones',
+      (distinctCount - (t.addressDistinctConsignees - 1)) / t.addressDistinctConsignees,
+      'Misma dirección de entrega',
+      { distinctConsignees: distinctCount },
+    );
+  }
+
+  // prohibidos: full weight + forces rojo
+  const prohibited = matchesProhibited(s.description, ctx.prohibitedKeywords);
+  if (prohibited) {
+    add('prohibidos', 1, `Artículos prohibidos (${prohibited})`, { matched: prohibited }, 'rojo');
+  }
+
+  // pirateria: full weight + forces rojo
+  const brand = matchesBrand(s.description, ctx.piracyBrands);
+  if (brand) {
+    add('pirateria', 1, `Piratería (${brand})`, { matched: brand }, 'rojo');
+  }
+
+  // bbdd (Ficha-124): fires only when entityMonthlyCount > 3, graded by excess over 3
+  const mc = ctx.entityMonthlyCount[entityKey(s.consignee)] ?? 0;
+  if (mc > 3) {
+    add('bbdd', (mc - 3) / 3, 'Varias importaciones en el mes', { monthlyCount: mc });
+  }
+
+  return out;
 }

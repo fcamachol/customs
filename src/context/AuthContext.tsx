@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { apiPost } from '../api';
 
-interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad'; }
+interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad' | 'super_admin'; }
 interface AuthValue { user: User | null; login: (u: string, p: string, code?: string) => Promise<void>; logout: () => void; }
 
 const Ctx = createContext<AuthValue | null>(null);

@@ -17,7 +17,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.user || !roles.includes(req.user.role)) { res.status(403).json({ error: 'Forbidden' }); return; }
+    const role = req.user?.role;
+    // super_admin is a superset of admin: it satisfies any admin-gated route.
+    const ok = !!role && (roles.includes(role) || (role === 'super_admin' && roles.includes('admin')));
+    if (!ok) { res.status(403).json({ error: 'Forbidden' }); return; }
     next();
   };
 }

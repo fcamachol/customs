@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-export type Role = 'capturista' | 'admin' | 'autoridad';
+export type Role = 'capturista' | 'admin' | 'autoridad' | 'super_admin';
 export interface Claims { userId: string; role: Role; }
 const SECRET = process.env.JWT_SECRET ?? 'change-me-in-production';
 export function signToken(claims: Claims): string { return jwt.sign(claims, SECRET, { expiresIn: '8h' }); }

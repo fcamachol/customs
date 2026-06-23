@@ -27,4 +27,5 @@ export interface IngestResult {
   unmappedHeaders: string[];
   duplicateHeaders: string[];
   fileRejected: boolean;
+  headerRow: string[];
 }

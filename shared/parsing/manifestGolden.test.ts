@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import { validateManifest } from './validateManifest';
 
 describe('golden: real MANIFEST_TEST.xlsx', () => {
-  const path = resolve(__dirname, '../../.playwright-mcp/MANIFEST_TEST.xlsx');
+  const path = resolve(__dirname, '__fixtures__/MANIFEST_TEST.xlsx');
   const wb = XLSX.read(readFileSync(path), { type: 'buffer' });
   const aoa = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', blankrows: false });
   const header = (aoa[0] as unknown[]).map((h) => String(h ?? '').trim());

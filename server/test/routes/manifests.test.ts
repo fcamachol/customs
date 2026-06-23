@@ -63,6 +63,19 @@ describe('GET /api/manifests/:id/staging', () => {
   });
 });
 
+describe('PII encryption at rest', () => {
+  it('stores consignee curp as v1:-encrypted in manifest_staging_rows', async () => {
+    await request(app)
+      .post('/api/manifests')
+      .set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-pii')
+      .attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    const r = await query<{ data: any }>('SELECT data FROM manifest_staging_rows ORDER BY row_index LIMIT 1');
+    const c = r.rows[0].data.consignee;
+    expect((c.curp ?? c.rfc ?? '')).toMatch(/^v1:/);
+  });
+});
+
 describe('POST /api/manifests/:id/promote', () => {
   it('promotes valid+warning rows to shipments and is idempotent on re-upload', async () => {
     const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)

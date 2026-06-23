@@ -30,21 +30,24 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
   }
 
   const file = await saveFile({ kind: 'manifest', originalName: req.file.originalname, bytes: req.file.buffer, uploadedBy: req.user!.userId });
-  const m = await query(
-    `INSERT INTO manifests (mawb_reference, client_name, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
-     VALUES ($1,$2,$3,'staged',$4,$5,$6) RETURNING id`,
-    [mawbReference, clientName ?? null, req.user!.userId, file.id, JSON.stringify(result.rows.length ? Object.keys(result.rows[0].shipment) : []), file.contentHash],
-  );
-  const manifestId = m.rows[0].id;
 
-  for (const row of result.rows) {
-    const encrypted = { ...row.shipment, consignee: encryptConsignee(row.shipment.consignee) };
-    await query(
-      `INSERT INTO manifest_staging_rows (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [manifestId, row.rowIndex, row.idempotencyKey, JSON.stringify(encrypted), row.status, JSON.stringify(row.errors), JSON.stringify(row.warnings)],
+  const manifestId = await withTransaction(async (q) => {
+    const m = await q(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
+       VALUES ($1,$2,$3,'staged',$4,$5,$6) RETURNING id`,
+      [mawbReference, clientName ?? null, req.user!.userId, file.id, JSON.stringify(result.headerRow), file.contentHash],
     );
-  }
+    const id = m.rows[0].id;
+    for (const row of result.rows) {
+      const encrypted = { ...row.shipment, consignee: encryptConsignee(row.shipment.consignee) };
+      await q(
+        `INSERT INTO manifest_staging_rows (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, row.rowIndex, row.idempotencyKey, JSON.stringify(encrypted), row.status, JSON.stringify(row.errors), JSON.stringify(row.warnings)],
+      );
+    }
+    return id;
+  });
 
   await recordAudit({ userId: req.user!.userId, action: 'INGEST_MANIFEST', entity: 'manifest', entityId: manifestId,
     after: { fileContentHash: file.contentHash, counts: result.counts }, ip: req.ip });

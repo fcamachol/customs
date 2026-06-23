@@ -19,7 +19,7 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
     if (seen.get(path) === 2) duplicateHeaders.push(h);
   }
   if (duplicateHeaders.length) {
-    return { rows: [], counts: { total: 0, valid: 0, warning: 0, error: 0 }, unmappedHeaders: [...unmapped], duplicateHeaders, fileRejected: true };
+    return { rows: [], counts: { total: 0, valid: 0, warning: 0, error: 0 }, unmappedHeaders: [...unmapped], duplicateHeaders, fileRejected: true, headerRow };
   }
 
   const lineSeq = new Map<string, number>();
@@ -116,5 +116,5 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
     warning: rows.filter((r) => r.status === 'warning').length,
     error: rows.filter((r) => r.status === 'error').length,
   };
-  return { rows, counts, unmappedHeaders: [...unmapped], duplicateHeaders: [], fileRejected: false };
+  return { rows, counts, unmappedHeaders: [...unmapped], duplicateHeaders: [], fileRejected: false, headerRow };
 }

@@ -1,5 +1,6 @@
 import type { Shipment } from '../types/shipment';
 import type { Pedimento, PedimentoHeader, PedimentoPartida } from '../types/pedimento';
+import { genericFractionFor } from './fraction';
 import { partidaObservation } from './observation';
 
 export interface BuildOptions {
@@ -21,7 +22,7 @@ const DEFAULT_OBS =
 export function buildPedimento(shipments: Shipment[], opts: BuildOptions): Pedimento {
   const partidas: PedimentoPartida[] = shipments.map((s, idx) => ({
     secuencia: idx + 1,
-    fraccion: s.hsCode.replace(/\./g, ''),
+    fraccion: genericFractionFor(s),
     umc: s.unit || '6', cantidadUmc: s.quantity || 1,
     paisVendedor: s.originCountry, paisOrigenDestino: s.originCountry,
     description: s.description,

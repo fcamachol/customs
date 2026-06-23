@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isValidTaxId, prevalidatePedimento } from './prevalidate';
+import { GENERIC_FRACTION_RE, GENERIC_T1_FRACTION, GENERIC_T1_FRACTION_LAYOUT } from './fraction';
 import { isValidTaxIdStrict } from '../parsing/taxId';
 import type { Pedimento } from '../types/pedimento';
 
@@ -38,6 +39,32 @@ function basePedimento(): Pedimento {
     }],
   };
 }
+
+describe('GENERIC_FRACTION_RE', () => {
+  it('accepts the canonical generic fraction', () => {
+    expect(GENERIC_FRACTION_RE.test(GENERIC_T1_FRACTION)).toBe(true);
+  });
+  it('accepts 9901 and 9902 variants with trailing digits', () => {
+    expect(GENERIC_FRACTION_RE.test('99010001')).toBe(true);
+    expect(GENERIC_FRACTION_RE.test('99010099')).toBe(true);
+    expect(GENERIC_FRACTION_RE.test('99020001')).toBe(true);
+    expect(GENERIC_FRACTION_RE.test('99020099')).toBe(true);
+  });
+  it('rejects non-9901/9902 fractions', () => {
+    expect(GENERIC_FRACTION_RE.test('12345678')).toBe(false);
+    expect(GENERIC_FRACTION_RE.test('8517000100')).toBe(false);
+    expect(GENERIC_FRACTION_RE.test('99010001')).toBe(true);
+  });
+});
+
+describe('layout fraction form', () => {
+  it('maps 8-char pedimento form to 10-char layout form with same significant digits', () => {
+    // GENERIC_T1_FRACTION = '99010001', GENERIC_T1_FRACTION_LAYOUT = '9901000100'
+    expect(GENERIC_T1_FRACTION).toBe('99010001');
+    expect(GENERIC_T1_FRACTION_LAYOUT).toBe('9901000100');
+    expect(GENERIC_T1_FRACTION_LAYOUT.substring(0, 8)).toBe(GENERIC_T1_FRACTION);
+  });
+});
 
 describe('prevalidatePedimento', () => {
   it('approves a well-formed pedimento', () => {

@@ -1,4 +1,5 @@
 import type { Pedimento } from '../types/pedimento';
+import { GENERIC_FRACTION_RE } from './fraction';
 import { CURP_RE, RFC_RE, cleanId, isValidTaxIdStrict } from '../parsing/taxId';
 
 export function isValidTaxId(id: string): boolean {
@@ -28,7 +29,7 @@ export function prevalidatePedimento(p: Pedimento): PrevalidationResult {
   if (!p.header.observations?.trim()) errors.push('Faltan observaciones a nivel pedimento.');
 
   p.partidas.forEach((pa) => {
-    if (!/^990[12]00\d{2}$/.test(pa.fraccion)) errors.push(`Partida ${pa.secuencia}: fracción debe iniciar con 9901/9902.`);
+    if (!GENERIC_FRACTION_RE.test(pa.fraccion)) errors.push(`Partida ${pa.secuencia}: fracción debe iniciar con 9901/9902.`);
     if (pa.valorAduanaUsd > 2500) errors.push(`Partida ${pa.secuencia}: valor excede $2,500 USD.`);
     if (pa.valorAduanaUsd <= 0) errors.push(`Partida ${pa.secuencia}: valor debe ser mayor a 0.`);
     if (!/^GUIA .+ VALOR .+ USD NOMBRE .+ RFC-CURP .+$/.test(pa.observation)) {

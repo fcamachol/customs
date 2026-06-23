@@ -1,6 +1,5 @@
 import type { Shipment } from '../types/shipment';
-
-const GENERIC_T1_FRACTION = '9901000100';
+import { GENERIC_T1_FRACTION_LAYOUT } from '../pedimento/fraction';
 
 export const LAYOUT_HEADERS = [
   'No. de registro T1', 'Patente AA', 'No. pedimento', 'Descripción de la mercancía',
@@ -19,7 +18,7 @@ export function toLayoutRows(shipments: Shipment[]): Record<string, string>[] {
   return shipments.map((s) => {
     const v = [
       s.t1RegistryId ?? '', s.patente ?? '', s.pedimentoNumber ?? '', s.description,
-      GENERIC_T1_FRACTION, String(s.quantity), 'PCS', String(s.customsValueUsd),
+      GENERIC_T1_FRACTION_LAYOUT, String(s.quantity), 'PCS', String(s.customsValueUsd),
       s.currency, s.originCountry, s.arrivalDate ?? '', s.guideId,
       s.appliedRate != null ? String(s.appliedRate) : '', 'N/A',
       s.customsEntryCode ?? '', s.customsClearanceCode ?? '',

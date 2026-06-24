@@ -73,8 +73,12 @@ export interface ExtractedPedimentoHeader {
   clave: string | null;
   importerRfc: string | null;
   agentRfc: string | null;
+  agencyRfc: string | null;
+  patente: string | null;
   customsClearanceCode: string | null;
   tipoCambio: number | null;
+  entryDate: string | null;     // ISO yyyy-mm-dd
+  paymentDate: string | null;   // ISO yyyy-mm-dd
   totalBultos: number | null;
 }
 

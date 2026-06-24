@@ -15,7 +15,9 @@ const EMPTY_SUBDIVISION: SubdivisionInfo = { masterGuide: null, ordinal: null, i
 
 // Fallback when a scan-clean PDF cannot be parsed (see best-effort note at the call site).
 const EMPTY_EXTRACTED: ExtractedPedimento = {
-  header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, customsClearanceCode: null, tipoCambio: null, totalBultos: null },
+  header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, agencyRfc: null,
+    patente: null, customsClearanceCode: null, tipoCambio: null, entryDate: null, paymentDate: null,
+    totalBultos: null },
   lines: [],
   extractionMethod: 'deterministic',
   usedPositional: false,

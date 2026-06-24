@@ -40,4 +40,13 @@ describe('parsePedimentoText', () => {
     expect(out.usedPositional).toBe(false);
     expect(out.confidence).toBeGreaterThan(0);
   });
+  it('exposes the extended header fields, defaulting to null when absent', () => {
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header).toMatchObject({
+      patente: null,        // SAMPLE has a numero but Task 2 wires patente; here it is still null
+      agencyRfc: null,
+      entryDate: null,
+      paymentDate: null,
+    });
+  });
 });

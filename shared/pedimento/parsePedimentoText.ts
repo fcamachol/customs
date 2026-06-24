@@ -34,7 +34,9 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   return {
     header: {
       numeroPedimento, clave, importerRfc,
-      agentRfc: null, customsClearanceCode: null, tipoCambio: null, totalBultos: null,
+      agentRfc: null, agencyRfc: null, patente: null,
+      customsClearanceCode: null, tipoCambio: null,
+      entryDate: null, paymentDate: null, totalBultos: null,
     },
     lines,
     extractionMethod: 'deterministic',

@@ -61,9 +61,11 @@ export async function buildReportRowsForManifest(
   loaded: LoadedShipment[],
 ): Promise<Record<string, string>[]> {
   const m = await query(
-    `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email, c.platform
+    `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email,
+            p.commercial_name, p.country_of_origin, p.legal_name, p.email AS platform_email
      FROM manifests m
      LEFT JOIN clients c ON c.id = m.client_id
+     LEFT JOIN client_platforms p ON p.id = m.platform_id
      WHERE m.id = $1`,
     [manifestId],
   );
@@ -98,7 +100,15 @@ export async function buildReportRowsForManifest(
       address: manifest.address ?? undefined,
       phone: manifest.phone ?? undefined,
       email: manifest.email ?? undefined,
-      platform: manifest.platform ?? undefined,
+      // Always pass a platform object so the client-platform is authoritative over
+      // any platform embedded in individual shipments. When platform_id is null all
+      // four fields are empty strings, which clears the Plataforma block.
+      platform: {
+        commercialName: manifest.commercial_name ?? '',
+        countryOfOrigin: manifest.country_of_origin ?? '',
+        legalName: manifest.legal_name ?? '',
+        email: manifest.platform_email ?? '',
+      },
     } : undefined,
   });
 }

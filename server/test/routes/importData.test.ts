@@ -149,6 +149,23 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
     expect(m.rows[0].risk_stale).toBe(false);
   });
 
+  it('capture advances sub_status to capturado', async () => {
+    const pid = await addPedimento(manifestId, {}); // sub_status defaults 'pendiente'
+    const res = await request(app).post(`/api/pedimentos/${pid}/import-data`)
+      .set('Authorization', `Bearer ${capturistaToken}`).send({ patente: '3250', version: 0 });
+    expect(res.status).toBe(200);
+    const row = await query(`SELECT sub_status FROM pedimentos WHERE id=$1`, [pid]);
+    expect(row.rows[0].sub_status).toBe('capturado');
+  });
+
+  it('re-capture from prevalidado returns to capturado', async () => {
+    const pid = await addPedimento(manifestId, { subStatus: 'prevalidado' });
+    await request(app).post(`/api/pedimentos/${pid}/import-data`)
+      .set('Authorization', `Bearer ${capturistaToken}`).send({ patente: '1', version: 0 });
+    const row = await query(`SELECT sub_status FROM pedimentos WHERE id=$1`, [pid]);
+    expect(row.rows[0].sub_status).toBe('capturado');
+  });
+
   it('autoridad token → 403 Forbidden', async () => {
     const res = await request(app)
       .post(`/api/pedimentos/${pedimentoId}/import-data`)

@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { computeLock } from '../services/manifestLock';
+import { nextSubStatus } from '../../../shared/pedimento/subStatus';
 import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { validate } from '../validation/middleware';
 import { importDataBody } from '../validation/schemas';
@@ -92,21 +93,27 @@ importDataRouter.post(
     const tasaWarning = checkTasaConsistency(data.tasaImportacion, cfg.rows[0]?.value);
     data.tasaWarning = tasaWarning;
 
+    // Advance sub_status: lock guard already excluded 'cargado', so t.ok is always true here.
+    const t = nextSubStatus(before.rows[0].sub_status, 'capture');
+
     // Optimistic concurrency: when the client sends the version it loaded, reject if it changed.
+    // Params: $1=data, $2=id, $3=sub_status_next, [$4=expected_version when provided].
     const expected = body.version;
-    const versionGuard = typeof expected === 'number' ? ' AND import_data_version=$3' : '';
-    const params: unknown[] = [JSON.stringify(data), req.params.pedimentoId];
+    const versionGuard = typeof expected === 'number' ? ' AND import_data_version=$4' : '';
+    const params: unknown[] = [JSON.stringify(data), req.params.pedimentoId, t.next];
     if (typeof expected === 'number') params.push(expected);
 
-    // Single atomic statement on the pedimentos row: write data + bump version + bust this
-    // pedimento's own cached Reporte General (report_file_id) so the next download regenerates from
-    // the new import-data. Risk is no longer keyed on import_data (risk is per-manifest), so we do
-    // NOT touch risk_stale here. The report cache is per-pedimento (Task 10), so only THIS row busts.
+    // Single atomic statement on the pedimentos row: write data + bump version + advance sub_status
+    // + bust this pedimento's own cached Reporte General (report_file_id) so the next download
+    // regenerates from the new import-data. Risk is no longer keyed on import_data (risk is
+    // per-manifest), so we do NOT touch risk_stale here. The report cache is per-pedimento
+    // (Task 10), so only THIS row busts.
     const upd = await query<{ import_data_version: number }>(
       `UPDATE pedimentos
          SET import_data=$1,
              import_data_version=import_data_version+1,
-             report_file_id=NULL
+             report_file_id=NULL,
+             sub_status=$3
        WHERE id=$2${versionGuard}
        RETURNING import_data_version`,
       params,

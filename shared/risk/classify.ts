@@ -46,6 +46,17 @@ export interface ScoreOptions {
   weights?: Partial<Record<keyof Weights, unknown>>;
   /** Optional band cutoff overrides */
   bands?: Partial<Record<keyof Bands, unknown>>;
+  /**
+   * F20b: Optional name-dedup tokenizer. Receives `norm(name)` (already normalized)
+   * and returns an opaque dedup token (e.g. HMAC blind index from blindIndex.ts).
+   *
+   * When absent, defaults to identity — all existing behavior is EXACTLY preserved.
+   * The server injects `nameBlindIndex` so PII normalized names are never stored
+   * as plain keys; shared/risk code stays crypto-free (Node `crypto` not imported here).
+   *
+   * Collision structure is preserved: norm(a) === norm(b) → tokenFn(norm(a)) === tokenFn(norm(b)).
+   */
+  nameTokenFn?: (normalizedName: string) => string;
 }
 
 /**
@@ -66,25 +77,30 @@ export function scoreManifest(
   const weights = resolveWeights(options?.weights);
   const bands = resolveBands(options?.bands);
 
+  // F20b: name-dedup tokenizer (injected; defaults to identity when absent).
+  // The server passes nameBlindIndex here so dedup keys are HMAC tokens, not plaintext.
+  // shared/risk stays crypto-free: we receive the fn, never import Node crypto.
+  const nameTokenFn = options?.nameTokenFn;
+
   // PASS 1: per-name monthly count (history + current), distinct-entities-per-address,
   // and per-entity aggregate customs value (F13: split-shipment cap).
   //
-  // monthlyNameCount is keyed by norm(consignee.name) to match the name-keyed rows
-  // stored in monthly_history (server/src/services/monthlyHistory.ts). Using entityKey
-  // here would cause a key-space mismatch: the DB history would be seeded under
-  // "juan perez" but the lookup in gradeSignals would use "PERJ800101AA8", so cross-
-  // manifest bbdd recurrence would never fire for RFC/CURP-bearing consignees.
+  // monthlyNameCount is keyed by nameToken(norm(name)) — defaults to norm(name) when
+  // no tokenizer is injected (back-compat). The same tokenizer is used for the DB
+  // history keys so the key-space is always consistent.
+  // Avoid entityKey here: RFC/CURP keys would never match name-keyed history rows.
   const monthlyNameCount: Record<string, number> = { ...monthlyHistoryCounts };
   const addressEntities: Record<string, Set<string>> = {};
-  // F13: aggregate customs value per entity key across manifest rows.
-  // TODO(F20): must key on the same tokenized identity when F20 blind-index lands.
+  // F13/F20b: aggregate customs value per entity key across manifest rows.
+  // entityKey uses the same nameTokenFn for the name-fallback so all keying is consistent.
   const entityValueTotal: Record<string, number> = {};
   for (const s of shipments) {
-    const nameKey = norm(s.consignee.name);
+    const rawNorm = norm(s.consignee.name);
+    const nameKey = nameTokenFn ? nameTokenFn(rawNorm) : rawNorm;
     monthlyNameCount[nameKey] = (monthlyNameCount[nameKey] ?? 0) + 1;
     // addressEntities tracks DISTINCT entity identities per address (smurfing check).
-    // entityKey remains correct here: RFC/CURP distinguishes real distinct individuals.
-    const ek = entityKey(s.consignee);
+    // entityKey uses nameTokenFn for name-fallback; RFC/CURP path is unchanged.
+    const ek = entityKey(s.consignee, nameTokenFn);
     const a = norm(s.consignee.address ?? '');
     if (a) (addressEntities[a] ??= new Set()).add(ek);
     // F13: accumulate per-entity total value (skip non-finite to avoid NaN pollution)
@@ -102,6 +118,7 @@ export function scoreManifest(
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
     deniedParties: options?.deniedParties,
+    nameToken: nameTokenFn,
   };
 
   const resolved = {

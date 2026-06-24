@@ -13,6 +13,10 @@ import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
 import type { DeniedPartyEntry } from '../../../shared/risk/lists';
 import { validate } from '../validation/middleware';
 import { riskBody } from '../validation/schemas';
+// F20b: name-dedup tokenizer. rawBlindIndex receives an already-normalized value
+// (nameTokenFn is called with norm(name), not raw name) and returns an HMAC token.
+// This keeps shared/risk crypto-free while replacing plaintext keys with opaque tokens.
+import { rawBlindIndex } from '../crypto/blindIndex';
 
 export const riskRouter = Router();
 
@@ -35,13 +39,26 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), va
   const thresholds = await loadConfig<Partial<Record<keyof Thresholds, unknown>>>('validation_params');
   // F18: OFAC/BIS/EU/UN sanctions screening list. Loaded from config key `denied_parties`.
   // Shipments are decrypted above before scoreManifest so IDs are available in plaintext here.
-  // TODO(F20): when blind-index tokenization lands, coordinate ID keying with F20's token derivation.
+  // F18 matches on DECRYPTED names/ids in-memory — UNAFFECTED by F20b tokenization.
   const deniedParties = await loadConfig<DeniedPartyEntry[]>('denied_parties');
 
   await deleteManifestHistory(req.params.id);
   const history = await loadHistoryCounts(period, req.params.id);
-  const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds, deniedParties };
-  const scored = scoreManifest(shipments, history, scoreOptions);
+  // F20b: inject rawBlindIndex as nameTokenFn so dedup keys are HMAC tokens over
+  // norm(name), not plaintext. Shipments are decrypted above, so norm(name) is
+  // computed on plaintext → tokenized → collision-preserving (same norm → same token).
+  //
+  // Bridge for F20b→F20c transition: the monthly_history DB still stores plaintext
+  // consignee_name_norm keys (the column migration happens in F20c). Re-key the
+  // history through rawBlindIndex so the keys match the per-shipment token space.
+  // After F20c lands (consignee_name_bidx column + backfill), loadHistoryCounts will
+  // return pre-tokenized keys and this re-keying step will be removed.
+  const tokenizedHistory: Record<string, number> = {};
+  for (const [normKey, count] of Object.entries(history)) {
+    tokenizedHistory[rawBlindIndex(normKey)] = count;
+  }
+  const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds, deniedParties, nameTokenFn: rawBlindIndex };
+  const scored = scoreManifest(shipments, tokenizedHistory, scoreOptions);
 
   // FIX: use rows[i].id (table PK) not sc.shipment.id (data JSON field) — they can differ.
   for (const [i, sc] of scored.entries()) {

@@ -79,18 +79,25 @@ export interface EntityContext {
   /** Distinct consignee count per normalized address (smurfing indicator). */
   addressDistinctConsignees: Record<string, number>;
   /**
-   * Monthly operation count per **normalized consignee name** (history + current)
-   * for Ficha-124. Keyed by `norm(name)` to match the name-keyed monthly_history
-   * DB rows. Do NOT use entityKey here — RFC/CURP keys would never match the
-   * name-keyed history loaded from the server.
+   * Monthly operation count per **dedup token** (history + current) for Ficha-124.
+   *
+   * Key derivation: `nameToken(norm(name))` where `nameToken` defaults to identity.
+   * When F20b blind-index tokenization is active (server passes `nameTokenFn` in
+   * ScoreOptions), the key is a HMAC token over the normalized name — opaque but
+   * collision-preserving (same norm → same token → same dedup bucket).
+   *
+   * Do NOT use entityKey here — RFC/CURP keys would never match the name-keyed
+   * history loaded from the server (and we want name-based cross-manifest dedup,
+   * not identity-based).
    */
   monthlyNameCount: Record<string, number>;
   /**
    * F13: Aggregate customs value (USD) per entity key across all rows of the current
-   * manifest. Keyed by `entityKey(consignee)` (RFC/CURP when present, else `name:<normalized>`).
+   * manifest. Keyed by `entityKey(consignee, nameToken)` (RFC/CURP when present, else
+   * `name:<nameToken(normalized)>`).
    *
-   * TODO(F20): when blind-index tokenization lands, `entityValueTotal` must key on the
-   * same tokenized identity as F20's tokenization. Coordinate the key derivation here.
+   * F20b: now uses the same tokenized name-fallback as entityKey so all per-entity
+   * aggregation is consistent when nameTokenFn is injected.
    */
   entityValueTotal?: Record<string, number>;
   piracyBrands?: string[];
@@ -101,17 +108,38 @@ export interface EntityContext {
    * Screened against: consignee.name, sender.name (normalized token match) and
    * consignee.curp, consignee.rfc, consignee.foreignTaxId, sender.taxId (exact ID match).
    * Fields are available decrypted in-memory at scoring time (risk.ts decrypts before scoreManifest).
-   *
-   * TODO(F20): when blind-index tokenization lands, the ID matching here should align with F20's
-   * tokenized identity key derivation so encrypted IDs can be screened without full decryption.
+   * F18 matches on DECRYPTED names/ids in-memory — UNAFFECTED by F20b tokenization.
    */
   deniedParties?: DeniedPartyEntry[];
+  /**
+   * F20b: Optional name-dedup tokenizer. Receives `norm(name)` (already normalized)
+   * and returns a dedup token (e.g. HMAC blind index). Defaults to identity when absent.
+   *
+   * The server injects `nameBlindIndex` here (server/src/crypto/blindIndex.ts) so
+   * that PII (normalized names) is never written in the clear to dedup key-spaces.
+   * Behavior is IDENTICAL to identity since both tokenize the same normalized form —
+   * collision structure is fully preserved.
+   *
+   * CONSTRAINT: shared/risk must NOT import Node's `crypto` — inject only.
+   */
+  nameToken?: (normalizedName: string) => string;
 }
 
-/** Entity identity: RFC/CURP when present (deterministic), else normalized name. */
-export function entityKey(c: { rfc?: string; curp?: string; name: string }): string {
+/**
+ * Entity identity: RFC/CURP when present (deterministic), else tokenized normalized name.
+ *
+ * F20b: accepts an optional `nameTokenFn` to tokenize the name-fallback.
+ * RFC/CURP-first path is UNCHANGED — tokenization only affects the name fallback.
+ * Default: identity function (no tokenization — back-compat preserved).
+ */
+export function entityKey(
+  c: { rfc?: string; curp?: string; name: string },
+  nameTokenFn?: (normalizedName: string) => string,
+): string {
   const id = cleanId(c.curp ?? c.rfc ?? '');
-  return id || `name:${norm(c.name)}`;
+  if (id) return id;
+  const normalizedName = norm(c.name);
+  return `name:${nameTokenFn ? nameTokenFn(normalizedName) : normalizedName}`;
 }
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -162,8 +190,9 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
   // for this entity key across all manifest rows exceeds montoMax (RULESET.montoMax = $2,500).
   // The per-row `monto` cap above is the floor; this is additive.
   // Cross-reference: RULESET.thresholds.montoMax = 2500 (SPLIT_CAP_USD in prevalidate.ts).
+  // F20b: entityKey uses ctx.nameToken for the name-fallback (RFC/CURP path unchanged).
   if (ctx.entityValueTotal) {
-    const ek = entityKey(s.consignee);
+    const ek = entityKey(s.consignee, ctx.nameToken);
     const total = ctx.entityValueTotal[ek] ?? s.customsValueUsd;
     if (total > t.montoMax) {
       add('agregado', (total - t.montoMax) / t.montoMax, 'Valor agregado por consignatario excede el umbral',
@@ -222,8 +251,10 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
   }
 
   // bbdd (Ficha-124): fires only when monthlyNameCount > 3, graded by excess over 3.
-  // Keyed by normalized consignee name (consistent with name-keyed DB history).
-  const mc = ctx.monthlyNameCount[norm(s.consignee.name)] ?? 0;
+  // F20b: keyed by nameToken(norm(name)) — defaults to norm(name) when nameToken is absent.
+  // Collision-preserving: same normalized name → same token → same dedup bucket.
+  const bbddKey = ctx.nameToken ? ctx.nameToken(norm(s.consignee.name)) : norm(s.consignee.name);
+  const mc = ctx.monthlyNameCount[bbddKey] ?? 0;
   if (mc > 3) {
     add('bbdd', (mc - 3) / 3, 'Varias importaciones en el mes', { monthlyCount: mc });
   }

@@ -7,6 +7,7 @@ import { prevalidatePedimento } from '../../../shared/pedimento/prevalidate';
 import { loadShipments } from '../services/reportData';
 import { validate } from '../validation/middleware';
 import { pedimentoBody } from '../validation/schemas';
+import { nextSubStatus, type SubStatus } from '../../../shared/pedimento/subStatus';
 
 export const pedimentoRouter = Router();
 
@@ -25,15 +26,16 @@ pedimentoRouter.post(
       const { rows } = await query<{
         manifest_id: string;
         covered_guias: string[] | null;
+        sub_status: SubStatus;
       }>(
-        'SELECT manifest_id, covered_guias FROM pedimentos WHERE id=$1',
+        'SELECT manifest_id, covered_guias, sub_status FROM pedimentos WHERE id=$1',
         [req.params.pedimentoId],
       );
       if (!rows.length) {
         res.status(404).json({ error: 'Pedimento not found' });
         return;
       }
-      const { manifest_id, covered_guias } = rows[0];
+      const { manifest_id, covered_guias, sub_status: current } = rows[0];
       const coveredSet = new Set(covered_guias ?? []);
 
       // Load all manifest shipments (decrypted), then narrow to this pedimento's guía subset.
@@ -54,11 +56,19 @@ pedimentoRouter.post(
       const ped = buildPedimento(subset.map((s) => s.data), req.body);
       const prevalidation = prevalidatePedimento(ped);
 
+      // Lifecycle guard: only rows in 'capturado' or 'prevalidado' may transition via prevalidation.
+      const event = prevalidation.status === 'APPROVED' ? 'prevalidate_pass' : 'prevalidate_block';
+      const t = nextSubStatus(current, event);
+      if (!t.ok) {
+        res.status(409).json({ error: t.reason });
+        return;
+      }
+
       // Write to the pedimentos row — manifests.pedimento / manifests.prevalidation are no longer
       // written after this cutover (Task 9). The manifests columns will be dropped in Task 11.
       await query(
-        'UPDATE pedimentos SET pedimento=$1, prevalidation=$2 WHERE id=$3',
-        [JSON.stringify(ped), JSON.stringify(prevalidation), req.params.pedimentoId],
+        'UPDATE pedimentos SET pedimento=$1, prevalidation=$2, sub_status=$4 WHERE id=$3',
+        [JSON.stringify(ped), JSON.stringify(prevalidation), req.params.pedimentoId, t.next],
       );
 
       await recordAudit({

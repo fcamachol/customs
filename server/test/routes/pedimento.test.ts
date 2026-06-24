@@ -30,6 +30,25 @@ function makeShipment(guideId: string) {
   };
 }
 
+// A shipment whose value exceeds the $2500 USD cap → causes REJECTED prevalidation.
+function makeExpensiveShipment(guideId: string) {
+  return {
+    id: crypto.randomUUID(),
+    mawbReference: '369-1',
+    description: 'BOLSO DE LUJO',
+    hsCode: '99010001',
+    quantity: 1,
+    unit: '6',
+    customsValueUsd: 3000,
+    currency: 'USD',
+    originCountry: 'ITA',
+    guideId,
+    consignee: { name: 'Juan', rfc: 'TOMM020922D40' },
+    sender: { name: 'S' },
+    platform: { commercialName: 'P' },
+  };
+}
+
 const PEDIMENTO_BODY = {
   numeroPedimento: '258516535001684',
   tipoCambio: 20.45,
@@ -59,9 +78,9 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s1.id, manifestId, JSON.stringify(s1)]);
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s2.id, manifestId, JSON.stringify(s2)]);
 
-    // Insert a pedimento row covering only g1.
+    // Insert a pedimento row covering only g1 — seeded as 'capturado' to pass the lifecycle guard.
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
+      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
       [manifestId, ['g1'], userId],
     );
     const pedimentoId = ped.rows[0].id;
@@ -91,8 +110,9 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s1.id, manifestId, JSON.stringify(s1)]);
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s2.id, manifestId, JSON.stringify(s2)]);
 
+    // Seed ped1 as 'capturado' so it can be built; ped2 can remain default 'pendiente'.
     const ped1 = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
+      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
       [manifestId, ['g1'], userId],
     );
     const ped2 = await query(
@@ -178,5 +198,74 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Validation failed');
     expect(JSON.stringify(res.body.details)).toMatch(/importer/);
+  });
+
+  it('returns 409 when pedimento sub_status is pendiente (lifecycle guard)', async () => {
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+
+    // Insert row with default sub_status='pendiente' — not yet captured.
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
+      [manifestId, ['g1'], userId],
+    );
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(PEDIMENTO_BODY);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBeTruthy();
+  });
+
+  it('prevalidación APPROVED sets sub_status=prevalidado', async () => {
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+
+    // Seed as capturado so it can be prevalidated.
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
+      [manifestId, ['g1'], userId],
+    );
+    const pedimentoId = ped.rows[0].id;
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${pedimentoId}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(PEDIMENTO_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.prevalidation.status).toBe('APPROVED');
+
+    // sub_status must be updated to 'prevalidado'.
+    const row = await query<{ sub_status: string }>(
+      'SELECT sub_status FROM pedimentos WHERE id=$1', [pedimentoId]);
+    expect(row.rows[0].sub_status).toBe('prevalidado');
+  });
+
+  it('prevalidación REJECTED sets sub_status=rechazado', async () => {
+    // Use a shipment with customsValueUsd > $2500 to trigger REJECTED prevalidation.
+    const s = makeExpensiveShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+
+    // Seed as capturado so it can be prevalidated.
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
+      [manifestId, ['g1'], userId],
+    );
+    const pedimentoId = ped.rows[0].id;
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${pedimentoId}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(PEDIMENTO_BODY);
+
+    expect(res.status).toBe(201);
+    expect(res.body.prevalidation.status).toBe('REJECTED');
+
+    // sub_status must be updated to 'rechazado'.
+    const row = await query<{ sub_status: string }>(
+      'SELECT sub_status FROM pedimentos WHERE id=$1', [pedimentoId]);
+    expect(row.rows[0].sub_status).toBe('rechazado');
   });
 });

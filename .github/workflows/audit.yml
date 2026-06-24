@@ -1,0 +1,37 @@
+name: Security Audit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  audit:
+    name: npm audit (high/critical)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Audit root (high+)
+        # xlsx is pinned to SheetJS CDN tarball (cdn.sheetjs.com/xlsx-0.20.3) —
+        # the npm-registry build is abandoned and has unfixed prototype-pollution /
+        # ReDoS CVEs (GHSA-4r6h-8v6p-xvw6, GHSA-5pgg-2g8v-p4x9). The CDN build
+        # ships the maintained 0.20.x line with those CVEs resolved.
+        run: npm audit --audit-level=high
+
+      - name: Install server dependencies
+        run: npm --prefix server ci
+
+      - name: Audit server (high+)
+        run: npm --prefix server audit --audit-level=high

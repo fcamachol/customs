@@ -20,6 +20,9 @@ GUIA JMX101245831553 VALOR 60.110 USD NOMBRE MAURICIO TORRES MONTEJO RFC-CURP TO
 COJIN
 OBSERVACIONES A NIVEL PARTIDA
 GUIA JMX101255006278 VALOR 12.000 USD NOMBRE ANA LOPEZ RUIZ RFC-CURP PERJ800101AA8
+FECHAS
+04/04/2025
+05/04/2025
 GLG1502247K9
 `;
 
@@ -48,13 +51,18 @@ describe('parsePedimentoText', () => {
       patente: '1653',      // SAMPLE now has numero + header values, so patente is extracted
       tipoCambio: 20.4568,  // and tipoCambio is extracted
       agencyRfc: null,
-      entryDate: null,
-      paymentDate: null,
+      entryDate: '2025-04-04',  // SAMPLE now has FECHAS block with dates
+      paymentDate: '2025-04-05',
     });
   });
   it('extracts patente from the numero and tipoCambio from the value cluster', () => {
     const out = parsePedimentoText(SAMPLE);
     expect(out.header.patente).toBe('1653');     // group 3 of "25 85 1653 5001684"
     expect(out.header.tipoCambio).toBe(20.4568); // Number("20.45680")
+  });
+  it('extracts entry and payment dates (first=entrada, second=pago) as ISO', () => {
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header.entryDate).toBe('2025-04-04');
+    expect(out.header.paymentDate).toBe('2025-04-05');
   });
 });

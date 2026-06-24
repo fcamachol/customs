@@ -34,6 +34,11 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   const rfcs = t.match(RFC_RE) ?? [];
   const importerRfc = rfcs[0] ?? null;     // first RFC on the page is the importer block
 
+  // FECHAS block: first dd/mm/yyyy = ENTRADA, second = PAGO. Normalize to ISO. Best-effort.
+  const isoDates = [...t.matchAll(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g)].map((m) => `${m[3]}-${m[2]}-${m[1]}`);
+  const entryDate = isoDates[0] ?? null;
+  const paymentDate = isoDates[1] ?? null;
+
   const warnings: string[] = [];
   if (lines.length === 0) warnings.push('No se encontraron observaciones a nivel partida en el texto.');
 
@@ -42,7 +47,7 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
       numeroPedimento, clave, importerRfc,
       agentRfc: null, agencyRfc: null, patente,
       customsClearanceCode: null, tipoCambio,
-      entryDate: null, paymentDate: null, totalBultos: null,
+      entryDate, paymentDate, totalBultos: null,
     },
     lines,
     extractionMethod: 'deterministic',

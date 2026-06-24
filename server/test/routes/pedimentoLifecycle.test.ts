@@ -105,7 +105,7 @@ describe('POST /api/pedimentos/:id/finalize', () => {
     expect(res.status).toBe(404);
   });
 
-  it('finalize 403 for autoridad (requireRole blocks write)', async () => {
+  it('finalize returns 403 for autoridad (role not permitted)', async () => {
     const pid = await addPedimento(manifestId, { subStatus: 'prevalidado' });
     const res = await request(app)
       .post(`/api/pedimentos/${pid}/finalize`)
@@ -155,7 +155,7 @@ describe('POST /api/pedimentos/:id/reopen', () => {
     expect(res.status).toBe(404);
   });
 
-  it('reopen 403 for autoridad (requireRole blocks write)', async () => {
+  it('reopen returns 403 for autoridad (role not permitted)', async () => {
     const pid = await addPedimento(manifestId, { subStatus: 'rechazado' });
     const res = await request(app)
       .post(`/api/pedimentos/${pid}/reopen`)

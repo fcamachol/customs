@@ -17,11 +17,10 @@ pedimentoLifecycleRouter.post(
       const { id } = req.params;
 
       const { rows } = await query<{
-        manifest_id: string;
         sub_status: SubStatus;
         created_by: string;
       }>(
-        `SELECT p.manifest_id, p.sub_status, m.created_by
+        `SELECT p.sub_status, m.created_by
            FROM pedimentos p
            JOIN manifests m ON m.id = p.manifest_id
           WHERE p.id = $1`,
@@ -35,6 +34,7 @@ pedimentoLifecycleRouter.post(
 
       const { sub_status: current, created_by } = rows[0];
 
+      // Per-row ownership guard (mirrors records.ts). Currently unreachable since canSeeAll() is true for all roles; will engage if a read-only (canSeeAll=false) role is added.
       if (!canSeeAll(req.user!.role) && created_by !== req.user!.userId) {
         res.status(403).json({ error: 'Forbidden' });
         return;
@@ -77,11 +77,10 @@ pedimentoLifecycleRouter.post(
       const { id } = req.params;
 
       const { rows } = await query<{
-        manifest_id: string;
         sub_status: SubStatus;
         created_by: string;
       }>(
-        `SELECT p.manifest_id, p.sub_status, m.created_by
+        `SELECT p.sub_status, m.created_by
            FROM pedimentos p
            JOIN manifests m ON m.id = p.manifest_id
           WHERE p.id = $1`,
@@ -95,6 +94,7 @@ pedimentoLifecycleRouter.post(
 
       const { sub_status: current, created_by } = rows[0];
 
+      // Per-row ownership guard (mirrors records.ts). Currently unreachable since canSeeAll() is true for all roles; will engage if a read-only (canSeeAll=false) role is added.
       if (!canSeeAll(req.user!.role) && created_by !== req.user!.userId) {
         res.status(403).json({ error: 'Forbidden' });
         return;

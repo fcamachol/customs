@@ -4,13 +4,14 @@
  *
  * Navigation lives in the global sidebar (collapsible "Configuración" parent); this
  * component renders the single domain selected there, showing its complete view:
- *   · cfg_motor:     Parámetros de validación + Listas de exclusión (V6/V7)
- *   · cfg_clientes:  Clientes (master data)
- *   · cfg_rfcs:      RFCs validados
- *   · cfg_empresa:   Identidad / branding
- *   · cfg_tasa:      Tasa global (vigencias) — Super Admin only
- * Mutations require an Administrador role; Tasa global is reserved for the Super
- * Admin. Non-admins see read-only fields and a notice card.
+ *   · cfg_motor:       Parámetros de validación + Listas de exclusión (V6/V7)
+ *   · cfg_clientes:    Clientes (master data)
+ *   · cfg_rfcs:        RFCs validados
+ *   · cfg_empresa:     Identidad / branding
+ *   · cfg_tasa:        Tasa global (vigencias) — Super Admin only
+ *   · cfg_entidades:   Importador de registro + agente aduanal — Super Admin only
+ * Mutations require an Administrador role; Tasa global and Entidades are reserved
+ * for the Super Admin. Non-admins see read-only fields and a notice card.
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
@@ -28,6 +29,8 @@ import {
   ChevronRight,
   Layers,
   Search,
+  Landmark,
+  UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
@@ -77,6 +80,19 @@ interface TasaVigencia {
   rate: number;
 }
 
+interface ImporterConfig {
+  rfc: string;
+  name: string;
+  fiscalAddress: string;
+}
+
+interface AgentConfig {
+  patente: string;
+  name: string;
+  agentRfc: string;
+  agencyRfc: string;
+}
+
 const DEFAULT_PARAMS: ValidationParams = {
   cantidad: 10,
   montoMin: 1,
@@ -116,6 +132,10 @@ export default function ConfigurationView({ domain, onToast }: Props) {
   // Tasa global
   const [vigencias, setVigencias] = useState<TasaVigencia[]>([]);
 
+  // Entidades de pedimento
+  const [importer, setImporter] = useState<ImporterConfig>({ rfc: '', name: '', fiscalAddress: '' });
+  const [agent, setAgent] = useState<AgentConfig>({ patente: '', name: '', agentRfc: '', agencyRfc: '' });
+
   // Load all config on mount; each fetch is independent and non-fatal.
   useEffect(() => {
     let active = true;
@@ -141,6 +161,20 @@ export default function ConfigurationView({ domain, onToast }: Props) {
           .catch(() => {}),
         apiGet<ConfigResponse<TasaVigencia[]>>('/api/catalogs/config/tasa_vigencias')
           .then((r) => { if (active && Array.isArray(r.value)) setVigencias(r.value); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<ImporterConfig>>('/api/catalogs/config/importer_of_record')
+          .then((r) => {
+            if (active && r.value) {
+              setImporter({ rfc: r.value.rfc ?? '', name: r.value.name ?? '', fiscalAddress: r.value.fiscalAddress ?? '' });
+            }
+          })
+          .catch(() => {}),
+        apiGet<ConfigResponse<AgentConfig>>('/api/catalogs/config/customs_agent')
+          .then((r) => {
+            if (active && r.value) {
+              setAgent({ patente: r.value.patente ?? '', name: r.value.name ?? '', agentRfc: r.value.agentRfc ?? '', agencyRfc: r.value.agencyRfc ?? '' });
+            }
+          })
           .catch(() => {}),
         apiGet<Client[]>('/api/catalogs/clients')
           .then((r) => { if (active) setClients(r); })
@@ -242,6 +276,43 @@ export default function ConfigurationView({ domain, onToast }: Props) {
     }
   }
 
+  async function saveImporter() {
+    if (!isSuperAdmin) return;
+    setSaving(true);
+    try {
+      const value: ImporterConfig = {
+        rfc: importer.rfc.trim(),
+        name: importer.name.trim(),
+        fiscalAddress: importer.fiscalAddress.trim(),
+      };
+      await apiPut('/api/catalogs/config/importer_of_record', { value });
+      onToast('Importador de registro guardado');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAgent() {
+    if (!isSuperAdmin) return;
+    setSaving(true);
+    try {
+      const value: AgentConfig = {
+        patente: agent.patente.trim(),
+        name: agent.name.trim(),
+        agentRfc: agent.agentRfc.trim(),
+        agencyRfc: agent.agencyRfc.trim(),
+      };
+      await apiPut('/api/catalogs/config/customs_agent', { value });
+      onToast('Agente aduanal guardado');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {!isAdmin && (
@@ -300,6 +371,19 @@ export default function ConfigurationView({ domain, onToast }: Props) {
           vigencias={vigencias}
           setVigencias={setVigencias}
           onSave={saveVigencias}
+        />
+      )}
+
+      {domain === 'cfg_entidades' && (
+        <EntidadesTab
+          isSuperAdmin={isSuperAdmin}
+          saving={saving}
+          importer={importer}
+          setImporter={setImporter}
+          agent={agent}
+          setAgent={setAgent}
+          onSaveImporter={saveImporter}
+          onSaveAgent={saveAgent}
         />
       )}
     </div>
@@ -1026,5 +1110,118 @@ function TasaTab({ isSuperAdmin, saving, vigencias, setVigencias, onSave }: Tasa
         </>
       )}
     </Card>
+  );
+}
+
+/* ---------- Entidades de pedimento (importador + agente aduanal) ---------- */
+
+interface EntidadesProps {
+  isSuperAdmin: boolean;
+  saving: boolean;
+  importer: ImporterConfig;
+  setImporter: (v: ImporterConfig) => void;
+  agent: AgentConfig;
+  setAgent: (v: AgentConfig) => void;
+  onSaveImporter: () => void;
+  onSaveAgent: () => void;
+}
+
+function EntidadesTab({ isSuperAdmin, saving, importer, setImporter, agent, setAgent, onSaveImporter, onSaveAgent }: EntidadesProps) {
+  return (
+    <div className="space-y-6">
+      {!isSuperAdmin && (
+        <div className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p>Solo el Super Admin puede editar las entidades de pedimento.</p>
+        </div>
+      )}
+
+      {/* Importador de registro */}
+      <Card className="max-w-xl p-6 shadow-sm">
+        <SectionHeader icon={Landmark}>Importador de registro</SectionHeader>
+        <div className="space-y-4">
+          <Field label="RFC" htmlFor="ir-rfc">
+            <Input
+              id="ir-rfc"
+              value={importer.rfc}
+              onChange={(e) => setImporter({ ...importer, rfc: e.target.value.toUpperCase() })}
+              disabled={!isSuperAdmin}
+              className="font-mono"
+              placeholder="IMP010101ABC"
+            />
+          </Field>
+          <Field label="Nombre / razón social" htmlFor="ir-name">
+            <Input
+              id="ir-name"
+              value={importer.name}
+              onChange={(e) => setImporter({ ...importer, name: e.target.value })}
+              disabled={!isSuperAdmin}
+              placeholder="IMPORTADOR SA DE CV"
+            />
+          </Field>
+          <Field label="Domicilio fiscal" htmlFor="ir-address">
+            <Input
+              id="ir-address"
+              value={importer.fiscalAddress}
+              onChange={(e) => setImporter({ ...importer, fiscalAddress: e.target.value })}
+              disabled={!isSuperAdmin}
+              placeholder="Calle, Colonia, CP, Ciudad, Estado"
+            />
+          </Field>
+          <Button onClick={onSaveImporter} disabled={!isSuperAdmin || saving}>
+            <Save className="h-4 w-4" /> Guardar
+          </Button>
+        </div>
+      </Card>
+
+      {/* Agente aduanal */}
+      <Card className="max-w-xl p-6 shadow-sm">
+        <SectionHeader icon={UserCheck}>Agente aduanal</SectionHeader>
+        <div className="space-y-4">
+          <Field label="Patente" htmlFor="aa-patente">
+            <Input
+              id="aa-patente"
+              value={agent.patente}
+              onChange={(e) => setAgent({ ...agent, patente: e.target.value })}
+              disabled={!isSuperAdmin}
+              className="font-mono"
+              placeholder="3210"
+            />
+          </Field>
+          <Field label="Nombre / razón social" htmlFor="aa-name">
+            <Input
+              id="aa-name"
+              value={agent.name}
+              onChange={(e) => setAgent({ ...agent, name: e.target.value })}
+              disabled={!isSuperAdmin}
+              placeholder="AGENTE ADUANAL SA DE CV"
+            />
+          </Field>
+          <Field label="RFC del agente" htmlFor="aa-agentrfc">
+            <Input
+              id="aa-agentrfc"
+              value={agent.agentRfc}
+              onChange={(e) => setAgent({ ...agent, agentRfc: e.target.value.toUpperCase() })}
+              disabled={!isSuperAdmin}
+              className="font-mono"
+              placeholder="AGT010101ZZZ"
+            />
+          </Field>
+          <Field label="RFC de la agencia" htmlFor="aa-agencyrfc">
+            <Input
+              id="aa-agencyrfc"
+              value={agent.agencyRfc}
+              onChange={(e) => setAgent({ ...agent, agencyRfc: e.target.value.toUpperCase() })}
+              disabled={!isSuperAdmin}
+              className="font-mono"
+              placeholder="AGC010101ZZZ"
+            />
+          </Field>
+          <Button onClick={onSaveAgent} disabled={!isSuperAdmin || saving}>
+            <Save className="h-4 w-4" /> Guardar
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
 }

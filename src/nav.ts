@@ -2,10 +2,10 @@ import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Sett
 
 export type Section =
   | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
-  | 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa'
+  | 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
 
-export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa';
+export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades';
 
 export const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard:    { title: 'Dashboard', subtitle: 'Desempeño operativo y análisis de riesgo en tiempo real.' },
@@ -17,7 +17,8 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
   cfg_empresa:  { title: 'Empresa', subtitle: 'Identidad y branding en pantallas y reportes generados.' },
-  cfg_tasa:     { title: 'Tasa global', subtitle: 'Vigencias de tasa global · sólo Super Admin.' },
+  cfg_tasa:      { title: 'Tasa global', subtitle: 'Vigencias de tasa global · sólo Super Admin.' },
+  cfg_entidades: { title: 'Entidades de pedimento', subtitle: 'Importador de registro y agente aduanal · sólo Super Admin.' },
   autoridad:    { title: 'Autoridad', subtitle: 'Bitácora, integridad de la cadena y reporte consolidado.' },
   acerca:       { title: 'Acerca de', subtitle: 'Plataforma de análisis de riesgo y cumplimiento T1.' },
 };
@@ -55,6 +56,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         { id: 'cfg_rfcs', label: 'RFCs validados' },
         { id: 'cfg_empresa', label: 'Empresa' },
         { id: 'cfg_tasa', label: 'Tasa global', badge: 'Super' },
+        { id: 'cfg_entidades', label: 'Entidades de pedimento', badge: 'Super' },
       ],
     },
     { id: 'autoridad', label: 'Autoridad', icon: Gavel },
@@ -62,7 +64,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   ] },
 ];
 
-const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa'];
+const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
 
 // Role-based visibility:
 //  - autoridad is read-only: dashboard, consulta, the Autoridad portal, and Acerca.

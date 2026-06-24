@@ -51,7 +51,8 @@ pedimentos(
 )
 ```
 - **Linking (defense in depth):** a pedimento is uploaded under the **explicitly selected** manifest/record (intent), **and** the parsed `master_guide` must **match the manifest's `mawb_reference` — a hard gate** (reject on mismatch). Two further guards: reject a **duplicate** `numero_pedimento` already attached to the manifest, and **warn** if the pedimento's `covered_guias` aren't a subset of the manifest's guías. Explicit selection + automated gate together minimize wrong-attachment errors.
-- **Migration/backfill (single-step):** create `pedimentos`, backfill **one row per manifest** that currently has any pedimento data (move `pedimento/prevalidation/import_data/import_data_version/file_id/pedimento_scan`), switch all reads to the new table, and **drop the now-unused manifest columns in the same migration**. The test suite proves no data loss. Manifest keeps `mawb_reference` (master guide) + shipments.
+- **Migration/backfill (superseded — see revised back half):** create `pedimentos` + backfill **one row per manifest** that has pedimento data (additive, no drops). The **column drop happens LAST**, after every consumer (11 server + 3 frontend files) is migrated to `pedimentos` via a clean per-domain cutover — NOT in the backfill migration. *(The earlier "single-step drop in the same migration" idea was dropped once the full consumer surface was mapped: a same-migration drop would break the reports/exports/risk layer mid-migration. Dev data is mock, so no data-preservation constraint.)* Manifest keeps `mawb_reference` (master guide) + shipments. See `docs/superpowers/plans/2026-06-24-multi-pedimento-phase1-backhalf.md`.
+- **Reports/artifacts are per-pedimento** (decided during execution): each subdivisión is its own customs submission — its own Reporte General + Layout + pedimento PDF + `report_file_id` (which moves to the `pedimento` row), built over that pedimento's `covered_guias` shipment subset + its own `import_data`. **Risk stays per-manifest** (shipment-scoped). Detailed in the revised back-half plan.
 
 ## Coverage model
 
@@ -105,7 +106,7 @@ Each pedimento is **~1,190 parcels across ~240 pages**; a manifest is **~3,500+ 
 ## Resolved
 
 1. **Tabs:** 2 tabs, relabeled **Pendientes** (sin + parcial) / **Completados**, with coverage chip + partial-sorts-first + per-record pedimentos sub-list. No 3rd tab.
-2. **Column drop:** single-step — backfill then drop the manifest pedimento columns in the same migration.
+2. **Column drop:** ~~single-step~~ **SUPERSEDED** — additive backfill first, then drop the columns as the **final** task after all 11 server + 3 frontend consumers are migrated (clean per-domain cutover). A same-migration drop would break the reports/exports/risk layer mid-migration. See the revised back-half plan.
 3. **Upload association:** explicit manifest selection **+ hard master-guide match gate** + duplicate-`numeroPedimento` reject + guía-subset warning.
 
 ## Validated against real samples (2026-06-24)

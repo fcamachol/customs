@@ -8,7 +8,7 @@
  *   3. After /mfa/enable succeeds, a FULL session token is returned and works
  *   4. Capturista (non-privileged) without MFA is unaffected — 200 + normal token
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { generateSync } from 'otplib';
 import { createApp } from '../../src/app';
@@ -34,7 +34,18 @@ async function login(username: string, password = 'pass', code?: string) {
   return request(app).post('/api/auth/login').send(body);
 }
 
-beforeEach(async () => { await truncateAll(); });
+// Pin enforce mode for this suite: the ambient server/.env sets MFA_ENFORCEMENT=warn
+// for dev/demo, but these tests exercise the default 'enforce' behaviour. The warn-mode
+// test below overrides this locally.
+const ORIGINAL_MFA_ENFORCEMENT = process.env.MFA_ENFORCEMENT;
+beforeEach(async () => {
+  await truncateAll();
+  process.env.MFA_ENFORCEMENT = 'enforce';
+});
+afterEach(() => {
+  if (ORIGINAL_MFA_ENFORCEMENT === undefined) delete process.env.MFA_ENFORCEMENT;
+  else process.env.MFA_ENFORCEMENT = ORIGINAL_MFA_ENFORCEMENT;
+});
 
 // ---------------------------------------------------------------------------
 // 1. Privileged user without MFA → 403 + enrollmentToken

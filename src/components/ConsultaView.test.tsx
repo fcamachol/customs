@@ -26,8 +26,13 @@ const reportsBundle = {
   riskStale: false, masked: false, generatedAt: '2026-01-01', contentHash: 'abc',
 };
 
+const clientsList = [
+  { id: 'cli-1', name: 'Acme Corp', platforms: [{ id: 'plt-1', commercialName: 'Acme Store', legalName: null }] },
+];
+
 vi.mock('../api', () => ({
   apiGet: vi.fn(async (url: string) => {
+    if (url.includes('/api/catalogs/clients')) return clientsList;
     if (url.includes('/reports.json')) return reportsBundle;
     if (url.includes('/api/records/rec-1')) return recordDetail;
     if (url.includes('/api/records')) return recordsList;
@@ -41,22 +46,18 @@ describe('ConsultaView', () => {
     vi.clearAllMocks();
   });
 
-  it('searches and renders a record', async () => {
+  it('loads and renders records on mount (instant apply, no Buscar button)', async () => {
     render(<ConsultaView />);
 
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Acme' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
-
+    // Records load on mount; filters apply instantly with no submit button.
     const recordButton = await screen.findByText(/MAWB-123/);
     expect(recordButton).toBeTruthy();
     expect(screen.getByText(/Acme Corp/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Buscar' })).toBeNull();
   });
 
   it('renders report tabs (incl. Pedimento) and downloads the active tab', async () => {
     render(<ConsultaView />);
-
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Acme' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
 
     const recordButton = await screen.findByText(/MAWB-123/);
     fireEvent.click(recordButton);

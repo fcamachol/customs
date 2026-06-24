@@ -25,12 +25,15 @@ import {
   Plus,
   Trash2,
   Lock,
+  ChevronRight,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
-import { Card, Button, Field, Input, Textarea } from './ui';
+import { Card, Button, Field, Input, Textarea, Modal } from './ui';
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
+import { AddClientModal } from './AddClientModal';
 
 interface Props {
   domain: ConfigSection;
@@ -378,39 +381,14 @@ interface ClientesProps {
 }
 
 function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesProps) {
-  const empty: ClientForm = {
-    name: '', tax_id: '', address: '', phone: '', email: '', website: '',
-    commercialName: '', countryOfOrigin: '', legalName: '', platformEmail: '',
-  };
-  const [form, setForm] = useState<ClientForm>(empty);
-  const [adding, setAdding] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  // Derive the open client from props so it stays in sync after platform edits refetch.
+  const detailClient = detailId ? clients.find((c) => c.id === detailId) ?? null : null;
 
-  async function addClient() {
-    if (!isAdmin || !form.name.trim()) return;
-    setAdding(true);
-    try {
-      await apiPost('/api/catalogs/clients', {
-        name: form.name.trim(),
-        tax_id: form.tax_id.trim(),
-        address: form.address.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim(),
-        website: form.website.trim(),
-        platform: {
-          commercialName: form.commercialName.trim(),
-          countryOfOrigin: form.countryOfOrigin.trim(),
-          legalName: form.legalName.trim(),
-          email: form.platformEmail.trim(),
-        },
-      });
-      onToast('Cliente agregado');
-      setForm(empty);
-      onClientsChanged();
-    } catch (e) {
-      onToast(`Error: ${errMsg(e)}`);
-    } finally {
-      setAdding(false);
-    }
+  function handleCreated() {
+    onToast('Cliente agregado');
+    onClientsChanged();
   }
 
   async function removeClient(id: string) {
@@ -418,6 +396,7 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
     try {
       await apiDelete('/api/catalogs/clients/' + id);
       onToast('Cliente eliminado');
+      setDetailId(null);
       onClientsChanged();
     } catch (e) {
       onToast(`Error: ${errMsg(e)}`);
@@ -449,10 +428,19 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
   return (
     <div className="space-y-6">
       <Card className="p-6 shadow-sm">
-        <SectionHeader icon={Building2}>Clientes</SectionHeader>
-        <p className="mb-4 text-xs text-slate-500">
-          Datos recurrentes de remitente y plataforma, reutilizados al generar el Reporte General.
-        </p>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <SectionHeader icon={Building2}>Clientes</SectionHeader>
+            <p className="text-xs text-slate-500">
+              Datos recurrentes del remitente. Abra un cliente para ver sus datos completos y administrar sus plataformas.
+            </p>
+          </div>
+          {isAdmin && (
+            <Button className="shrink-0" onClick={() => setModalOpen(true)}>
+              <Plus className="h-4 w-4" /> Agregar cliente
+            </Button>
+          )}
+        </div>
 
         {clients.length === 0 ? (
           <p className="py-4 text-sm text-slate-400">Sin clientes registrados.</p>
@@ -463,117 +451,59 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
                 <tr>
                   <th className="px-3 py-2 font-semibold">Nombre</th>
                   <th className="px-3 py-2 font-semibold">RFC / Tax ID</th>
-                  <th className="px-3 py-2 font-semibold">Plataforma</th>
                   <th className="px-3 py-2 font-semibold">Email</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {clients.map((c) => (
-                  <tr key={c.id}>
-                    <td className="px-3 py-2 font-medium text-slate-800">{c.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{c.tax_id || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600">
-                      {(c.platforms ?? []).length === 0 ? (
-                        <span className="text-slate-400">—</span>
-                      ) : (
-                        <ul className="space-y-1">
-                          {(c.platforms ?? []).map((p) => (
-                            <li key={p.id} className="flex items-center gap-2">
-                              <span>{p.commercialName || p.legalName || '—'}</span>
-                              {p.countryOfOrigin && <span className="text-xs text-slate-400">({p.countryOfOrigin})</span>}
-                              {isAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => removePlatform(c.id, p.id!)}
-                                  className="text-slate-300 transition hover:text-red-600"
-                                  aria-label="Eliminar plataforma"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {isAdmin && <PlatformAdder onAdd={(p) => addPlatform(c.id, p)} />}
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">{c.email || '—'}</td>
-                    <td className="px-3 py-2 text-right">
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => removeClient(c.id)}
-                          className="text-slate-400 transition hover:text-red-600"
-                          aria-label="Eliminar cliente"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {clients.map((c) => {
+                  const count = (c.platforms ?? []).length;
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => setDetailId(c.id)}
+                      className="cursor-pointer transition hover:bg-slate-50"
+                    >
+                      <td className="px-3 py-2 font-medium text-slate-800">{c.name}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-600">{c.tax_id || '—'}</td>
+                      <td className="px-3 py-2 text-slate-600">{c.email || '—'}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-end gap-3 text-slate-400">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                            <Layers className="h-3 w-3" />
+                            {count} {count === 1 ? 'plataforma' : 'plataformas'}
+                          </span>
+                          <ChevronRight className="h-4 w-4" />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
 
-        {isAdmin && (
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-600">Agregar cliente</p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Nombre *" htmlFor="cl-name">
-                <Input id="cl-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </Field>
-              <Field label="RFC / Tax ID" htmlFor="cl-tax">
-                <Input id="cl-tax" value={form.tax_id} onChange={(e) => setForm({ ...form, tax_id: e.target.value })} />
-              </Field>
-              <Field label="Teléfono" htmlFor="cl-phone">
-                <Input id="cl-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </Field>
-              <Field label="Dirección" htmlFor="cl-addr">
-                <Input id="cl-addr" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-              </Field>
-              <Field label="Email" htmlFor="cl-email">
-                <Input id="cl-email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </Field>
-              <Field label="Sitio web" htmlFor="cl-website">
-                <Input id="cl-website" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
-              </Field>
-              <Field label="Plataforma (nombre comercial)" htmlFor="cl-pcom">
-                <Input id="cl-pcom" value={form.commercialName} onChange={(e) => setForm({ ...form, commercialName: e.target.value })} />
-              </Field>
-              <Field label="País de origen" htmlFor="cl-pcoo">
-                <Input id="cl-pcoo" value={form.countryOfOrigin} onChange={(e) => setForm({ ...form, countryOfOrigin: e.target.value })} />
-              </Field>
-              <Field label="Razón social" htmlFor="cl-plegal">
-                <Input id="cl-plegal" value={form.legalName} onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
-              </Field>
-              <Field label="Email plataforma" htmlFor="cl-pemail">
-                <Input id="cl-pemail" value={form.platformEmail} onChange={(e) => setForm({ ...form, platformEmail: e.target.value })} />
-              </Field>
-            </div>
-            <Button className="mt-3" onClick={addClient} disabled={adding || !form.name.trim()}>
-              <Plus className="h-4 w-4" /> Agregar cliente
-            </Button>
-          </div>
-        )}
       </Card>
+
+      <AddClientModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onCreated={handleCreated}
+      />
+
+      {detailClient && (
+        <ClientDetailModal
+          client={detailClient}
+          isAdmin={isAdmin}
+          onClose={() => setDetailId(null)}
+          onAddPlatform={(p) => addPlatform(detailClient.id, p)}
+          onRemovePlatform={(pid) => removePlatform(detailClient.id, pid)}
+          onDelete={() => removeClient(detailClient.id)}
+        />
+      )}
     </div>
   );
-}
-
-interface ClientForm {
-  name: string;
-  tax_id: string;
-  address: string;
-  phone: string;
-  email: string;
-  website: string;
-  commercialName: string;
-  countryOfOrigin: string;
-  legalName: string;
-  platformEmail: string;
 }
 
 /* ---------- Branding ---------- */
@@ -792,6 +722,110 @@ interface TasaProps {
   vigencias: TasaVigencia[];
   setVigencias: (v: TasaVigencia[]) => void;
   onSave: (rows: TasaVigencia[]) => void;
+}
+
+/* ---------- Client detail (read-only data + platform management) ---------- */
+
+function DetailRow({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</dt>
+      <dd className={`text-slate-700 ${mono ? 'font-mono text-xs' : 'text-sm'}`}>{value?.trim() || '—'}</dd>
+    </div>
+  );
+}
+
+function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onRemovePlatform, onDelete }: {
+  client: Client;
+  isAdmin: boolean;
+  onClose: () => void;
+  onAddPlatform: (p: ClientPlatform) => void;
+  onRemovePlatform: (pid: string) => void;
+  onDelete: () => void;
+}) {
+  const platforms = client.platforms ?? [];
+  return (
+    <Modal open onClose={onClose} title={client.name}>
+      <section className="mb-5">
+        <h4 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Datos del cliente</h4>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          <DetailRow label="RFC / Tax ID" value={client.tax_id} mono />
+          <DetailRow label="Correo" value={client.email} />
+          <DetailRow label="Teléfono" value={client.phone} />
+          <DetailRow label="Sitio web" value={client.website} />
+          <div className="sm:col-span-2">
+            <DetailRow label="Domicilio" value={client.address} />
+          </div>
+        </dl>
+      </section>
+
+      <section className="border-t border-slate-200 pt-4">
+        <h4 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+          <Layers className="h-3.5 w-3.5" />
+          Plataformas
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+            {platforms.length}
+          </span>
+        </h4>
+
+        {platforms.length === 0 ? (
+          <p className="text-sm text-slate-400">Este cliente no tiene plataformas registradas.</p>
+        ) : (
+          <ul className="space-y-2">
+            {platforms.map((p) => {
+              const sub = [
+                p.legalName && p.legalName !== p.commercialName ? p.legalName : null,
+                p.countryOfOrigin,
+                p.email,
+              ].filter(Boolean).join(' · ');
+              return (
+                <li
+                  key={p.id}
+                  className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-800">
+                      {p.commercialName || p.legalName || '—'}
+                    </p>
+                    {sub && <p className="truncate text-xs text-slate-500">{sub}</p>}
+                  </div>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => onRemovePlatform(p.id!)}
+                      className="shrink-0 text-slate-300 transition hover:text-red-600"
+                      aria-label="Eliminar plataforma"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {isAdmin && (
+          <div className="mt-3">
+            <PlatformAdder onAdd={onAddPlatform} />
+          </div>
+        )}
+      </section>
+
+      {isAdmin && (
+        <div className="mt-5 flex items-center justify-between border-t border-slate-200 pt-4">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
+          >
+            <Trash2 className="h-4 w-4" /> Eliminar cliente
+          </button>
+          <Button variant="secondary" type="button" onClick={onClose}>Cerrar</Button>
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 function PlatformAdder({ onAdd }: { onAdd: (p: ClientPlatform) => void }) {

@@ -25,7 +25,6 @@ export interface Client {
 
 const EMPTY = {
   name: '', tax_id: '', address: '', phone: '', email: '', website: '',
-  commercialName: '', countryOfOrigin: '', legalName: '', platformEmail: '',
 };
 
 export function AddClientModal({ open, onClose, onCreated }: {
@@ -59,12 +58,6 @@ export function AddClientModal({ open, onClose, onCreated }: {
         phone: form.phone.trim(),
         email: form.email.trim(),
         website: form.website.trim(),
-        platform: {
-          commercialName: form.commercialName.trim(),
-          countryOfOrigin: form.countryOfOrigin.trim(),
-          legalName: form.legalName.trim(),
-          email: form.platformEmail.trim(),
-        },
       });
       setForm(EMPTY);
       onCreated(created);

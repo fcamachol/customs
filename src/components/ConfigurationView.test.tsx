@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import ConfigurationView from './ConfigurationView';
 import { AuthProvider } from '../context/AuthContext';
 // Mock api module — must be hoisted before any imports
@@ -76,7 +76,7 @@ describe('ConfigurationView', () => {
     expect(screen.getByText(/restringid/i)).toBeTruthy();
   });
 
-  it('renders each client\'s platforms in the Clientes pane', async () => {
+  it('hides platforms in the table and reveals them in the client detail modal', async () => {
     const { apiGet } = await import('../api');
     vi.mocked(apiGet).mockImplementation(async (path: string) => {
       if (path.includes('/clients')) {
@@ -90,6 +90,11 @@ describe('ConfigurationView', () => {
         <ConfigurationView domain="cfg_clientes" onToast={() => {}} />
       </Wrapper>,
     );
+    // The row shows the client but not its platform name…
+    await waitFor(() => expect(screen.getByText('ACME')).toBeTruthy());
+    expect(screen.queryByText('Shop A')).toBeNull();
+    // …clicking the row opens the detail modal where the platform is listed.
+    fireEvent.click(screen.getByText('ACME'));
     await waitFor(() => expect(screen.getByText('Shop A')).toBeTruthy());
   });
 });

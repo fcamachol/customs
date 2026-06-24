@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
-import { Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Search, X } from 'lucide-react';
 import { apiGet } from '../api';
-import { Card, Input, Button } from './ui';
+import { Card, Input, SearchSelect } from './ui';
+import type { SearchSelectOption } from './ui';
 import { ReportTabs } from './ReportTabs';
 
 interface RecordSummary {
@@ -25,38 +25,154 @@ interface RecordDetail {
   };
 }
 
+interface Platform {
+  id: string;
+  commercialName: string | null;
+  legalName: string | null;
+}
+interface Client {
+  id: string;
+  name: string;
+  platforms: Platform[];
+}
+
+type DatePreset = 'any' | 'today' | '7d' | 'month' | 'custom';
+type ResultFilter = '' | 'verde' | 'amarillo' | 'rojo' | 'gris';
+
+const SELECT_CLS =
+  'rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/25';
+
+const DATE_OPTIONS: { value: DatePreset; label: string }[] = [
+  { value: 'any', label: 'Fecha: cualquiera' },
+  { value: 'today', label: 'Hoy' },
+  { value: '7d', label: 'Últimos 7 días' },
+  { value: 'month', label: 'Este mes' },
+  { value: 'custom', label: 'Rango personalizado' },
+];
+const DATE_LABEL: Record<Exclude<DatePreset, 'any' | 'custom'>, string> = {
+  today: 'Hoy',
+  '7d': 'Últimos 7 días',
+  month: 'Este mes',
+};
+
+const RESULT_OPTIONS: { value: ResultFilter; label: string }[] = [
+  { value: '', label: 'Resultado: todos' },
+  { value: 'verde', label: 'Aprobado' },
+  { value: 'amarillo', label: 'No identificado' },
+  { value: 'rojo', label: 'Validar en previo' },
+  { value: 'gris', label: 'Sin evaluar' },
+];
+const RESULT_LABEL: Record<Exclude<ResultFilter, ''>, string> = {
+  verde: 'Aprobado',
+  amarillo: 'No identificado',
+  rojo: 'Validar en previo',
+  gris: 'Sin evaluar',
+};
+
+function fmtDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Resolve a date preset to a concrete {from, to} range (YYYY-MM-DD, local time).
+function resolveDates(preset: DatePreset, customFrom: string, customTo: string): { from?: string; to?: string } {
+  if (preset === 'any') return {};
+  if (preset === 'custom') return { from: customFrom || undefined, to: customTo || undefined };
+  const now = new Date();
+  const to = fmtDate(now);
+  if (preset === 'today') return { from: to, to };
+  if (preset === '7d') {
+    const f = new Date(now);
+    f.setDate(f.getDate() - 6);
+    return { from: fmtDate(f), to };
+  }
+  // month
+  return { from: fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)), to };
+}
+
+// Human-readable timestamp for the record list (e.g. "23 jun 2026, 21:11").
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('es-MX', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export default function ConsultaView() {
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [platformId, setPlatformId] = useState('');
+  const [datePreset, setDatePreset] = useState<DatePreset>('any');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [result, setResult] = useState<ResultFilter>('');
+
+  const [clients, setClients] = useState<Client[]>([]);
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [detail, setDetail] = useState<RecordDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Load all records on mount so newly-created analyses appear without clicking "Buscar".
+  // Filter-option data. Platforms come nested in the clients payload.
+  useEffect(() => {
+    let active = true;
+    apiGet<Client[]>('/api/catalogs/clients')
+      .then((c) => { if (active) setClients(c); })
+      .catch(() => { /* filters degrade gracefully to empty option lists */ });
+    return () => { active = false; };
+  }, []);
+
+  // Debounce the free-text search so typing doesn't refetch on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const clientOptions: SearchSelectOption[] = useMemo(
+    () => clients.map((c) => ({ value: c.name, label: c.name })),
+    [clients],
+  );
+
+  // Platforms scoped to the selected client; otherwise all, labeled with client.
+  const platformOptions: SearchSelectOption[] = useMemo(() => {
+    const src = clientName ? clients.filter((c) => c.name === clientName) : clients;
+    return src.flatMap((c) =>
+      c.platforms.map((p) => ({
+        value: p.id,
+        label: (p.commercialName || p.legalName || 'Plataforma') + (clientName ? '' : ` — ${c.name}`),
+      })),
+    );
+  }, [clients, clientName]);
+
+  const platformLabel = useMemo(
+    () => platformOptions.find((o) => o.value === platformId)?.label ?? '',
+    [platformOptions, platformId],
+  );
+
+  // Single source of truth for fetching: any filter change re-queries the list.
   useEffect(() => {
     let active = true;
     setLoading(true);
-    apiGet<RecordSummary[]>('/api/records?q=')
+    setError(null);
+    const params = new URLSearchParams();
+    if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+    if (clientName) params.set('clientName', clientName);
+    if (platformId) params.set('platformId', platformId);
+    const { from, to } = resolveDates(datePreset, customFrom, customTo);
+    if (from) params.set('dateFrom', from);
+    if (to) params.set('dateTo', to);
+    if (result) params.set('result', result);
+
+    apiGet<RecordSummary[]>(`/api/records?${params.toString()}`)
       .then((r) => { if (active) setRecords(r); })
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al buscar registros.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
-
-  async function handleSearch(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setDetail(null);
-    setLoading(true);
-    try {
-      const results = await apiGet<RecordSummary[]>(`/api/records?q=${encodeURIComponent(query)}`);
-      setRecords(results);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al buscar registros.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [debouncedQuery, clientName, platformId, datePreset, customFrom, customTo, result]);
 
   async function handleSelect(id: string) {
     setError(null);
@@ -68,12 +184,38 @@ export default function ConsultaView() {
     }
   }
 
+  function handleClientChange(name: string) {
+    setClientName(name);
+    setPlatformId(''); // platform list depends on the client
+  }
+
+  // Active-filter chips (text query lives in the search box, not a chip).
+  const chips: { key: string; label: string; onClear: () => void }[] = [];
+  if (clientName) chips.push({ key: 'client', label: `Cliente: ${clientName}`, onClear: () => handleClientChange('') });
+  if (platformId) chips.push({ key: 'platform', label: `Plataforma: ${platformLabel}`, onClear: () => setPlatformId('') });
+  if (datePreset !== 'any') {
+    const label =
+      datePreset === 'custom'
+        ? `Fecha: ${customFrom || '…'} – ${customTo || '…'}`
+        : DATE_LABEL[datePreset];
+    chips.push({ key: 'date', label, onClear: () => setDatePreset('any') });
+  }
+  if (result) chips.push({ key: 'result', label: RESULT_LABEL[result], onClear: () => setResult('') });
+
+  function clearAll() {
+    handleClientChange('');
+    setDatePreset('any');
+    setCustomFrom('');
+    setCustomTo('');
+    setResult('');
+  }
+
   return (
     <div className="space-y-6">
-      {/* Search card */}
+      {/* Search + filters — aligned grid that fills the row (search spans 2 of 6) */}
       <Card className="p-4 shadow-sm">
-        <form onSubmit={handleSearch} className="flex gap-2">
-          <div className="relative flex-1">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-6">
+          <div className="relative sm:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
               type="text"
@@ -83,14 +225,93 @@ export default function ConsultaView() {
               className="pl-10"
             />
           </div>
-          <Button type="submit" disabled={loading}>
-            Buscar
-          </Button>
-        </form>
+          <SearchSelect
+            value={clientName}
+            onChange={handleClientChange}
+            options={clientOptions}
+            placeholder="Cliente"
+          />
+          <SearchSelect
+            value={platformId}
+            onChange={setPlatformId}
+            options={platformOptions}
+            placeholder="Plataforma"
+            disabled={platformOptions.length === 0}
+          />
+          <select
+            className={`${SELECT_CLS} w-full`}
+            value={datePreset}
+            onChange={(e) => setDatePreset(e.target.value as DatePreset)}
+            aria-label="Filtrar por fecha"
+          >
+            {DATE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <select
+            className={`${SELECT_CLS} w-full`}
+            value={result}
+            onChange={(e) => setResult(e.target.value as ResultFilter)}
+            aria-label="Filtrar por resultado de riesgo"
+          >
+            {RESULT_OPTIONS.map((o) => <option key={o.value || 'all'} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+
+        {datePreset === 'custom' && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="date"
+              className={SELECT_CLS}
+              value={customFrom}
+              max={customTo || undefined}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              aria-label="Desde"
+            />
+            <span className="text-sm text-slate-400">–</span>
+            <input
+              type="date"
+              className={SELECT_CLS}
+              value={customTo}
+              min={customFrom || undefined}
+              onChange={(e) => setCustomTo(e.target.value)}
+              aria-label="Hasta"
+            />
+          </div>
+        )}
       </Card>
+
+      {/* Active filters + result count */}
+      {(chips.length > 0 || records.length > 0 || loading) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {chips.map((chip) => (
+            <span
+              key={chip.key}
+              className="inline-flex items-center gap-1 rounded-full bg-navy-50 px-2.5 py-1 text-xs font-medium text-navy-700"
+            >
+              {chip.label}
+              <button type="button" onClick={chip.onClear} aria-label={`Quitar ${chip.label}`} className="rounded p-0.5 hover:text-navy-900">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          {chips.length > 0 && (
+            <button type="button" onClick={clearAll} className="text-xs font-semibold text-slate-500 transition hover:text-slate-700">
+              Limpiar
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-400">
+            {loading ? 'Buscando…' : `${records.length} registro(s)`}
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>
+      )}
+
+      {!loading && !error && records.length === 0 && (
+        <p className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+          Sin resultados para estos filtros.
+        </p>
       )}
 
       {records.length > 0 && (
@@ -108,7 +329,7 @@ export default function ConsultaView() {
                   <span className="font-semibold text-slate-800">{r.mawbReference}</span>
                   <span className="text-slate-500"> — {r.clientName}</span>
                 </span>
-                <span className="ml-2 shrink-0 text-xs text-slate-400">{r.createdAt}</span>
+                <span className="ml-2 shrink-0 text-xs text-slate-400">{formatDateTime(r.createdAt)}</span>
               </button>
             </li>
           ))}

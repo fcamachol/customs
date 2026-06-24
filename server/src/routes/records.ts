@@ -6,17 +6,59 @@ import { computeLock } from '../services/manifestLock';
 
 export const recordsRouter = Router();
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SCORED_COLORS = ['verde', 'amarillo', 'rojo'];
+
 recordsRouter.get('/', requireAuth, async (req, res) => {
   const q = `%${(req.query.q as string) ?? ''}%`;
   const params: unknown[] = [q];
-  let ownership = '';
+  // Built up dynamically; every user value is parameterized. Unknown/malformed
+  // filter values are ignored (treated as absent), mirroring how `q` is handled.
+  const clauses: string[] = ['(m.mawb_reference ILIKE $1 OR m.client_name ILIKE $1)'];
+
   if (!canSeeAll(req.user!.role)) {
     params.push(req.user!.userId);
-    ownership = ` AND created_by = $${params.length}`;
+    clauses.push(`m.created_by = $${params.length}`);
   }
+
+  const clientName = (req.query.clientName as string | undefined)?.trim();
+  if (clientName) {
+    params.push(clientName);
+    clauses.push(`m.client_name = $${params.length}`);
+  }
+
+  const platformId = (req.query.platformId as string | undefined)?.trim();
+  if (platformId && UUID_RE.test(platformId)) {
+    params.push(platformId);
+    clauses.push(`m.platform_id = $${params.length}`);
+  }
+
+  const dateFrom = (req.query.dateFrom as string | undefined)?.trim();
+  if (dateFrom && DATE_RE.test(dateFrom)) {
+    params.push(dateFrom);
+    clauses.push(`m.created_at >= $${params.length}`);
+  }
+
+  const dateTo = (req.query.dateTo as string | undefined)?.trim();
+  if (dateTo && DATE_RE.test(dateTo)) {
+    params.push(dateTo);
+    clauses.push(`m.created_at < ($${params.length}::date + 1)`);
+  }
+
+  // Risk result is per-shipment; a manifest matches a color if it CONTAINS a
+  // shipment of that color. "gris" (Sin evaluar) = no scored shipments.
+  const result = (req.query.result as string | undefined)?.trim();
+  if (result && SCORED_COLORS.includes(result)) {
+    params.push(result);
+    clauses.push(`EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND s.risk_color = $${params.length})`);
+  } else if (result === 'gris') {
+    clauses.push(`NOT EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND s.risk_color IN ('verde','amarillo','rojo'))`);
+  }
+
   const { rows } = await query(
-    `SELECT id, mawb_reference AS "mawbReference", client_name AS "clientName", created_at AS "createdAt"
-     FROM manifests WHERE (mawb_reference ILIKE $1 OR client_name ILIKE $1)${ownership} ORDER BY created_at DESC`, params);
+    `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName", m.created_at AS "createdAt"
+     FROM manifests m WHERE ${clauses.join(' AND ')} ORDER BY m.created_at DESC`, params);
   res.json(rows);
 });
 

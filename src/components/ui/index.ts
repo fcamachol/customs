@@ -7,3 +7,4 @@ export { PageHeader } from './PageHeader';
 export { EmptyState } from './EmptyState';
 export { FileCard } from './FileCard';
 export { Modal } from './Modal';
+export { SearchSelect, type SearchSelectOption } from './SearchSelect';

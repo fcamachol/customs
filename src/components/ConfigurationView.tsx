@@ -30,6 +30,7 @@ import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
 import { Card, Button, Field, Input, Textarea } from './ui';
 import type { ConfigSection } from '../nav';
+import type { Client, ClientPlatform } from './AddClientModal';
 
 interface Props {
   domain: ConfigSection;
@@ -45,26 +46,6 @@ interface BrandingConfig {
   companyName?: string;
   rfc?: string;
   logoUrl?: string;
-}
-
-interface ClientPlatform {
-  id?: string;
-  commercialName?: string;
-  countryOfOrigin?: string;
-  legalName?: string;
-  email?: string;
-}
-
-interface Client {
-  id: string;
-  name: string;
-  tax_id?: string;
-  address?: string;
-  phone?: string;
-  email?: string;
-  website?: string;
-  platform?: ClientPlatform;
-  platforms?: ClientPlatform[];
 }
 
 interface ValidationParams {

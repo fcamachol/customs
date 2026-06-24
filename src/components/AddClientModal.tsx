@@ -3,6 +3,7 @@ import { apiPost } from '../api';
 import { Modal, Button, Field, Input } from './ui';
 
 export interface ClientPlatform {
+  id?: string;
   commercialName?: string;
   countryOfOrigin?: string;
   legalName?: string;
@@ -17,7 +18,9 @@ export interface Client {
   phone?: string;
   email?: string;
   website?: string;
+  /** Single platform shape kept for the create form; the API returns the full list below. */
   platform?: ClientPlatform;
+  platforms?: ClientPlatform[];
 }
 
 const EMPTY = {

@@ -62,7 +62,7 @@ export const clientPlatformBody = z.object({
 });
 
 // catalogs — config
-const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy'] as const;
+const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
 export const configKeyParam = z.object({
   key: z.enum(ALLOWED_CONFIG_KEYS),
 });
@@ -103,13 +103,13 @@ export const importDataBody = z.object({
 }).passthrough();  // allow other unknown fields (allowlist via FIELDS in handler)
 
 // pedimento
-const importerSchema = z.object({
+export const importerSchema = z.object({
   rfc: z.string().min(1),
   name: z.string().min(1),
   fiscalAddress: z.string().min(1),
 }).passthrough();
 
-const agentSchema = z.object({
+export const agentSchema = z.object({
   patente: z.string().min(1),
   name: z.string().min(1),
   agentRfc: z.string().min(1),

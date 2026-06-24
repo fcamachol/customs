@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
-import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam } from '../validation/schemas';
+import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema } from '../validation/schemas';
 
 export const catalogsRouter = Router();
 
@@ -229,11 +229,13 @@ const ALLOWED_CONFIG_KEYS = new Set([
   'denied_parties',
   'tasa_vigencias',        // §10 — parametrizable tasa-global vigencias (super_admin only to edit)
   'pedimento_scan_policy', // RF-08/RF-10 — PDF/QR scan sensitivity policy
+  'importer_of_record',   // Phase 2 entity master — stable importer of record (super_admin only)
+  'customs_agent',         // Phase 2 entity master — stable customs agent (super_admin only)
 ]);
 
 // §10: editing tasa-global vigencias is restricted to super_admin (everything else is admin).
 // F18: denied_parties (sanctions list) is also super_admin-only to prevent tampering.
-const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias', 'denied_parties']);
+const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias', 'denied_parties', 'importer_of_record', 'customs_agent']);
 
 // GET /api/catalogs/config/:key — any authenticated role
 catalogsRouter.get('/config/:key', requireAuth, validate({ params: configKeyParam }), async (req, res) => {
@@ -254,6 +256,18 @@ catalogsRouter.put(
     if (SUPER_ADMIN_CONFIG_KEYS.has(key) && req.user!.role !== 'super_admin') {
       res.status(403).json({ error: 'Solo el Super Admin puede modificar las vigencias de tasa global' });
       return;
+    }
+    const SHAPE_BY_KEY: Record<string, typeof importerSchema | typeof agentSchema> = {
+      importer_of_record: importerSchema,
+      customs_agent: agentSchema,
+    };
+    const shape = SHAPE_BY_KEY[key];
+    if (shape) {
+      const parsed = shape.safeParse(req.body?.value);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Forma inválida para esta configuración', details: parsed.error.issues });
+        return;
+      }
     }
     const value = req.body?.value;
     const { rows } = await query(

@@ -10,6 +10,7 @@ const app = createApp();
 let adminToken: string;
 let capturistaToken: string;
 let autoridadToken: string;
+let superAdminToken: string;
 
 beforeEach(async () => {
   await truncateAll();
@@ -26,9 +27,14 @@ beforeEach(async () => {
     `INSERT INTO users (username, password_hash, role) VALUES ('aut1', $1, 'autoridad') RETURNING id`,
     [hash],
   );
+  const { rows: saRows } = await query(
+    `INSERT INTO users (username, password_hash, role) VALUES ('sa1', $1, 'super_admin') RETURNING id`,
+    [hash],
+  );
   adminToken = signToken({ userId: adminRows[0].id, role: 'admin' , tv: 0 });
   capturistaToken = signToken({ userId: capRows[0].id, role: 'capturista' , tv: 0 });
   autoridadToken = signToken({ userId: autRows[0].id, role: 'autoridad' , tv: 0 });
+  superAdminToken = signToken({ userId: saRows[0].id, role: 'super_admin', tv: 0 });
 });
 
 describe('POST /api/catalogs/clients', () => {
@@ -221,5 +227,38 @@ describe('GET /api/catalogs/config/:key', () => {
       .get('/api/catalogs/config/bad_key')
       .set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(400);
+  });
+});
+
+describe('PUT /api/catalogs/config/importer_of_record', () => {
+  it('super_admin can PUT a valid importer_of_record; non-super_admin is 403; bad shape is 400', async () => {
+    const importer = { rfc: 'ADM130509UQ0', name: 'ADMERCE SA DE CV', fiscalAddress: 'PONIENTE 150, CDMX' };
+    // non-super_admin (admin) → 403
+    const adminRes = await request(app).put('/api/catalogs/config/importer_of_record')
+      .set('Authorization', `Bearer ${adminToken}`).send({ value: importer });
+    expect(adminRes.status).toBe(403);
+    // super_admin valid → 200 and round-trips via GET
+    const ok = await request(app).put('/api/catalogs/config/importer_of_record')
+      .set('Authorization', `Bearer ${superAdminToken}`).send({ value: importer });
+    expect(ok.status).toBe(200);
+    const get = await request(app).get('/api/catalogs/config/importer_of_record')
+      .set('Authorization', `Bearer ${superAdminToken}`);
+    expect(get.body.value).toMatchObject(importer);
+    // super_admin bad shape (missing fiscalAddress) → 400
+    const bad = await request(app).put('/api/catalogs/config/importer_of_record')
+      .set('Authorization', `Bearer ${superAdminToken}`).send({ value: { rfc: 'X', name: 'Y' } });
+    expect(bad.status).toBe(400);
+  });
+});
+
+describe('PUT /api/catalogs/config/customs_agent', () => {
+  it('customs_agent validates the four-field shape', async () => {
+    const agent = { patente: '1653', name: 'MIGUEL ANDRES GUZMAN MORENO', agentRfc: 'GUMM710831UYA', agencyRfc: 'GLG1502247K9' };
+    const ok = await request(app).put('/api/catalogs/config/customs_agent')
+      .set('Authorization', `Bearer ${superAdminToken}`).send({ value: agent });
+    expect(ok.status).toBe(200);
+    const bad = await request(app).put('/api/catalogs/config/customs_agent')
+      .set('Authorization', `Bearer ${superAdminToken}`).send({ value: { patente: '1653' } });
+    expect(bad.status).toBe(400);
   });
 });

@@ -1,6 +1,6 @@
 import type { Shipment } from '../types/shipment';
 import { cleanId, validateTaxId } from '../parsing/taxId';
-import { matchesBrand, matchesProhibited } from './lists';
+import { matchesBrand, matchesProhibited, matchesDeniedParty, type DeniedPartyEntry } from './lists';
 import { resolveThresholds, type Thresholds, type Weights } from './ruleset';
 
 export interface RiskContext {
@@ -54,7 +54,7 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
 
 // ─── Task 5: Graded, entity-aware signals with reason codes ──────────────────
 
-export type SignalId = 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd';
+export type SignalId = 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd' | 'denied_party';
 
 export interface ReasonCode {
   signalId: SignalId;
@@ -87,6 +87,17 @@ export interface EntityContext {
   entityValueTotal?: Record<string, number>;
   piracyBrands?: string[];
   prohibitedKeywords?: string[];
+  /**
+   * F18: denied-party / sanctions list (OFAC/BIS/EU/UN).
+   * Loaded from the `denied_parties` config key and passed through scoreManifest → EntityContext.
+   * Screened against: consignee.name, sender.name (normalized token match) and
+   * consignee.curp, consignee.rfc, consignee.foreignTaxId, sender.taxId (exact ID match).
+   * Fields are available decrypted in-memory at scoring time (risk.ts decrypts before scoreManifest).
+   *
+   * TODO(F20): when blind-index tokenization lands, the ID matching here should align with F20's
+   * tokenized identity key derivation so encrypted IDs can be screened without full decryption.
+   */
+  deniedParties?: DeniedPartyEntry[];
 }
 
 /** Entity identity: RFC/CURP when present (deterministic), else normalized name. */
@@ -174,6 +185,32 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
   const brand = matchesBrand(s.description, ctx.piracyBrands);
   if (brand) {
     add('pirateria', 1, `Piratería (${brand})`, { matched: brand }, 'rojo');
+  }
+
+  // denied_party (F18): OFAC/BIS/EU/UN sanctions screening — full weight + forces rojo.
+  // Match on consignee.name + sender.name (normalized token) and exact ID (RFC/CURP/foreignTaxId/sender.taxId).
+  // IDs are available decrypted in-memory (risk.ts decrypts before scoreManifest — no encryption coupling here).
+  // TODO(F20): align ID keying with F20's blind-index tokenization when that lands.
+  const dpMatch = matchesDeniedParty(
+    {
+      names: [s.consignee.name, s.sender?.name ?? ''].filter(Boolean),
+      ids: [
+        s.consignee.curp ?? '',
+        s.consignee.rfc ?? '',
+        s.consignee.foreignTaxId ?? '',
+        s.sender?.taxId ?? '',
+      ].filter(Boolean),
+    },
+    ctx.deniedParties,
+  );
+  if (dpMatch) {
+    add(
+      'denied_party',
+      1,
+      `Coincidencia en lista de sancionados (${dpMatch.source ?? 'OFAC/BIS/EU/UN'})`,
+      { matched: dpMatch.matched, source: dpMatch.source, program: dpMatch.program },
+      'rojo',
+    );
   }
 
   // bbdd (Ficha-124): fires only when monthlyNameCount > 3, graded by excess over 3.

@@ -133,7 +133,8 @@ const ALLOWED_CONFIG_KEYS = new Set([
 ]);
 
 // §10: editing tasa-global vigencias is restricted to super_admin (everything else is admin).
-const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias']);
+// F18: denied_parties (sanctions list) is also super_admin-only to prevent tampering.
+const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias', 'denied_parties']);
 
 // GET /api/catalogs/config/:key — any authenticated role
 catalogsRouter.get('/config/:key', requireAuth, async (req, res) => {

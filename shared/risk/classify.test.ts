@@ -66,7 +66,7 @@ describe('scoreManifest', () => {
     expect(out[0].incidences).toEqual(expect.arrayContaining([expect.stringContaining('Artículos prohibidos')]));
     expect(out[0].band).toBe('rojo');
     expect(out[0].color).toBe('rojo'); // back-compat alias
-    // score is 0-100 weighted (prohibidos = 60/218 * 100 ≈ 28)
+    // score is 0-100 weighted (prohibidos = 60/348 * 100 ≈ 17, F18 raised maxPoints to 348)
     expect(out[0].score).toBeGreaterThan(0);
   });
 
@@ -83,7 +83,7 @@ describe('scoreManifest', () => {
   });
 
   it('invalid RFC + value too high produces rojo in the weighted engine', () => {
-    // id signal (25 pts) + monto signal (20 pts) = 45/218*100 ≈ 20.6 → ≥ rojo threshold (17)
+    // id signal (25 pts) + monto signal (20 pts) = 45/348*100 ≈ 12.9 → ≥ rojo threshold (11)
     const s = ship({ customsValueUsd: 5000, consignee: { name: 'Bob', rfc: 'BAD', address: 'Calle 9' } });
     const out = scoreManifest([s], {});
     expect(out[0].score).toBeGreaterThan(0);
@@ -125,7 +125,7 @@ describe('scoreManifest', () => {
     expect(out[0].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
     expect(out[1].reasons.some((r) => r.signalId === 'agregado')).toBe(true);
     // Neither row triggers per-row monto (each is ≤ $2,500), but aggregate fires
-    // Split score ≈ 30/248×100 ≈ 12.1 → lands in amarillo [10, 15)
+    // Split score ≈ 30/348×100 ≈ 8.6 → lands in amarillo [7, 11) with F18 recalibrated bands
     expect(out[0].band).toBe('amarillo');
     expect(out[1].band).toBe('amarillo');
   });

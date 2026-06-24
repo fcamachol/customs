@@ -1,0 +1,5 @@
+ent_num,SDN_Name,SDN_Type,Program,Title,Call_Sign,Vess_type,Tonnage,GRT,Vess_flag,Vess_owner,Remarks
+1234,"LASTNAME FIRSTNAME",individual,SDGT,,,,,,,,  id RFC ABCD123456EFG
+5678,"DRUG CARTEL EXPORTS SA DE CV",entity,SDNTK,,,,,,,,  id RFC DREX800101AB5
+9012,"IVAN PETROV",individual,UKRAINE-EO13685,,,,,,,,
+3456,"COMERCIAL FANTASMA SRL",entity,SDGT,,,,,,,,  id RFC CFAN920501XY3

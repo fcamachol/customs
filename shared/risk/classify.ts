@@ -3,6 +3,7 @@ import { gradeSignals, entityKey, norm, type ReasonCode, type EntityContext } fr
 import { scoreRow, type Band } from './scorecard';
 import { RULESET, resolveThresholds, resolveWeights, resolveBands, type Thresholds, type Weights, type Bands } from './ruleset';
 import { rulesetHash } from './hash';
+import type { DeniedPartyEntry } from './lists';
 
 export type RiskColor = 'verde' | 'amarillo' | 'rojo' | 'gris';
 
@@ -32,6 +33,13 @@ export interface ScoreOptions {
   piracyBrands?: string[];
   /** Optional override list for prohibited keywords (falls back to built-in list when omitted) */
   prohibitedKeywords?: string[];
+  /**
+   * F18: denied-party / sanctions screening list (OFAC/BIS/EU/UN).
+   * Loaded from the `denied_parties` config key (see server/src/routes/risk.ts).
+   * Included in `resolved.lists` so `rulesetHash` changes when the screening list changes,
+   * preserving replay integrity: a stored score can be re-derived from the same list snapshot.
+   */
+  deniedParties?: DeniedPartyEntry[];
   /** Optional threshold overrides (D4 / RF-24, from the `validation_params` config key) */
   thresholds?: Partial<Record<keyof Thresholds, unknown>>;
   /** Optional weight overrides */
@@ -93,6 +101,7 @@ export function scoreManifest(
     entityValueTotal,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
+    deniedParties: options?.deniedParties,
   };
 
   const resolved = {
@@ -103,6 +112,9 @@ export function scoreManifest(
     lists: {
       piracyBrands: options?.piracyBrands ?? null,
       prohibitedKeywords: options?.prohibitedKeywords ?? null,
+      // F18: denied-party list is included so rulesetHash changes when screening list changes.
+      // This ensures replay integrity: a stored hash uniquely identifies the list snapshot used.
+      deniedParties: options?.deniedParties ?? null,
     },
   };
   const version = rulesetVersionFor(options);

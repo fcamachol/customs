@@ -10,6 +10,7 @@ import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
 import { decryptShipment } from '../crypto/fieldCrypto';
 import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
+import type { DeniedPartyEntry } from '../../../shared/risk/lists';
 
 export const riskRouter = Router();
 
@@ -30,10 +31,14 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), as
   const piracyBrands = await loadConfig<string[]>('piracy_brands');
   // D4 / RF-24: admin-configurable thresholds (umbrales) from the validation_params catalog
   const thresholds = await loadConfig<Partial<Record<keyof Thresholds, unknown>>>('validation_params');
+  // F18: OFAC/BIS/EU/UN sanctions screening list. Loaded from config key `denied_parties`.
+  // Shipments are decrypted above before scoreManifest so IDs are available in plaintext here.
+  // TODO(F20): when blind-index tokenization lands, coordinate ID keying with F20's token derivation.
+  const deniedParties = await loadConfig<DeniedPartyEntry[]>('denied_parties');
 
   await deleteManifestHistory(req.params.id);
   const history = await loadHistoryCounts(period, req.params.id);
-  const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds };
+  const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds, deniedParties };
   const scored = scoreManifest(shipments, history, scoreOptions);
 
   // FIX: use rows[i].id (table PK) not sc.shipment.id (data JSON field) — they can differ.

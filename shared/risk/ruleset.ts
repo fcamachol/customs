@@ -31,7 +31,11 @@ export const RULESET = {
    * `monto` (20) because a genuine split-shipment pair (2×$2,499 → total $4,998, excess≈1.0)
    * must land in amarillo on its own — weight 20 produced a score of ~8.4 with maxPoints=238,
    * which fell below amarillo=10 and forced the cutoff down to 8 (sweeping ~40% of all rows).
-   * Weight 30 → maxPoints=248 → split score = 30/248×100 ≈ 12.1, safely in amarillo [10,15). */
+   * Weight 30 → maxPoints=248 → split score = 30/248×100 ≈ 12.1, safely in amarillo [10,15).
+   * F18 adds `denied_party` (weight 100) for OFAC/BIS/EU/UN sanctions screening. The weight
+   * dominates so any match scores rojo even without forcesBand; forcesBand:'rojo' is also set
+   * as a belt-and-suspenders guarantee. The golden 501-row fixture has NO sanctioned parties,
+   * so adding this weight DOES change maxPoints (248 → 348) but does NOT change distribution. */
   weights: {
     id: 25,
     cantidad: 15,
@@ -43,6 +47,9 @@ export const RULESET = {
     prohibidos: 60,
     pirateria: 60,
     bbdd: 18,
+    /** F18: denied-party / sanctions screening (OFAC/BIS/EU/UN). Dominating weight (100) +
+     * forcesBand:'rojo' guarantees any match is rojo regardless of other signals. */
+    denied_party: 100,
   },
   /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
    * Calibrated in Task 7: with the 501-row golden fixture these thresholds produced
@@ -53,8 +60,15 @@ export const RULESET = {
    * on ZERO golden rows, so the cutoff does not need adjustment; the split score (≈12.1)
    * lands in amarillo naturally with the higher weight.
    * Post-F13 501-row distribution (bands {amarillo:10,rojo:15}): verde≈87%, amarillo≈6%,
-   * rojo≈6.8% — within all targets (3–12% rojo, >40% verde). */
-  bands: { amarillo: 10, rojo: 15 },
+   * rojo≈6.8% — within all targets (3–12% rojo, >40% verde).
+   * F18 recalibration: adding denied_party (weight 100) raises maxPoints 248 → 348, which
+   * compresses all scores by ~29%. Bands adjusted proportionally to restore the golden
+   * distribution. denied_party fires on ZERO golden rows (no sanctioned parties in fixture),
+   * so the band change is purely a proportional compression correction:
+   *   amarillo: 10 → 7  (raw-pts threshold 24.8 → 24.8/348*100 ≈ 7.1, rounded to 7)
+   *   rojo:     15 → 11 (raw-pts threshold 37.2 → 37.2/348*100 ≈ 10.7, rounded to 11)
+   * Post-F18 501-row distribution (bands {amarillo:7,rojo:11}): expected rojo≈6-7%, verde>80%. */
+  bands: { amarillo: 7, rojo: 11 },
 } as const;
 
 export type Thresholds = {
@@ -87,9 +101,10 @@ export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, u
  * Note: `consignatarios` is NOT in Weights — it is subsumed into the `bbdd` (Ficha-124)
  * recurrence signal in Task 5. `direcciones` is the smurfing signal (distinct consignees
  * per address). `agregado` (F13) is the cross-row split-shipment aggregate cap.
+ * `denied_party` (F18) is the OFAC/BIS/EU/UN sanctions screening signal.
  */
 export type Weights = Record<
-  'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd',
+  'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd' | 'denied_party',
   number
 >;
 

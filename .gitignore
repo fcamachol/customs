@@ -17,3 +17,8 @@ DEV_CREDENTIALS.md
 
 # Local Claude Code config + worktrees (not source)
 .claude/
+
+# worktree scratch / symlinked deps (SDD)
+/node_modules
+/server/node_modules
+.superpowers/

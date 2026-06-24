@@ -10,6 +10,29 @@ const app = createApp();
 let token: string;
 let userId: string;
 
+async function addShipment(manifestId: string, guideId: string, riskColor: string | null = null) {
+  await query(
+    `INSERT INTO shipments (id, manifest_id, data, risk_color) VALUES (gen_random_uuid(), $1, $2::jsonb, $3)`,
+    [manifestId, JSON.stringify({ guideId }), riskColor]);
+}
+
+async function addPedimento(manifestId: string, fields: {
+  numero?: string; covered?: string[]; siblings?: string[]; fileId?: string; scanVerdict?: string;
+} = {}) {
+  await query(
+    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, sibling_numeros, file_id, pedimento_scan, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      manifestId,
+      fields.numero ?? null,
+      fields.covered ?? null,
+      fields.siblings ?? null,
+      fields.fileId ?? null,
+      fields.scanVerdict ? JSON.stringify({ verdict: fields.scanVerdict, findings: [] }) : null,
+      userId,
+    ]);
+}
+
 beforeEach(async () => {
   await truncateAll();
   const hash = await hashPassword('p');
@@ -27,15 +50,18 @@ describe('records', () => {
     expect(res.body[0].clientName).toBe('Cliente A');
   });
 
-  it('returns a single record with its 3 artifacts in Consulta', async () => {
+  it('returns a single record with manifest-level artifacts + pedimentos in Consulta', async () => {
     const list = await request(app).get('/api/records?q=369-1').set('Authorization', `Bearer ${token}`);
     const id = list.body[0].id;
     const res = await request(app).get(`/api/records/${id}`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('artifacts');
+    // Risk stays manifest-level; Reporte General + Layout moved to pedimentos[].artifacts (Task 10).
     expect(res.body.artifacts).toHaveProperty('riskAnalysis');
     expect(res.body.artifacts).toHaveProperty('pedimentoPdf');
-    expect(res.body.artifacts).toHaveProperty('report');
+    expect(res.body.artifacts).not.toHaveProperty('report');
+    expect(res.body).toHaveProperty('pedimentos');
+    expect(res.body).toHaveProperty('coverage');
   });
 });
 
@@ -51,7 +77,7 @@ describe('records — Consulta filters', () => {
 
   it('filters by risk result: verde matches manifests containing a verde shipment', async () => {
     const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('500-9','Cliente C',$1) RETURNING id`, [userId]);
-    await query(`INSERT INTO shipments (id, manifest_id, data, risk_color) VALUES (gen_random_uuid(), $1, '{}'::jsonb, 'verde')`, [m.rows[0].id]);
+    await addShipment(m.rows[0].id, 'G-VERDE', 'verde');
     const res = await request(app).get('/api/records?result=verde').set(auth());
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
@@ -60,7 +86,7 @@ describe('records — Consulta filters', () => {
 
   it('filters by risk result: gris matches manifests with no scored shipments', async () => {
     const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('500-9','Cliente C',$1) RETURNING id`, [userId]);
-    await query(`INSERT INTO shipments (id, manifest_id, data, risk_color) VALUES (gen_random_uuid(), $1, '{}'::jsonb, 'verde')`, [m.rows[0].id]);
+    await addShipment(m.rows[0].id, 'G-VERDE', 'verde');
     const res = await request(app).get('/api/records?result=gris').set(auth());
     expect(res.status).toBe(200);
     // The two seeded manifests have no shipments; the verde one is excluded.
@@ -80,40 +106,149 @@ describe('records — Consulta filters', () => {
 
 });
 
-describe('records — Seguimiento status', () => {
+describe('records — coverage status (list)', () => {
   const auth = () => ({ Authorization: `Bearer ${token}` });
 
-  it('reports pendiente/locked=false for a bare manifest', async () => {
+  it('reports sin_pedimento with 0 uploaded for a bare manifest', async () => {
     const res = await request(app).get('/api/records?q=369-1').set(auth());
     expect(res.status).toBe(200);
-    expect(res.body[0]).toMatchObject({ status: 'pendiente', locked: false, scanVerdict: null });
+    expect(res.body[0]).toMatchObject({ coverageStatus: 'sin_pedimento', uploadedCount: 0 });
   });
 
-  it('reports capturado once import data is present (still editable)', async () => {
-    const m = await query(
-      `INSERT INTO manifests (mawb_reference, client_name, created_by, import_data) VALUES ('700-1','Cliente D',$1,$2::jsonb) RETURNING id`,
-      [userId, JSON.stringify({ patente: '3250' })]);
-    const res = await request(app).get(`/api/records?q=700-1`).set(auth());
-    expect(res.body[0].id).toBe(m.rows[0].id);
-    expect(res.body[0]).toMatchObject({ status: 'capturado', locked: false });
+  it('reports completo when the single pedimento covers every manifest guía', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('800-1','Cliente G',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    await addShipment(id, 'GUIA-A');
+    await addShipment(id, 'GUIA-B');
+    await addPedimento(id, { numero: '111', covered: ['GUIA-A', 'GUIA-B'], fileId: undefined });
+    const res = await request(app).get('/api/records?q=800-1').set(auth());
+    expect(res.body[0]).toMatchObject({ coverageStatus: 'completo', uploadedCount: 1 });
   });
 
-  it('reports prevalidado/locked=true when prevalidation is APPROVED', async () => {
-    await query(
-      `INSERT INTO manifests (mawb_reference, client_name, created_by, prevalidation) VALUES ('701-1','Cliente E',$1,$2::jsonb)`,
-      [userId, JSON.stringify({ status: 'APPROVED', errors: [], warnings: [] })]);
-    const res = await request(app).get(`/api/records?q=701-1`).set(auth());
-    expect(res.body[0]).toMatchObject({ status: 'prevalidado', locked: true });
+  it('reports parcial when a manifest guía is left uncovered', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('801-1','Cliente H',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    await addShipment(id, 'GUIA-A');
+    await addShipment(id, 'GUIA-B');
+    await addPedimento(id, { numero: '111', covered: ['GUIA-A'] });
+    const res = await request(app).get('/api/records?q=801-1').set(auth());
+    expect(res.body[0]).toMatchObject({ coverageStatus: 'parcial', uploadedCount: 1 });
   });
 
-  it('reports cargado/locked=true with the scan verdict when a PDF is attached', async () => {
+  it('reports parcial with an expectedCount when a sibling pedimento is still missing', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('802-1','Cliente I',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    await addShipment(id, 'GUIA-A');
+    // One uploaded pedimento that declares a sibling → expected = 2, uploaded = 1.
+    await addPedimento(id, { numero: '258516535001684', covered: ['GUIA-A'], siblings: ['258516535001685'] });
+    const res = await request(app).get('/api/records?q=802-1').set(auth());
+    expect(res.body[0]).toMatchObject({ coverageStatus: 'parcial', expectedCount: 2, uploadedCount: 1 });
+  });
+});
+
+describe('records — detail pedimentos[]', () => {
+  const auth = () => ({ Authorization: `Bearer ${token}` });
+
+  it('returns per-pedimento rows with lock + scan + own PDF artifact', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('900-1','Cliente J',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    await addShipment(id, 'GUIA-A');
     const f = await query(`INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`, [userId]);
-    const fileId = f.rows[0].id;
+    await addPedimento(id, { numero: '111', covered: ['GUIA-A'], fileId: f.rows[0].id, scanVerdict: 'clean' });
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    expect(res.body.pedimentos).toHaveLength(1);
+    const p = res.body.pedimentos[0];
+    expect(p.numeroPedimento).toBe('111');
+    expect(p.fileId).toBe(f.rows[0].id);
+    expect(p.scanVerdict).toBe('clean');
+    expect(p.pedimentoPdf).toBe(`/api/files/${f.rows[0].id}`);
+    // A pedimento with an attached file is locked (computeLock on the row).
+    expect(p.lock).toMatchObject({ editable: false });
+    expect(p.coveredGuias).toEqual(['GUIA-A']);
+    // Per-pedimento report artifacts (Task 10): each subdivisión carries its own report/layout URLs.
+    expect(p.artifacts).toMatchObject({
+      reports: `/api/pedimentos/${p.id}/reports.json`,
+      report: `/api/pedimentos/${p.id}/report.xlsx`,
+      layout: `/api/pedimentos/${p.id}/layout.xlsx`,
+    });
+    // Coverage is complete (single guía covered).
+    expect(res.body.coverage.status).toBe('completo');
+    // Top-level pedimentoPdf is sourced from the pedimento's file.
+    expect(res.body.artifacts.pedimentoPdf).toBe(`/api/files/${f.rows[0].id}`);
+  });
+
+  it('surfaces per-pedimento importData + importDataVersion (capture is per-row now)', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('910-1','Cliente K',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, import_data, import_data_version, created_by)
+       VALUES ($1,'222',$2::jsonb,3,$3) RETURNING id`,
+      [id, JSON.stringify({ patente: '3250', cveT1: 'A1' }), userId]);
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.id).toBe(ped.rows[0].id);
+    expect(p.importData).toMatchObject({ patente: '3250', cveT1: 'A1' });
+    expect(p.importDataVersion).toBe(3);
+    // No legacy top-level manifest import-data fields leak through.
+    expect(res.body.importData).toBeUndefined();
+    expect(res.body.importDataVersion).toBeUndefined();
+  });
+
+  it('returns an empty pedimentos list and null pedimentoPdf for a bare manifest', async () => {
+    const list = await request(app).get('/api/records?q=370-2').set(auth());
+    const id = list.body[0].id;
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.body.pedimentos).toEqual([]);
+    expect(res.body.artifacts.pedimentoPdf).toBeNull();
+    expect(res.body.coverage.status).toBe('sin_pedimento');
+  });
+
+  it('surfaces per-pedimento prevalidation (Task 9) and no legacy top-level pedimento/prevalidation', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('920-1','Cliente L',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const prevalidation = { status: 'APPROVED', errors: [] };
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, prevalidation, created_by)
+       VALUES ($1,'333',$2::jsonb,$3) RETURNING id`,
+      [id, JSON.stringify(prevalidation), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.id).toBe(ped.rows[0].id);
+    // prevalidation is now per-pedimento (Task 9).
+    expect(p.prevalidation).toMatchObject({ status: 'APPROVED' });
+    // Legacy top-level manifest fields must not appear.
+    expect(res.body.pedimento).toBeUndefined();
+    expect(res.body.prevalidation).toBeUndefined();
+  });
+
+  it('per-pedimento lock is APPROVED-locked when prevalidation status is APPROVED', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('930-1','Cliente M',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const prevalidation = { status: 'APPROVED', errors: [] };
     await query(
-      `INSERT INTO manifests (mawb_reference, client_name, created_by, file_id, pedimento_scan) VALUES ('702-1','Cliente F',$1,$2,$3::jsonb)`,
-      [userId, fileId, JSON.stringify({ verdict: 'clean', findings: [] })]);
-    const res = await request(app).get(`/api/records?q=702-1`).set(auth());
-    expect(res.body[0]).toMatchObject({ status: 'cargado', locked: true, scanVerdict: 'clean' });
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, prevalidation, created_by)
+       VALUES ($1,'444',$2::jsonb,$3)`,
+      [id, JSON.stringify(prevalidation), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    // Per-pedimento lock reflects the pedimento's own prevalidation (not manifests').
+    expect(p.lock).toMatchObject({ editable: false });
   });
 });
 

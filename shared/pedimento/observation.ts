@@ -9,3 +9,16 @@ export function partidaObservation(i: ObservationInput): string {
   const value = i.valueUsd.toFixed(2);
   return `GUIA ${i.guideId} VALOR ${value} USD NOMBRE ${i.consigneeName.toUpperCase()} RFC-CURP ${i.id}`;
 }
+
+const OBS_RE = /^GUIA\s+(\S+)\s+VALOR\s+([\d.,]+)\s+USD\s+NOMBRE\s+(.+?)\s+RFC-CURP\s+(\S+)\s*$/;
+
+export function parseObservation(line: string): ObservationInput | null {
+  const m = (line ?? '').trim().match(OBS_RE);
+  if (!m) return null;
+  return {
+    guideId: m[1],
+    valueUsd: Number(m[2].replace(/,/g, '')),
+    consigneeName: m[3].trim(),
+    id: m[4],
+  };
+}

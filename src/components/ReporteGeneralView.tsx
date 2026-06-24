@@ -14,6 +14,16 @@ interface RecordSummary {
   createdAt: string;
 }
 
+// A subdivisión (pedimento) of the selected record; each has its own Reporte General.
+interface PedimentoItem {
+  id: string;
+  numeroPedimento: string | null;
+}
+interface RecordDetail {
+  id: string;
+  pedimentos: PedimentoItem[];
+}
+
 export default function ReporteGeneralView() {
   // Record search state
   const [query, setQuery] = useState('');
@@ -105,7 +115,18 @@ export default function ReporteGeneralView() {
         clientId: selectedClientId,
         platformId: selectedPlatformId,
       });
-      await apiDownload(`/api/records/${selectedId}/report.xlsx`, 'Reporte_General.xlsx');
+      // Reporte General is per-pedimento (each subdivisión is its own customs submission), so
+      // download the report.xlsx for each of the record's pedimentos.
+      const detail = await apiGet<RecordDetail>(`/api/records/${selectedId}`);
+      const peds = detail.pedimentos ?? [];
+      if (peds.length === 0) {
+        setError('Este registro aún no tiene pedimentos (subdivisiones). Genere el pedimento antes de descargar el reporte.');
+        return;
+      }
+      for (const p of peds) {
+        const suffix = p.numeroPedimento ? `_${p.numeroPedimento}` : '';
+        await apiDownload(`/api/pedimentos/${p.id}/report.xlsx`, `Reporte_General${suffix}.xlsx`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al generar el reporte.');
     } finally {

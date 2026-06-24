@@ -7,32 +7,23 @@ import type { RiskRow, RiskSummaryData } from './RiskResultTable';
 import { TramiteDetailDrawer } from './TramiteDetailDrawer';
 
 interface ReportLockState { editable: boolean; reason: string | null }
-interface ReportsBundle {
+
+// Per-MANIFEST risk bundle (Análisis de Riesgo).
+interface RiskBundle {
   risk: RiskRow[];
-  report: Record<string, string>[];
-  layout: Record<string, string>[];
-  lock: ReportLockState;
   riskStale: boolean;
-  masked: boolean;
   generatedAt: string;
   contentHash: string;
 }
 
-type TabKey = 'riesgo' | 'reporte' | 'layout' | 'pedimento';
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'riesgo', label: 'Análisis de Riesgo' },
-  { key: 'reporte', label: 'Reporte General' },
-  { key: 'layout', label: 'Layout' },
-];
-
-// Download target (xlsx report or the pedimento PDF) for the currently selected tab.
-function downloadTargetFor(tab: TabKey, recordId: string, pedimentoPdf: string | null): { path: string; name: string } | null {
-  switch (tab) {
-    case 'riesgo': return { path: `/api/records/${recordId}/risk.xlsx`, name: 'Analisis_de_Riesgo.xlsx' };
-    case 'reporte': return { path: `/api/records/${recordId}/report.xlsx`, name: 'Reporte_General.xlsx' };
-    case 'layout': return { path: `/api/records/${recordId}/layout.xlsx`, name: 'LayOut_sistema.xlsx' };
-    case 'pedimento': return pedimentoPdf ? { path: pedimentoPdf, name: 'Pedimento.pdf' } : null;
-  }
+// Per-PEDIMENTO report bundle (Reporte General + Layout for one subdivisión).
+interface PedimentoReportsBundle {
+  report: Record<string, string>[];
+  layout: Record<string, string>[];
+  lock: ReportLockState;
+  masked: boolean;
+  generatedAt: string;
+  contentHash: string;
 }
 
 // Columns surfaced in the wide-report grids; the row click opens the drawer with ALL columns.
@@ -91,33 +82,118 @@ function GridTable({
   );
 }
 
-export function ReportTabs({ recordId, pedimentoPdf = null, refreshKey = 0 }: { recordId: string; pedimentoPdf?: string | null; refreshKey?: number }) {
-  const [bundle, setBundle] = useState<ReportsBundle | null>(null);
-  const [tab, setTab] = useState<TabKey>('riesgo');
+/**
+ * Manifest-level Análisis de Riesgo (risk is shipment-scoped and pedimento-independent). Rendered
+ * once per record; report + layout + pedimento PDF live in the per-pedimento panels below.
+ */
+export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refreshKey?: number }) {
+  const [bundle, setBundle] = useState<RiskBundle | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    apiGet<RiskBundle>(`/api/records/${recordId}/reports.json`)
+      .then((b) => { if (active) setBundle(b); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar el análisis de riesgo.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [recordId, refreshKey]);
+
+  async function handleDownload() {
+    setError(null);
+    try {
+      await apiDownload(`/api/records/${recordId}/risk.xlsx`, 'Analisis_de_Riesgo.xlsx');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al descargar el archivo.');
+    }
+  }
+
+  return (
+    <Card className="p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
+        <h2 className="text-sm font-semibold text-navy-700">Análisis de Riesgo</h2>
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+        >
+          <Download className="h-3.5 w-3.5" /> Descargar
+        </button>
+      </div>
+
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+      {loading && !bundle && <p className="px-1 py-6 text-sm text-slate-500">Cargando…</p>}
+
+      {bundle && (
+        <div className="space-y-4">
+          {bundle.riskStale && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Riesgo desactualizado: los datos de importación cambiaron después del análisis. Vuelva a correr el análisis de riesgo antes de continuar al previo.</span>
+            </div>
+          )}
+          <RiskSummary summary={summarize(bundle.risk ?? [])} />
+          <RiskResultTable rows={bundle.risk ?? []} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+type PedimentoTabKey = 'reporte' | 'layout' | 'pedimento';
+const PEDIMENTO_TABS: { key: PedimentoTabKey; label: string }[] = [
+  { key: 'reporte', label: 'Reporte General' },
+  { key: 'layout', label: 'Layout' },
+];
+
+/**
+ * Per-PEDIMENTO Reporte General + Layout + Pedimento PDF for one subdivisión. Fetches the report
+ * bundle built over THIS pedimento's covered-guía subset + its own import_data, and downloads that
+ * subdivisión's report.xlsx / layout.xlsx / PDF.
+ */
+export function PedimentoReportTabs({
+  pedimentoId,
+  title,
+  pedimentoPdf = null,
+  refreshKey = 0,
+}: {
+  pedimentoId: string;
+  title?: string;
+  pedimentoPdf?: string | null;
+  refreshKey?: number;
+}) {
+  const [bundle, setBundle] = useState<PedimentoReportsBundle | null>(null);
+  const [tab, setTab] = useState<PedimentoTabKey>('reporte');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [drawerRow, setDrawerRow] = useState<{ row: Record<string, string>; title: string } | null>(null);
 
-  const tabs = pedimentoPdf ? [...TABS, { key: 'pedimento' as TabKey, label: 'Pedimento' }] : TABS;
+  const tabs = pedimentoPdf ? [...PEDIMENTO_TABS, { key: 'pedimento' as PedimentoTabKey, label: 'Pedimento' }] : PEDIMENTO_TABS;
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
     const qs = revealed ? '?reveal=all' : '';
-    apiGet<ReportsBundle>(`/api/records/${recordId}/reports.json${qs}`)
+    apiGet<PedimentoReportsBundle>(`/api/pedimentos/${pedimentoId}/reports.json${qs}`)
       .then((b) => { if (active) setBundle(b); })
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar los reportes.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [recordId, refreshKey, revealed]);
+  }, [pedimentoId, refreshKey, revealed]);
 
-  // Reset reveal + tab when switching records (pedimento may not exist on the next record).
-  useEffect(() => { setRevealed(false); setDrawerRow(null); setTab('riesgo'); }, [recordId]);
+  // Reset reveal + tab when switching pedimentos.
+  useEffect(() => { setRevealed(false); setDrawerRow(null); setTab('reporte'); }, [pedimentoId]);
 
   async function handleDownloadCurrent() {
-    const target = downloadTargetFor(tab, recordId, pedimentoPdf);
+    let target: { path: string; name: string } | null = null;
+    if (tab === 'reporte') target = { path: `/api/pedimentos/${pedimentoId}/report.xlsx`, name: 'Reporte_General.xlsx' };
+    else if (tab === 'layout') target = { path: `/api/pedimentos/${pedimentoId}/layout.xlsx`, name: 'LayOut_sistema.xlsx' };
+    else if (tab === 'pedimento' && pedimentoPdf) target = { path: pedimentoPdf, name: 'Pedimento.pdf' };
     if (!target) return;
     setError(null);
     try {
@@ -129,6 +205,8 @@ export function ReportTabs({ recordId, pedimentoPdf = null, refreshKey = 0 }: { 
 
   return (
     <Card className="p-5 shadow-sm">
+      {title && <h2 className="mb-3 text-sm font-semibold text-navy-700">{title}</h2>}
+
       {/* Tabs + download for the active tab */}
       <div className="mb-4 flex items-center justify-between gap-2 border-b border-slate-200">
         <div className="flex flex-wrap gap-1">
@@ -159,12 +237,6 @@ export function ReportTabs({ recordId, pedimentoPdf = null, refreshKey = 0 }: { 
 
       {bundle && (
         <div className="space-y-4">
-          {bundle.riskStale && (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>Riesgo desactualizado: los datos de importación cambiaron después del análisis. Vuelva a correr el análisis de riesgo antes de continuar al previo.</span>
-            </div>
-          )}
           {bundle.masked && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-600">
               <span className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-slate-400" /> Datos de identidad (RFC/CURP/pasaporte) ocultos.</span>
@@ -178,12 +250,6 @@ export function ReportTabs({ recordId, pedimentoPdf = null, refreshKey = 0 }: { 
             </div>
           )}
 
-          {tab === 'riesgo' && (
-            <div className="space-y-4">
-              <RiskSummary summary={summarize(bundle.risk ?? [])} />
-              <RiskResultTable rows={bundle.risk ?? []} />
-            </div>
-          )}
           {tab === 'reporte' && (
             <GridTable
               columns={REPORT_COLUMNS}

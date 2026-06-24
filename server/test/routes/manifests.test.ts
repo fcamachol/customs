@@ -84,7 +84,7 @@ describe('POST /api/manifests/:id/promote', () => {
     const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
     expect(prom.status).toBe(200);
     expect(prom.body.promoted).toBe(1);
-    let ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [id]);
+    const ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [id]);
     expect(ships.rows[0].n).toBe(1);
     const man = await query('SELECT ingestion_status FROM manifests WHERE id=$1', [id]);
     expect(man.rows[0].ingestion_status).toBe('promoted');
@@ -100,5 +100,67 @@ describe('POST /api/manifests/:id/promote', () => {
     expect(prom.status).toBe(422);
     const ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [up.body.manifestId]);
     expect(ships.rows[0].n).toBe(0);
+  });
+
+  it('blocks promotion when any pedimento subdivision is locked (file attached)', async () => {
+    // Stage a manifest with one valid row so it can be promoted.
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-5').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    const id = up.body.manifestId;
+
+    // Seed a locked pedimento row (has a file_id → computeLock returns editable:false).
+    // This mirrors production: after Task 7–9 cutover, lock comes from pedimentos rows only,
+    // NOT from manifests.file_id / manifests.prevalidation (which are no longer written).
+    const u = await query('SELECT id FROM users WHERE username=$1', ['cap']);
+    const f = await query(
+      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by)
+       VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`,
+      [u.rows[0].id],
+    );
+    await query(
+      'INSERT INTO pedimentos (manifest_id, file_id, created_by) VALUES ($1,$2,$3)',
+      [id, f.rows[0].id, u.rows[0].id],
+    );
+
+    const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(prom.status).toBe(409);
+    expect(prom.body.error).toMatch(/bloqueado/i);
+    // No shipments promoted.
+    const ships = await query('SELECT count(*)::int AS n FROM shipments WHERE manifest_id=$1', [id]);
+    expect(ships.rows[0].n).toBe(0);
+  });
+
+  it('blocks promotion when any pedimento subdivision is locked (prevalidation APPROVED)', async () => {
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-6').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    const id = up.body.manifestId;
+
+    const u = await query('SELECT id FROM users WHERE username=$1', ['cap']);
+    await query(
+      `INSERT INTO pedimentos (manifest_id, prevalidation, created_by)
+       VALUES ($1,$2::jsonb,$3)`,
+      [id, JSON.stringify({ status: 'APPROVED', errors: [] }), u.rows[0].id],
+    );
+
+    const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(prom.status).toBe(409);
+    expect(prom.body.error).toMatch(/bloqueado/i);
+  });
+
+  it('allows promotion when pedimentos exist but none is locked', async () => {
+    const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-7').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    const id = up.body.manifestId;
+
+    // Pedimento row exists but has no file_id and no APPROVED prevalidation → not locked.
+    const u = await query('SELECT id FROM users WHERE username=$1', ['cap']);
+    await query(
+      'INSERT INTO pedimentos (manifest_id, prevalidation, created_by) VALUES ($1,$2::jsonb,$3)',
+      [id, JSON.stringify({ status: 'WARNINGS', errors: [] }), u.rows[0].id],
+    );
+
+    const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
+    expect(prom.status).toBe(200);
+    expect(prom.body.promoted).toBe(1);
   });
 });

@@ -11,7 +11,12 @@ const app = createApp();
 let token: string;
 let manifestId: string;
 
+let userId: string;
+const guias: string[] = [];
+
 async function addShipment(name: string, value: number) {
+  const guideId = `g-${name}`;
+  guias.push(guideId);
   const s = {
     id: crypto.randomUUID(),
     mawbReference: '369-1',
@@ -22,7 +27,7 @@ async function addShipment(name: string, value: number) {
     customsValueUsd: value,
     currency: 'USD',
     originCountry: 'CN',
-    guideId: `g-${name}`,
+    guideId,
     consignee: { name, rfc: 'PERJ800101AAA', address: 'Calle 1' },
     sender: { name: 'S' },
     platform: { commercialName: 'P' },
@@ -30,12 +35,24 @@ async function addShipment(name: string, value: number) {
   await query('INSERT INTO shipments (id, manifest_id, data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 }
 
+/** A pedimento covering every shipment seeded so far (defaults to all current guías). */
+async function addPedimento(coveredGuias: string[] = guias): Promise<string> {
+  const r = await query<{ id: string }>(
+    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by)
+     VALUES ($1,'111',$2,$3) RETURNING id`,
+    [manifestId, coveredGuias, userId],
+  );
+  return r.rows[0].id;
+}
+
 beforeEach(async () => {
   await truncateAll();
+  guias.length = 0;
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('c',$1,'capturista') RETURNING id`, [hash]);
-  token = signToken({ userId: u.rows[0].id, role: 'capturista' , tv: 0 });
-  const m = await query(`INSERT INTO manifests (mawb_reference, created_by) VALUES ('369-1', $1) RETURNING id`, [u.rows[0].id]);
+  userId = u.rows[0].id;
+  token = signToken({ userId, role: 'capturista' , tv: 0 });
+  const m = await query(`INSERT INTO manifests (mawb_reference, created_by) VALUES ('369-1', $1) RETURNING id`, [userId]);
   manifestId = m.rows[0].id;
 });
 
@@ -115,9 +132,10 @@ describe('POST /api/manifests/:id/risk — artifact persistence', () => {
   });
 });
 
-describe('GET /api/records/:id/report.xlsx — artifact persistence', () => {
-  it('persists the report XLSX on first generation and sets report_file_id', async () => {
+describe('GET /api/pedimentos/:pedimentoId/report.xlsx — per-pedimento artifact persistence', () => {
+  it('persists the report XLSX on first generation and sets pedimentos.report_file_id', async () => {
     await addShipment('Ana', 100);
+    const pedimentoId = await addPedimento();
 
     // Trigger risk first so incidences exist
     await request(app)
@@ -127,7 +145,7 @@ describe('GET /api/records/:id/report.xlsx — artifact persistence', () => {
 
     // First GET → generates + persists
     const res1 = await request(app)
-      .get(`/api/records/${manifestId}/report.xlsx`)
+      .get(`/api/pedimentos/${pedimentoId}/report.xlsx`)
       .set('Authorization', `Bearer ${token}`)
       .buffer()
       .parse((r, cb) => {
@@ -137,17 +155,21 @@ describe('GET /api/records/:id/report.xlsx — artifact persistence', () => {
       });
     expect(res1.status).toBe(200);
 
-    const { rows: mRows } = await query<{ report_file_id: string | null }>(
-      'SELECT report_file_id FROM manifests WHERE id=$1', [manifestId]);
-    expect(mRows[0].report_file_id).not.toBeNull();
+    const { rows: pRows } = await query<{ report_file_id: string | null }>(
+      'SELECT report_file_id FROM pedimentos WHERE id=$1', [pedimentoId]);
+    expect(pRows[0].report_file_id).not.toBeNull();
 
     const { rows: fRows } = await query<{ kind: string }>(
-      'SELECT kind FROM files WHERE id=$1', [mRows[0].report_file_id]);
+      'SELECT kind FROM files WHERE id=$1', [pRows[0].report_file_id]);
     expect(fRows[0].kind).toBe('report');
+
+    // manifests.report_file_id was dropped in Task 11 — the column no longer exists.
+    // Enforcement is now at the schema level; no SELECT needed.
   });
 
   it('second GET /report.xlsx returns the stored bytes (immutable)', async () => {
     await addShipment('Ana', 100);
+    const pedimentoId = await addPedimento();
 
     await request(app)
       .post(`/api/manifests/${manifestId}/risk`)
@@ -156,25 +178,25 @@ describe('GET /api/records/:id/report.xlsx — artifact persistence', () => {
 
     // First call: generate + store
     await request(app)
-      .get(`/api/records/${manifestId}/report.xlsx`)
+      .get(`/api/pedimentos/${pedimentoId}/report.xlsx`)
       .set('Authorization', `Bearer ${token}`)
       .buffer()
       .parse((r, cb) => { const cs: Buffer[] = []; r.on('data', (c) => cs.push(c)); r.on('end', () => cb(null, Buffer.concat(cs))); });
 
     // Get report_file_id before second call
     const { rows: before } = await query<{ report_file_id: string }>(
-      'SELECT report_file_id FROM manifests WHERE id=$1', [manifestId]);
+      'SELECT report_file_id FROM pedimentos WHERE id=$1', [pedimentoId]);
     const firstId = before[0].report_file_id;
 
     // Second call: should serve stored (report_file_id unchanged)
     await request(app)
-      .get(`/api/records/${manifestId}/report.xlsx`)
+      .get(`/api/pedimentos/${pedimentoId}/report.xlsx`)
       .set('Authorization', `Bearer ${token}`)
       .buffer()
       .parse((r, cb) => { const cs: Buffer[] = []; r.on('data', (c) => cs.push(c)); r.on('end', () => cb(null, Buffer.concat(cs))); });
 
     const { rows: after } = await query<{ report_file_id: string }>(
-      'SELECT report_file_id FROM manifests WHERE id=$1', [manifestId]);
+      'SELECT report_file_id FROM pedimentos WHERE id=$1', [pedimentoId]);
     expect(after[0].report_file_id).toBe(firstId);
   });
 });

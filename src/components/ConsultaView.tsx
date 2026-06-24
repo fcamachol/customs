@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { apiGet } from '../api';
 import { Card, Input, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
-import { ReportTabs } from './ReportTabs';
+import { RiskPanel, PedimentoReportTabs } from './ReportTabs';
 
 interface RecordSummary {
   id: string;
@@ -12,16 +12,25 @@ interface RecordSummary {
   createdAt: string;
 }
 
+// A subdivisión (pedimento) attached to the manifest, each with its own PDF.
+interface PedimentoItem {
+  id: string;
+  numeroPedimento: string | null;
+  subdivisionOrdinal: number | null;
+  isLast: boolean;
+  pedimentoPdf: string | null;
+}
+
 interface RecordDetail {
   id: string;
   mawbReference: string;
   clientName: string;
   pedimentoFileId: string | null;
   shipmentCount: number;
+  pedimentos: PedimentoItem[];
   artifacts: {
     riskAnalysis: string;
     pedimentoPdf: string | null;
-    report: string;
   };
 }
 
@@ -336,7 +345,38 @@ export default function ConsultaView() {
         </ul>
       )}
 
-      {detail && <ReportTabs recordId={detail.id} pedimentoPdf={detail.artifacts.pedimentoPdf} />}
+      {detail && (
+        <div className="space-y-6">
+          {/* Risk is manifest-level (shipment-scoped); shown once. */}
+          <RiskPanel recordId={detail.id} />
+
+          {/* Report + Layout + Pedimento PDF are per-pedimento (each subdivisión is its own submission). */}
+          {(detail.pedimentos ?? []).length === 0 ? (
+            <Card className="p-5 shadow-sm">
+              <p className="text-sm text-slate-500">Aún no hay pedimentos (subdivisiones) para este registro.</p>
+            </Card>
+          ) : (
+            (detail.pedimentos ?? []).map((p: PedimentoItem) => (
+              // Fragment carries the list key (the codebase types components with inline prop
+              // objects, which don't surface React's `key` attribute on the component itself).
+              <Fragment key={p.id}>
+                <PedimentoReportTabs
+                  pedimentoId={p.id}
+                  title={pedimentoTitle(p)}
+                  pedimentoPdf={p.pedimentoPdf}
+                />
+              </Fragment>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// Heading for a per-pedimento report panel, e.g. "Pedimento 258… — subdivisión 2 (última)".
+function pedimentoTitle(p: PedimentoItem): string {
+  const numero = p.numeroPedimento ?? 'Sin número';
+  if (p.subdivisionOrdinal == null) return `Pedimento ${numero}`;
+  return `Pedimento ${numero} — subdivisión ${p.subdivisionOrdinal}${p.isLast ? ' (última)' : ''}`;
 }

@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { createHash } from 'node:crypto';
 import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
@@ -7,14 +7,22 @@ import { computeLock } from '../services/manifestLock';
 import { piiReportLimiter } from '../middleware/rateLimit';
 import {
   assertManifestAccess,
+  resolvePedimentoAccess,
   loadShipments,
+  loadPedimentoScope,
   buildRiskScreenRows,
-  buildReportRowsForManifest,
+  buildReportRowsForPedimento,
+  subsetForCoverage,
   layoutRowsFor,
 } from '../services/reportData';
-import type { ReportsBundle } from '../../../shared/types/reports';
+import type { RiskBundle, PedimentoReportsBundle } from '../../../shared/types/reports';
 
+// Risk stays PER-MANIFEST (shipment-scoped, pedimento-independent); report + layout are PER-PEDIMENTO
+// (each subdivisión is its own customs submission over its covered-guía subset). The endpoints are
+// split along that seam: reportsRouter mounts the manifest-level risk bundle, pedimentoReportsRouter
+// the per-pedimento report+layout (which carries consignee PII and the fail-closed audit).
 export const reportsRouter = Router();
+export const pedimentoReportsRouter = Router();
 
 // Consignee identity PII → layout/report column headers. Masked for the read-only `autoridad`
 // role unless explicitly revealed (LFPDPPP data-minimization; on-screen viewing is higher-frequency
@@ -49,20 +57,61 @@ function redactRows(rows: Record<string, string>[], reveal: Set<string>): boolea
   return masked;
 }
 
-reportsRouter.get('/:id/reports.json', requireAuth, piiReportLimiter, async (req, res, next) => {
+// Per-MANIFEST risk bundle (Análisis de Riesgo screen + stale banner). No identity PII columns, so
+// no redaction here; the audit is best-effort (the report/layout fail-closed audit lives below).
+reportsRouter.get('/:id/reports.json', requireAuth, async (req, res, next) => {
  try {
   res.setHeader('Cache-Control', 'no-store, private');
 
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
 
-  const meta = await query<{ prevalidation: { status?: string } | null; file_id: string | null; risk_stale: boolean }>(
-    'SELECT prevalidation, file_id, risk_stale FROM manifests WHERE id=$1', [req.params.id]);
+  const meta = await query<{ risk_stale: boolean }>('SELECT risk_stale FROM manifests WHERE id=$1', [req.params.id]);
   if (!meta.rows.length) { res.status(404).json({ error: 'Not found' }); return; }
 
   const loaded = await loadShipments(req.params.id);
   const risk = buildRiskScreenRows(loaded);
-  const report = await buildReportRowsForManifest(req.params.id, loaded);
-  const layout = layoutRowsFor(loaded);
+
+  const generatedAt = new Date().toISOString();
+  const contentHash = createHash('sha256').update(stableStringify({ risk })).digest('hex');
+
+  await recordAudit({
+    userId: req.user!.userId,
+    action: 'VIEW_RISK',
+    entity: 'manifest',
+    entityId: req.params.id,
+    after: { role: req.user!.role, shipmentCount: loaded.length, contentHash },
+    ip: req.ip,
+  });
+
+  const bundle: RiskBundle = { risk, riskStale: !!meta.rows[0].risk_stale, generatedAt, contentHash };
+  res.json(bundle);
+ } catch (err) {
+  next(err);
+ }
+});
+
+// Per-PEDIMENTO report + layout bundle (Reporte General / Layout for one subdivisión). Built over the
+// pedimento's covered-guía subset + its own import_data. Carries consignee PII → redaction + the
+// FAIL-CLOSED PII audit live here.
+pedimentoReportsRouter.get('/:pedimentoId/reports.json', requireAuth, piiReportLimiter, async (req, res, next) => {
+ try {
+  res.setHeader('Cache-Control', 'no-store, private');
+
+  const access = await resolvePedimentoAccess(req.params.pedimentoId, req.user!);
+  if (!access.found) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!access.allowed) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+  const scope = await loadPedimentoScope(req.params.pedimentoId);
+  if (!scope) { res.status(404).json({ error: 'Not found' }); return; }
+
+  // Lock is derived from the pedimento's own finalization state (prevalidation + attached PDF).
+  const lockRow = await query<{ prevalidation: { status?: string } | null; file_id: string | null }>(
+    'SELECT prevalidation, file_id FROM pedimentos WHERE id=$1', [req.params.pedimentoId]);
+
+  const loadedManifest = await loadShipments(scope.manifestId);
+  const subset = subsetForCoverage(loadedManifest, scope.coveredGuias);
+  const report = await buildReportRowsForPedimento(scope, loadedManifest);
+  const layout = layoutRowsFor(subset);
 
   // Server-side redaction (only the read-only authority role; capturista/admin see full parity).
   const isAuthority = req.user!.role === 'autoridad';
@@ -77,14 +126,12 @@ reportsRouter.get('/:id/reports.json', requireAuth, piiReportLimiter, async (req
   const revealedFields = isAuthority ? PII_FIELD_NAMES.filter((f) => reveal.has(f)) : [];
 
   const generatedAt = new Date().toISOString();
-  const contentHash = createHash('sha256').update(stableStringify({ risk, report, layout })).digest('hex');
+  const contentHash = createHash('sha256').update(stableStringify({ report, layout })).digest('hex');
 
-  const bundle: ReportsBundle = {
-    risk,
+  const bundle: PedimentoReportsBundle = {
     report,
     layout,
-    lock: computeLock(meta.rows[0]),
-    riskStale: !!meta.rows[0].risk_stale,
+    lock: computeLock(lockRow.rows[0]),
     masked,
     generatedAt,
     contentHash,
@@ -96,9 +143,9 @@ reportsRouter.get('/:id/reports.json', requireAuth, piiReportLimiter, async (req
     await recordAudit({
       userId: req.user!.userId,
       action: revealedFields.length ? 'REVEAL_PII' : 'VIEW_REPORTS',
-      entity: 'manifest',
-      entityId: req.params.id,
-      after: { role: req.user!.role, shipmentCount: loaded.length, revealedFields, contentHash },
+      entity: 'pedimento',
+      entityId: req.params.pedimentoId,
+      after: { role: req.user!.role, shipmentCount: subset.length, revealedFields, contentHash },
       ip: req.ip,
     });
   } catch (err) {

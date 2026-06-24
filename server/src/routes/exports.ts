@@ -49,10 +49,12 @@ exportsRouter.get('/:id/risk.xlsx', requireAuth, async (req, res) => {
     }
   }
 
-  // Fallback: regenerate (no stored file yet)
+  // Fallback: regenerate (no stored file yet). Audit before send so the INSERT commits
+  // before the response returns — matches the cached path above and the per-pedimento
+  // handlers, and prevents the audit_log INSERT from racing the next test's TRUNCATE.
   const rows = await loadShipments(req.params.id);
-  send(res, workbook(buildRiskXlsxRows(rows)), 'Analisis_de_Riesgo.xlsx');
   await recordAudit({ userId: req.user!.userId, action: 'EXPORT_RISK', entity: 'manifest', entityId: req.params.id, ip: req.ip });
+  send(res, workbook(buildRiskXlsxRows(rows)), 'Analisis_de_Riesgo.xlsx');
 });
 
 // Per-PEDIMENTO Layout: the covered-guía subset of this subdivisión.

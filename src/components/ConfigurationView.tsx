@@ -48,6 +48,7 @@ interface BrandingConfig {
 }
 
 interface ClientPlatform {
+  id?: string;
   commercialName?: string;
   countryOfOrigin?: string;
   legalName?: string;
@@ -63,6 +64,7 @@ interface Client {
   email?: string;
   website?: string;
   platform?: ClientPlatform;
+  platforms?: ClientPlatform[];
 }
 
 interface ValidationParams {
@@ -441,6 +443,28 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
     }
   }
 
+  async function addPlatform(clientId: string, p: ClientPlatform) {
+    if (!isAdmin) return;
+    try {
+      await apiPost(`/api/catalogs/clients/${clientId}/platforms`, p);
+      onToast('Plataforma agregada');
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  async function removePlatform(clientId: string, pid: string) {
+    if (!isAdmin) return;
+    try {
+      await apiDelete(`/api/catalogs/clients/${clientId}/platforms/${pid}`);
+      onToast('Plataforma eliminada');
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card className="p-6 shadow-sm">
@@ -468,7 +492,31 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
                   <tr key={c.id}>
                     <td className="px-3 py-2 font-medium text-slate-800">{c.name}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-600">{c.tax_id || '—'}</td>
-                    <td className="px-3 py-2 text-slate-600">{c.platform?.commercialName || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">
+                      {(c.platforms ?? []).length === 0 ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <ul className="space-y-1">
+                          {(c.platforms ?? []).map((p) => (
+                            <li key={p.id} className="flex items-center gap-2">
+                              <span>{p.commercialName || p.legalName || '—'}</span>
+                              {p.countryOfOrigin && <span className="text-xs text-slate-400">({p.countryOfOrigin})</span>}
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => removePlatform(c.id, p.id!)}
+                                  className="text-slate-300 transition hover:text-red-600"
+                                  aria-label="Eliminar plataforma"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {isAdmin && <PlatformAdder onAdd={(p) => addPlatform(c.id, p)} />}
+                    </td>
                     <td className="px-3 py-2 text-slate-600">{c.email || '—'}</td>
                     <td className="px-3 py-2 text-right">
                       {isAdmin && (
@@ -763,6 +811,30 @@ interface TasaProps {
   vigencias: TasaVigencia[];
   setVigencias: (v: TasaVigencia[]) => void;
   onSave: (rows: TasaVigencia[]) => void;
+}
+
+function PlatformAdder({ onAdd }: { onAdd: (p: ClientPlatform) => void }) {
+  const [open, setOpen] = useState(false);
+  const [p, setP] = useState<ClientPlatform>({});
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="mt-1 text-xs font-medium text-navy-700 hover:underline">
+        + Agregar plataforma
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 space-y-1 rounded border border-slate-200 bg-slate-50 p-2">
+      <Input placeholder="Nombre comercial" value={p.commercialName ?? ''} onChange={(e) => setP({ ...p, commercialName: e.target.value })} />
+      <Input placeholder="País de origen" value={p.countryOfOrigin ?? ''} onChange={(e) => setP({ ...p, countryOfOrigin: e.target.value })} />
+      <Input placeholder="Razón social" value={p.legalName ?? ''} onChange={(e) => setP({ ...p, legalName: e.target.value })} />
+      <Input placeholder="Correo" value={p.email ?? ''} onChange={(e) => setP({ ...p, email: e.target.value })} />
+      <div className="flex gap-2 pt-1">
+        <Button type="button" onClick={() => { onAdd(p); setP({}); setOpen(false); }}>Guardar</Button>
+        <Button variant="secondary" type="button" onClick={() => { setP({}); setOpen(false); }}>Cancelar</Button>
+      </div>
+    </div>
+  );
 }
 
 function TasaTab({ isSuperAdmin, saving, vigencias, setVigencias, onSave }: TasaProps) {

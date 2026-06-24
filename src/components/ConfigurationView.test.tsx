@@ -75,4 +75,21 @@ describe('ConfigurationView', () => {
     // No user logged in → isAdmin is false
     expect(screen.getByText(/restringid/i)).toBeTruthy();
   });
+
+  it('renders each client\'s platforms in the Clientes pane', async () => {
+    const { apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes('/clients')) {
+        return [{ id: 'cl1', name: 'ACME', platforms: [{ id: 'p1', commercialName: 'Shop A', countryOfOrigin: 'CN' }] }];
+      }
+      if (path.includes('/validated-rfcs')) return [];
+      return { key: '', value: null };
+    });
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_clientes" onToast={() => {}} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(screen.getByText('Shop A')).toBeTruthy());
+  });
 });

@@ -54,8 +54,10 @@ function checkTasaConsistency(captured: unknown, vigencias: TasaVigencia[] | und
   return `Tasa capturada (${(frac * 100).toFixed(1)}%) no coincide con la vigencia actual (${pretty}). Verificar.`;
 }
 
+// Capture is now per-pedimento (subdivisión): :pedimentoId addresses a pedimentos row, and
+// import_data + lock are read/written on that row. manifests.import_data is no longer written.
 importDataRouter.post(
-  '/:id/import-data',
+  '/:pedimentoId/import-data',
   requireAuth,
   requireRole('admin', 'capturista'),
   validate({ body: importDataBody }),
@@ -63,17 +65,22 @@ importDataRouter.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const data: Record<string, unknown> = Object.fromEntries(FIELDS.map((f) => [f, body[f] ?? null]));
     const before = await query<{
+      manifest_id: string;
       import_data: Record<string, unknown> | null;
       import_data_version: number;
       prevalidation: { status?: string } | null;
       file_id: string | null;
-    }>('SELECT import_data, import_data_version, prevalidation, file_id FROM manifests WHERE id=$1', [req.params.id]);
+    }>(
+      'SELECT manifest_id, import_data, import_data_version, prevalidation, file_id FROM pedimentos WHERE id=$1',
+      [req.params.pedimentoId],
+    );
     if (!before.rows.length) {
       res.status(404).json({ error: 'Not found' });
       return;
     }
 
-    // Edit-before-lock: once the pedimento is finalized the declaration is immutable.
+    // Edit-before-lock: once THIS pedimento is finalized the declaration is immutable. Lock is
+    // computed from the pedimento's own prevalidation + attached PDF (file_id).
     const lock = computeLock(before.rows[0]);
     if (!lock.editable) {
       res.status(409).json({ error: lock.reason, locked: true });
@@ -88,18 +95,15 @@ importDataRouter.post(
     // Optimistic concurrency: when the client sends the version it loaded, reject if it changed.
     const expected = body.version;
     const versionGuard = typeof expected === 'number' ? ' AND import_data_version=$3' : '';
-    const params: unknown[] = [JSON.stringify(data), req.params.id];
+    const params: unknown[] = [JSON.stringify(data), req.params.pedimentoId];
     if (typeof expected === 'number') params.push(expected);
 
-    // Single atomic statement: write data, bump version, bust the cached report, and flag risk stale
-    // (only when a risk run exists). report_file_id=NULL forces the downloaded Reporte General to
-    // regenerate from the new import-data so it can never be served stale.
+    // Single atomic statement on the pedimentos row: write data + bump version. Risk is no longer
+    // keyed on import_data (risk is per-manifest), so we do NOT touch risk_stale here.
     const upd = await query<{ import_data_version: number }>(
-      `UPDATE manifests
+      `UPDATE pedimentos
          SET import_data=$1,
-             import_data_version=import_data_version+1,
-             report_file_id=NULL,
-             risk_stale=(risk_file_id IS NOT NULL)
+             import_data_version=import_data_version+1
        WHERE id=$2${versionGuard}
        RETURNING import_data_version`,
       params,
@@ -109,11 +113,15 @@ importDataRouter.post(
       return;
     }
 
+    // Cache invalidation only: the Reporte General cache still lives on manifests until Task 10.
+    // Bust it for the affected manifest so the next download regenerates from the new import-data.
+    await query('UPDATE manifests SET report_file_id=NULL WHERE id=$1', [before.rows[0].manifest_id]);
+
     await recordAudit({
       userId: req.user!.userId,
       action: 'CAPTURE_IMPORT_DATA',
-      entity: 'manifest',
-      entityId: req.params.id,
+      entity: 'pedimento',
+      entityId: req.params.pedimentoId,
       before: before.rows[0].import_data,
       after: data,
       ip: req.ip,

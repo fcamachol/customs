@@ -172,6 +172,25 @@ describe('records — detail pedimentos[]', () => {
     expect(res.body.artifacts.pedimentoPdf).toBe(`/api/files/${f.rows[0].id}`);
   });
 
+  it('surfaces per-pedimento importData + importDataVersion (capture is per-row now)', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('910-1','Cliente K',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, import_data, import_data_version, created_by)
+       VALUES ($1,'222',$2::jsonb,3,$3) RETURNING id`,
+      [id, JSON.stringify({ patente: '3250', cveT1: 'A1' }), userId]);
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.id).toBe(ped.rows[0].id);
+    expect(p.importData).toMatchObject({ patente: '3250', cveT1: 'A1' });
+    expect(p.importDataVersion).toBe(3);
+    // No legacy top-level manifest import-data fields leak through.
+    expect(res.body.importData).toBeUndefined();
+    expect(res.body.importDataVersion).toBeUndefined();
+  });
+
   it('returns an empty pedimentos list and null pedimentoPdf for a bare manifest', async () => {
     const list = await request(app).get('/api/records?q=370-2').set(auth());
     const id = list.body[0].id;

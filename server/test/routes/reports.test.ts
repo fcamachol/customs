@@ -72,42 +72,60 @@ describe('GET /api/records/:id/reports.json', () => {
   });
 });
 
-describe('import-data edit-before-lock + concurrency + cache coherence', () => {
+describe('per-pedimento import-data: lock + concurrency + report read/cache coherence', () => {
   const DATA = { cveT1: 'A1', patente: '3250', tasaImportacion: '17.50', fechaEntrada: '2024-01-15', claveAduanaEntrada: '460', claveAduanaDespacho: '461' };
 
-  function postImport(body: object) {
-    return request(app).post(`/api/manifests/${manifestId}/import-data`).set('Authorization', `Bearer ${capToken}`).send(body);
+  async function addPedimento(fields: { fileId?: string | null; prevalidation?: object | null } = {}) {
+    const r = await query<{ id: string }>(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, file_id, prevalidation, created_by)
+       VALUES ($1,'111',$2,$3,$4) RETURNING id`,
+      [manifestId, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, capId],
+    );
+    return r.rows[0].id;
   }
 
-  it('rejects edits with 409 once the pedimento is locked', async () => {
-    await query(`UPDATE manifests SET prevalidation=$1 WHERE id=$2`, [JSON.stringify({ status: 'APPROVED' }), manifestId]);
-    const res = await postImport(DATA);
+  function postImport(pedimentoId: string, body: object) {
+    return request(app).post(`/api/pedimentos/${pedimentoId}/import-data`).set('Authorization', `Bearer ${capToken}`).send(body);
+  }
+
+  it('rejects edits with 409 once the pedimento row is locked', async () => {
+    const pedimentoId = await addPedimento({ prevalidation: { status: 'APPROVED' } });
+    const res = await postImport(pedimentoId, DATA);
     expect(res.status).toBe(409);
     expect(res.body.locked).toBe(true);
   });
 
   it('bumps version and rejects a stale optimistic write', async () => {
-    const first = await postImport({ ...DATA, version: 0 });
+    const pedimentoId = await addPedimento();
+    const first = await postImport(pedimentoId, { ...DATA, version: 0 });
     expect(first.status).toBe(200);
     expect(first.body.version).toBe(1);
-    const stale = await postImport({ ...DATA, version: 0 });
+    const stale = await postImport(pedimentoId, { ...DATA, version: 0 });
     expect(stale.status).toBe(409);
     expect(stale.body.conflict).toBe(true);
   });
 
-  it('busts the cached report and flags risk stale on edit', async () => {
+  it('busts the cached report (manifest) but does not flag risk stale on import-data edit', async () => {
+    const pedimentoId = await addPedimento();
     const f = await query(
       `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('risk_analysis','r.xlsx','/x',1,$1) RETURNING id`, [capId]);
-    await query(`UPDATE manifests SET risk_file_id=$1, report_file_id=$1 WHERE id=$2`, [f.rows[0].id, manifestId]);
+    await query(`UPDATE manifests SET risk_file_id=$1, report_file_id=$1, risk_stale=false WHERE id=$2`, [f.rows[0].id, manifestId]);
 
-    const res = await postImport({ ...DATA, version: 0 });
+    const res = await postImport(pedimentoId, { ...DATA, version: 0 });
     expect(res.status).toBe(200);
 
     const m = await query(`SELECT report_file_id, risk_stale FROM manifests WHERE id=$1`, [manifestId]);
     expect(m.rows[0].report_file_id).toBeNull();
-    expect(m.rows[0].risk_stale).toBe(true);
+    expect(m.rows[0].risk_stale).toBe(false);
+  });
+
+  it('report rows reflect import-data captured on the manifest\'s pedimento row', async () => {
+    const pedimentoId = await addPedimento();
+    await postImport(pedimentoId, { ...DATA, patente: '9999', version: 0 });
 
     const bundle = await get(capToken);
-    expect(bundle.body.riskStale).toBe(true);
+    expect(bundle.status).toBe(200);
+    // buildReportRowsForManifest now sources import_data from the pedimentos row (Task 8 read-switch).
+    expect(bundle.body.report[0]['Patente AA']).toBe('9999');
   });
 });

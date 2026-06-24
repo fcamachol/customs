@@ -56,7 +56,7 @@ export function createApp(): Express {
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/files', filesRouter);
   app.use('/api/audit', auditRouter);
-  app.use('/api/manifests', importDataRouter);
+  app.use('/api/pedimentos', importDataRouter);
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api', consolidatedRouter);
   // Global error handler: log server-side, never leak stack traces to clients.

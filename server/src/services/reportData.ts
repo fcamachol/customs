@@ -62,7 +62,7 @@ export async function buildReportRowsForManifest(
   loaded: LoadedShipment[],
 ): Promise<Record<string, string>[]> {
   const m = await query(
-    `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email,
+    `SELECT c.name, c.tax_id, c.address, c.phone, c.email,
             p.commercial_name, p.country_of_origin, p.legal_name, p.email AS platform_email, p.url AS platform_url
      FROM manifests m
      LEFT JOIN clients c ON c.id = m.client_id
@@ -71,6 +71,18 @@ export async function buildReportRowsForManifest(
     [manifestId],
   );
   const manifest = m.rows[0] ?? {};
+
+  // Task 8 cutover: import_data now lives on the pedimentos rows, not manifests. Today the data is
+  // 1:1 (one pedimento per manifest), so source the report's import_data from this manifest's
+  // pedimento (most-recent row that has import_data). The full per-pedimento report restructure is
+  // Task 10 — this is a minimal source-switch to keep reports/exports green after the cutover.
+  const ped = await query<{ import_data: Record<string, unknown> | null }>(
+    `SELECT import_data FROM pedimentos
+       WHERE manifest_id = $1 AND import_data IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+    [manifestId],
+  );
+  const importData = ped.rows[0]?.import_data ?? undefined;
 
   // D3: enrich the CNNE RFC/CURP from the validated-RFCs catalog, scoped to this manifest's
   // consignee keys (id_ref is UNIQUE → indexed) rather than scanning the whole table.
@@ -93,7 +105,7 @@ export async function buildReportRowsForManifest(
   return buildReportRows({
     shipments: loaded.map((r) => r.data),
     riskByGuide: Object.fromEntries(loaded.map((r) => [r.data.guideId, { color: r.risk_color ?? '', incidences: r.risk_incidences ?? [] }])),
-    importData: manifest.import_data ?? undefined,
+    importData,
     validatedRfcs,
     client: manifest.name ? {
       name: manifest.name,

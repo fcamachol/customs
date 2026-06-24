@@ -23,10 +23,12 @@ interface PedimentoRow {
   file_id: string | null;
   pedimento_scan: { verdict?: string } | null;
   prevalidation: { status?: string } | null;
+  import_data: Record<string, unknown> | null;
+  import_data_version: number;
 }
 
 const PEDIMENTO_COLS = `id, manifest_id, numero_pedimento, subdivision_ordinal, is_last_subdivision,
-  sibling_numeros, covered_guias, file_id, pedimento_scan, prevalidation`;
+  sibling_numeros, covered_guias, file_id, pedimento_scan, prevalidation, import_data, import_data_version`;
 
 /** Coverage input for a pedimentos row (numero + declared siblings + covered guías). */
 function coverageInput(p: PedimentoRow) {
@@ -124,7 +126,7 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName",
             m.pedimento, m.prevalidation, m.created_by AS "createdBy",
-            m.import_data AS "importData", m.import_data_version AS "importDataVersion", m.risk_stale AS "riskStale",
+            m.risk_stale AS "riskStale",
             (SELECT count(*)::int FROM shipments s WHERE s.manifest_id=m.id) AS "shipmentCount"
      FROM manifests m WHERE m.id=$1`, [req.params.id]);
   if (!rows.length) { res.status(404).json({ error: 'Not found' }); return; }
@@ -145,6 +147,10 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     fileId: p.file_id,
     scanVerdict: p.pedimento_scan?.verdict ?? null,
     lock: computeLock({ prevalidation: p.prevalidation, file_id: p.file_id }),
+    // import_data (capture) is now per-pedimento (Task 8). The frontend capture form reads/writes
+    // these per row and posts to POST /api/pedimentos/:id/import-data.
+    importData: p.import_data ?? null,
+    importDataVersion: p.import_data_version,
     coveredGuias: p.covered_guias ?? [],
     pedimentoPdf: p.file_id ? `/api/files/${p.file_id}` : null,
   }));

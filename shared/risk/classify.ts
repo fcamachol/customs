@@ -4,6 +4,8 @@ import { scoreRow, type Band } from './scorecard';
 import { RULESET, resolveThresholds, resolveWeights, resolveBands, type Thresholds, type Weights, type Bands } from './ruleset';
 import { rulesetHash } from './hash';
 import type { DeniedPartyEntry } from './lists';
+import { resolveNameClusters } from './nameMatch';
+import { cleanId } from '../parsing/taxId';
 
 export type RiskColor = 'verde' | 'amarillo' | 'rojo' | 'gris';
 
@@ -82,6 +84,37 @@ export function scoreManifest(
   // shared/risk stays crypto-free: we receive the fn, never import Node crypto.
   const nameTokenFn = options?.nameTokenFn;
 
+  // F14: fuzzy entity resolution — build name cluster map for ID-less consignees.
+  //
+  // ONLY names from consignees with NO valid RFC/CURP are included in the fuzzy cluster.
+  // RFC/CURP holders use their ID as the authoritative entityKey and are NOT fuzzily merged.
+  //
+  // cluster: Map<norm(name), canonical_norm_name> — canonical is lex-minimum in cluster.
+  // ADDITIVE/monotone: fuzzy only INCREASES recurrence counts, never decreases.
+  //
+  // fuzzyEntityResolution flag (from RULESET.thresholds, admin-reversible) controls
+  // whether clustering is applied. Default: true (on). Set to false to revert to exact
+  // matching (useful if false-positive rate is too high in production).
+  const fuzzyEnabled = thresholds.fuzzyEntityResolution !== false;
+  const idLessNames: string[] = [];
+  if (fuzzyEnabled) {
+    for (const s of shipments) {
+      const idRaw = cleanId(s.consignee.curp ?? s.consignee.rfc ?? '');
+      if (!idRaw) {
+        idLessNames.push(norm(s.consignee.name));
+      }
+    }
+  }
+  const nameCluster: Map<string, string> = fuzzyEnabled
+    ? resolveNameClusters(idLessNames, {
+        maxDistance: typeof thresholds.fuzzyNameMaxDistance === 'number'
+          ? thresholds.fuzzyNameMaxDistance
+          : undefined,
+      })
+    : new Map();
+  // nameCanonical: resolve to cluster canonical for ID-less names.
+  const nameCanonical = (normName: string): string => nameCluster.get(normName) ?? normName;
+
   // PASS 1: per-name monthly count (history + current), distinct-entities-per-address,
   // and per-entity aggregate customs value (F13: split-shipment cap).
   //
@@ -89,6 +122,10 @@ export function scoreManifest(
   // no tokenizer is injected (back-compat). The same tokenizer is used for the DB
   // history keys so the key-space is always consistent.
   // Avoid entityKey here: RFC/CURP keys would never match name-keyed history rows.
+  //
+  // F14: for ID-less consignees, use the cluster canonical as the name key so that
+  // typo variants ("Juan Peres", "Juan Perez") are counted as the same entity.
+  // RFC/CURP-keyed consignees bypass the fuzzy canonical entirely (RFC/CURP is authoritative).
   const monthlyNameCount: Record<string, number> = { ...monthlyHistoryCounts };
   const addressEntities: Record<string, Set<string>> = {};
   // F13/F20b: aggregate customs value per entity key across manifest rows.
@@ -96,11 +133,19 @@ export function scoreManifest(
   const entityValueTotal: Record<string, number> = {};
   for (const s of shipments) {
     const rawNorm = norm(s.consignee.name);
-    const nameKey = nameTokenFn ? nameTokenFn(rawNorm) : rawNorm;
+    const idRaw = cleanId(s.consignee.curp ?? s.consignee.rfc ?? '');
+    // F14: resolve the cluster canonical for ID-less names so typo variants accumulate
+    // to the same counter. ID-keyed consignees use their raw norm directly (unchanged).
+    const effectiveNorm = idRaw ? rawNorm : nameCanonical(rawNorm);
+    const nameKey = nameTokenFn ? nameTokenFn(effectiveNorm) : effectiveNorm;
     monthlyNameCount[nameKey] = (monthlyNameCount[nameKey] ?? 0) + 1;
     // addressEntities tracks DISTINCT entity identities per address (smurfing check).
+    // F14: for ID-less consignees, use the cluster canonical via nameCanonical so that
+    // typo variants at the same address are counted as ONE distinct entity.
     // entityKey uses nameTokenFn for name-fallback; RFC/CURP path is unchanged.
-    const ek = entityKey(s.consignee, nameTokenFn);
+    const ek = idRaw
+      ? entityKey(s.consignee, nameTokenFn)
+      : `name:${nameTokenFn ? nameTokenFn(nameCanonical(rawNorm)) : nameCanonical(rawNorm)}`;
     const a = norm(s.consignee.address ?? '');
     if (a) (addressEntities[a] ??= new Set()).add(ek);
     // F13: accumulate per-entity total value (skip non-finite to avoid NaN pollution)
@@ -108,6 +153,19 @@ export function scoreManifest(
   }
   const addressDistinctConsignees: Record<string, number> = {};
   for (const [a, set] of Object.entries(addressEntities)) addressDistinctConsignees[a] = set.size;
+
+  // F14: the EntityContext needs to know the canonical for bbdd key lookup.
+  // We pass nameCanonical via a wrapped nameToken: for ID-less consignees the bbdd signal
+  // should look up the CANONICAL name key, not the raw normalized name.
+  // We wrap nameTokenFn to first apply the fuzzy canonical, then optionally tokenize.
+  // This ensures gradeSignals → bbdd uses the same cluster-merged keys as PASS-1 counts.
+  //
+  // IMPORTANT: RFC/CURP path in gradeSignals is unchanged (uses idRaw directly).
+  // The wrapped token fn is ONLY invoked for the bbdd signal's name-key lookup.
+  const fuzzyNameToken = (normalizedName: string): string => {
+    const canonical = nameCanonical(normalizedName);
+    return nameTokenFn ? nameTokenFn(canonical) : canonical;
+  };
 
   const ctx: EntityContext = {
     thresholds,
@@ -118,7 +176,10 @@ export function scoreManifest(
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
     deniedParties: options?.deniedParties,
-    nameToken: nameTokenFn,
+    // F14: use fuzzyNameToken so bbdd signal looks up the cluster-canonical key.
+    // For ID-less consignees this maps typo variants to the same monthlyNameCount bucket.
+    // For ID-keyed consignees the canonical is unchanged (nameCluster has no entry → identity).
+    nameToken: fuzzyNameToken,
   };
 
   const resolved = {

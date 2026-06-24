@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { runSignals, type RiskContext, gradeSignals, type EntityContext } from './signals';
 import type { Shipment } from '../types/shipment';
 import { RULESET } from './ruleset';
+import { scoreManifest } from './classify';
 
 function ship(over: Partial<Shipment> = {}): Shipment {
   return {
@@ -134,5 +135,90 @@ describe('gradeSignals', () => {
     const ekB = 'ADM130509UQ0';
     const codesB = gradeSignals(sB, ctx({ entityValueTotal: { [ekB]: 2499 } }));
     expect(codesB.find((c) => c.signalId === 'agregado')).toBeUndefined();
+  });
+});
+
+// ─── F14: fuzzy entity resolution — in-manifest clustering ──────────────────
+// These tests use scoreManifest to verify that typo variants cluster correctly.
+
+function makeShip(i: number, name: string, rfc?: string): Shipment {
+  return {
+    id: String(i), mawbReference: 'M', description: 'camisa', hsCode: '6109',
+    quantity: 1, unit: 'PCE', customsValueUsd: 100, currency: 'USD',
+    originCountry: 'CN', guideId: `g${i}`,
+    consignee: { name, rfc: rfc ?? '', address: 'Calle 1' },
+    sender: { name: 'S' }, platform: { commercialName: 'P' },
+  } as Shipment;
+}
+
+describe('F14: fuzzy entity resolution', () => {
+  it('bbdd fires when typo variants push cluster monthly count > 3 (in-manifest)', () => {
+    // 4 shipments for typo variants of the same name, no ID.
+    // Without fuzzy: each name has count 1 → no bbdd fires.
+    // With fuzzy clustering: all 4 collapse to canonical → count 4 > 3 → bbdd fires.
+    const ships = [
+      makeShip(1, 'Juan Perez'),
+      makeShip(2, 'Juan Peres'),  // 1-char typo
+      makeShip(3, 'Juan Perex'),  // 1-char typo
+      makeShip(4, 'Juan Perey'),  // 1-char typo
+    ];
+    const scored = scoreManifest(ships, {});
+    // At least some shipments should fire bbdd (cluster count ≥ 4 > threshold 3)
+    const bbddCount = scored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'bbdd')
+    ).length;
+    expect(bbddCount).toBeGreaterThan(0);
+  });
+
+  it('bbdd does NOT fire for genuinely distinct people (even with same first name)', () => {
+    // 4 completely different people → no clustering → no bbdd
+    const ships = [
+      makeShip(1, 'Carlos Fernandez'),
+      makeShip(2, 'Carlos Rodriguez'),
+      makeShip(3, 'Carlos Martinez'),
+      makeShip(4, 'Carlos Herrera'),
+    ];
+    const scored = scoreManifest(ships, {});
+    // No bbdd should fire (each is a distinct entity)
+    const bbddCount = scored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'bbdd')
+    ).length;
+    expect(bbddCount).toBe(0);
+  });
+
+  it('smurfing (direcciones) counts ID-less typo variants at same address as one entity', () => {
+    // 3 typo variants of same name (no RFC), same address → should be 1 distinct entity
+    // → smurfing should NOT fire (only 1 distinct consignee at address, not 3).
+    // Without fuzzy: 3 distinct name-keys → count=3 ≥ threshold=3 → smurfing fires.
+    // With fuzzy: all 3 collapse to 1 canonical → count=1 → smurfing does NOT fire.
+    const ships = [
+      makeShip(1, 'Ana Lopez'),
+      makeShip(2, 'Ana Lopex'),  // 1-char typo of Ana Lopez
+      makeShip(3, 'Ana Lopaz'),  // 1-char typo of Ana Lopez
+    ];
+    const scored = scoreManifest(ships, {});
+    // All three share 'Calle 1'. With fuzzy, they are 1 entity → direcciones should NOT fire.
+    const smurfCount = scored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'direcciones')
+    ).length;
+    expect(smurfCount).toBe(0);
+  });
+
+  it('RFC/CURP distinct holders are NEVER merged by fuzzy clustering', () => {
+    // Two people with valid RFCs but similar names: must stay distinct
+    const ships = [
+      makeShip(1, 'Juan Perez', 'PERJ800101AA8'),
+      makeShip(2, 'Juan Peres', 'ADM130509UQ0'),  // different RFC
+      makeShip(3, 'Juan Perex', 'PERJ800101AA8'),  // same RFC as ship 1
+      makeShip(4, 'Juan Perey', 'ADM130509UQ0'),   // same RFC as ship 2
+    ];
+    const scored = scoreManifest(ships, {});
+    // Ships 1 & 3 share an RFC → entityKey = RFC → counted together (2 shipments)
+    // Ships 2 & 4 share a different RFC → entityKey = RFC → counted together (2 shipments)
+    // Neither group has count > 3, so no bbdd should fire
+    const bbddCount = scored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'bbdd')
+    ).length;
+    expect(bbddCount).toBe(0);
   });
 });

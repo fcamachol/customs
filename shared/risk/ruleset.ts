@@ -13,9 +13,17 @@
  * If the client confirms the spreadsheet interpretation instead, change only
  * `thresholds.consignatario` to 2 and remove the severity-override block in
  * classify.ts — no other code changes needed.
+ *
+ * F14: fuzzy entity resolution (version 2026-07b).
+ *   - fuzzyEntityResolution: admin-reversible flag (default true). Set to false to
+ *     revert to exact-name matching (removes F14 typo clustering entirely).
+ *   - fuzzyNameMaxDistance: maximum Damerau-Levenshtein distance for name merging.
+ *     Default 2. Setting to 0 disables distance-based merging (phonetic blocking only).
+ *     PREFER lower values — a missed typo is less harmful than over-flagging
+ *     legitimate distinct people.
  */
 export const RULESET = {
-  version: '2026-07',
+  version: '2026-07b',
   thresholds: {
     cantidad: 10,
     montoMin: 1,
@@ -25,6 +33,18 @@ export const RULESET = {
     importacionesMes: 4,
     /** Distinct consignees per address (smurfing signal) */
     addressDistinctConsignees: 3,
+    /**
+     * F14: maximum Damerau-Levenshtein edit distance for fuzzy name clustering.
+     * Default 2. Admin-tunable (lower = fewer false merges, higher = catches more typos).
+     * PREFER lower values. Set to 0 for phonetic-blocking-only (no distance merge).
+     */
+    fuzzyNameMaxDistance: 2,
+    /**
+     * F14: enable/disable fuzzy entity resolution for ID-less consignees.
+     * Default true. Set to false to revert to exact-name matching (F14 off).
+     * Admin-reversible for audit traceability.
+     */
+    fuzzyEntityResolution: true as boolean,
   },
   /** Per-signal point weights; calibrated in Task 7 so the 501-row fixture lands rojo ~5-10%.
    * F13 adds `agregado` (weight 30) for cross-row entity aggregation. Weight is higher than
@@ -79,19 +99,31 @@ export type Thresholds = {
   direccion: number;
   importacionesMes: number;
   addressDistinctConsignees: number;
+  /** F14: max Damerau-Levenshtein distance for fuzzy name clustering (default 2). */
+  fuzzyNameMaxDistance: number;
+  /** F14: enable/disable fuzzy entity resolution (default true). Admin-reversible. */
+  fuzzyEntityResolution: boolean;
 };
 
 /**
  * Merge admin-configurable overrides (D4 / RF-24, from the `validation_params` config key)
- * over the built-in defaults. Only finite, non-negative numbers are accepted; anything else
- * falls back to the default so a malformed catalog can never weaken the engine silently.
+ * over the built-in defaults. Only finite, non-negative numbers are accepted for numeric
+ * fields; boolean fields accept true/false directly. Malformed values fall back to defaults
+ * so a misconfigured catalog can never silently weaken the engine.
+ *
+ * F14: fuzzyEntityResolution (boolean) and fuzzyNameMaxDistance (number) are both included.
+ * Set fuzzyEntityResolution=false to disable typo clustering entirely (admin-reversible).
  */
 export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, unknown>>): Thresholds {
   const base: Thresholds = { ...RULESET.thresholds };
   if (!overrides) return base;
   for (const key of Object.keys(base) as (keyof Thresholds)[]) {
     const v = overrides[key];
-    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) base[key] = v;
+    if (key === 'fuzzyEntityResolution') {
+      if (typeof v === 'boolean') (base as Record<string, unknown>)[key] = v;
+    } else {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) (base as Record<string, unknown>)[key] = v;
+    }
   }
   return base;
 }

@@ -102,7 +102,8 @@ describe('scoreManifest', () => {
 
   it('ruleset_version and ruleset_hash are set on every scored shipment', () => {
     const out = scoreManifest([ship()], {});
-    expect(out[0].ruleset_version).toBe('2026-07');
+    // F14: version bumped to 2026-07b (fuzzy entity resolution)
+    expect(out[0].ruleset_version).toBe('2026-07b');
     expect(out[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 

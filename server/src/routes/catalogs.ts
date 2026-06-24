@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
 import { createClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam } from '../validation/schemas';
 
@@ -39,28 +40,34 @@ catalogsRouter.post(
   validate({ body: createClientBody }),
   async (req, res) => {
     const { name, tax_id, address, phone, email, website, platform } = req.body;
-    const inserted = await query(
-      `INSERT INTO clients (name, tax_id, address, phone, email, website, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, tax_id, address, phone, email, website, created_by, created_at`,
-      [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null, req.user!.userId],
-    );
-    const client = inserted.rows[0];
 
     // Create the initial platform row when the caller supplied non-empty platform data.
     const p = (platform ?? {}) as Record<string, unknown>;
     const pn = (k: string) => (typeof p[k] === 'string' && (p[k] as string).trim() !== '' ? (p[k] as string).trim() : null);
-    let platforms: unknown[] = [];
-    if (pn('commercialName') || pn('countryOfOrigin') || pn('legalName') || pn('email')) {
-      const pr = await query(
-        `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
-                   legal_name AS "legalName", email`,
-        [client.id, pn('commercialName'), pn('countryOfOrigin'), pn('legalName'), pn('email'), req.user!.userId],
+
+    const { client, platforms } = await withTransaction(async (q) => {
+      const inserted = await q(
+        `INSERT INTO clients (name, tax_id, address, phone, email, website, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, name, tax_id, address, phone, email, website, created_by, created_at`,
+        [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null, req.user!.userId],
       );
-      platforms = pr.rows;
-    }
+      const client = inserted.rows[0];
+
+      let platforms: unknown[] = [];
+      if (pn('commercialName') || pn('countryOfOrigin') || pn('legalName') || pn('email')) {
+        const pr = await q(
+          `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
+                     legal_name AS "legalName", email`,
+          [client.id, pn('commercialName'), pn('countryOfOrigin'), pn('legalName'), pn('email'), req.user!.userId],
+        );
+        platforms = pr.rows;
+      }
+
+      return { client, platforms };
+    });
 
     const after = { ...client, platforms };
     await recordAudit({

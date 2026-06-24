@@ -1,10 +1,10 @@
 /**
- * Seguimiento status — the pedimento lifecycle of a manifest, derived entirely from
+ * Seguimiento status — the pedimento lifecycle of a single pedimento row, derived entirely from
  * existing fields (no dedicated status column). Used to split the Seguimiento view into
  * "Sin pedimento" (editable work queue) and "Con pedimento" (finalized) tabs, and to
  * badge each row.
  *
- * `locked` MUST mirror server/src/services/manifestLock.ts:computeLock — a manifest is
+ * `locked` MUST mirror server/src/services/manifestLock.ts:computeLock — a pedimento is
  * locked (and lands in the "Con pedimento" tab) once it is structurally APPROVED or a
  * pedimento PDF is attached. Keep the two in sync.
  */
@@ -55,3 +55,7 @@ export function computeSeguimientoStatus(signals: SeguimientoSignals): Seguimien
 
   return { status, locked, scanVerdict };
 }
+
+// Manifest-level coverage status (1 manifest → N pedimentos) lives in ./coverage.
+export { computeCoverage } from './coverage';
+export type { ManifestCoverageStatus, CoverageResult, PedimentoCoverageInput } from './coverage';

@@ -261,6 +261,30 @@ describe('records — detail pedimentos[]', () => {
     // Per-pedimento lock is lifecycle-driven: locked only when sub_status='cargado'.
     expect(p.lock).toMatchObject({ editable: false });
   });
+
+  it('surfaces pedimento_reconciliation on the detail row', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('950-1','Cliente O',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const report = {
+      summary: { color: 'verde', matched: 1, mismatched: 0, missingInPedimento: 0, extraInPedimento: 0 },
+      lines: [], header: [], totals: [], notes: [],
+      generatedAt: 'x', extractionMethod: 'deterministic', usedPositional: false, confidence: 0.9,
+    };
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, pedimento_reconciliation, created_by)
+       VALUES ($1,'666',$2::jsonb,$3) RETURNING id`,
+      [id, JSON.stringify(report), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.id).toBe(ped.rows[0].id);
+    expect(p.reconciliation).toMatchObject({ summary: { color: 'verde' } });
+  });
 });
 
 describe('records — Consulta filters (cont.)', () => {

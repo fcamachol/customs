@@ -25,8 +25,8 @@ export function SimulationBanner() {
         </svg>
       </span>
       <p>
-        <strong className="font-semibold">Modo simulacion / pre-validacion:</strong>{' '}
-        Los documentos generados en este sistema son de pre-validacion estructural unicamente y{' '}
+        <strong className="font-semibold">Modo simulación / pre-validación:</strong>{' '}
+        Los documentos generados en este sistema son de pre-validación estructural únicamente y{' '}
         <strong>NO son legalmente presentables ante el SAT/VUCEM</strong>. Para que un pedimento
         tenga validez legal debe ser firmado con FIEL/e.firma (CSD) y transmitido al SAT/VUCEM.
         Esta funcionalidad esta pendiente de implementacion (requiere certificados CSD y contrato

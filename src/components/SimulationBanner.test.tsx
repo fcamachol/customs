@@ -10,7 +10,7 @@ describe('SimulationBanner', () => {
 
   it('states documents are pre-validation only', () => {
     render(<SimulationBanner />);
-    expect(screen.getByText(/Modo simulacion \/ pre-validacion/i)).toBeTruthy();
+    expect(screen.getByText(/Modo simulación \/ pre-validación/i)).toBeTruthy();
   });
 
   it('states documents are NOT legally submittable', () => {

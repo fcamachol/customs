@@ -9,8 +9,8 @@ import type { MigrationBuilder } from 'node-pg-migrate';
  */
 export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`
-    INSERT INTO config (key, value, updated_by, updated_at)
-    VALUES ('denied_parties', '[]'::jsonb, 'migration', now())
+    INSERT INTO config (key, value, updated_at)
+    VALUES ('denied_parties', '[]'::jsonb, now())
     ON CONFLICT (key) DO NOTHING
   `);
 }

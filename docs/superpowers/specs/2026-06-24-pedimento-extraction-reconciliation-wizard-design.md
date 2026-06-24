@@ -51,24 +51,44 @@ engine + the wizard UI, layered on top.
 
 ## Field sourcing (resolves the slim plan's blocker / the comprehensive doc's finding #4)
 
-The extraction service produces the full header; the wizard pre-fills from it; the
-prevalidate/finalize body is assembled from it.
+**Decision (brainstorming 2026-06-24): stable entities are configured once; the PDF cross-checks
+them.** The pedimento text layer is **column-scrambled** (labels and values land in separate
+blocks), so free-text identity fields are not reliably text-extractable — *and* the
+importer-of-record and customs agent are **stable per-operation entities** (one importer-of-record,
+one customs agent, identical across every pedimento). Re-keying or fragile-extracting stable data is
+the error source Poka-Yoke eliminates. So:
+
+**(a) Configured-once master entities** — filled with zero per-pedimento entry:
 
 | `BuildOptions` field | Source | Notes |
 |---|---|---|
-| `numeroPedimento` | PDF header (already parsed) | 15 digits, spaces stripped |
-| `agent.patente` | **PDF number group 3** (`NUMERO_RE`) | e.g. `1653` — free from the already-parsed number |
-| `agent.name` / `agentRfc` / `agencyRfc` | PDF agente-aduanal block | new anchors |
-| `importer.rfc` / `name` / `fiscalAddress` | PDF importador block (RFC, razón social, domicilio) | new anchors |
-| `tipoCambio` | PDF header `TIPO CAMBIO` | e.g. `20.45680` |
-| `customsEntryCode` / `customsClearanceCode` | PDF `ADUANA E/S` / `SECCIÓN ADUANERA DE DESPACHO` | |
-| `entryDate` / `paymentDate` | PDF `FECHAS` → `ENTRADA` / `PAGO` | `dd/mm/yyyy` → ISO; e.g. `04/04/2025` / `05/04/2025` |
-| `tasaImportacion` | PDF page-2 PARTIDAS → IVA `TASA` row | positional pass (Approach B); vigencia warning only — **capture, don't calculate** (RGCE 3.7.35, PRD §10) |
+| `importer.{rfc,name,fiscalAddress}` | **`importer_of_record` config key** (super_admin-editable) | the MX importer-of-record (e.g. ADMERCE SA DE CV) |
+| `agent.{patente,name,agentRfc,agencyRfc}` | **`customs_agent` config key** (super_admin-editable) | the customs broker identity (e.g. GUZMOR) |
 
-- **Persistence.** Extend the stored `import_data` (the pedimento row's JSONB) to carry the full
-  confirmed header (importer/agent objects, tipoCambio, paymentDate, numeroPedimento) alongside the
-  7 visible fields, so prevalidate/finalize don't lose it and need no client round-trip of the
-  header. The 7 fields stay the editable surface; the rest ride along.
+> v1 assumption: one importer-of-record + one customs agent per deployment (global config). If a
+> deployment needs per-client importers later, the key becomes a per-client lookup — out of scope now.
+
+**(b) Per-pedimento PDF-extracted fields** (variable; reliably pattern-matched):
+
+| `BuildOptions` / cross-check field | Source | Notes |
+|---|---|---|
+| `numeroPedimento` | PDF header (already parsed) | 15 digits, spaces stripped |
+| `patente` (cross-check) | **PDF número group 3** (`NUMERO_RE`) | e.g. `1653`; must match `customs_agent.patente` |
+| `tipoCambio` | PDF header — first decimal token with ≥4 places | e.g. `20.45680` |
+| `entryDate` / `paymentDate` | PDF `FECHAS` — the two `dd/mm/yyyy` dates in order | `04/04/2025` / `05/04/2025` → ISO |
+| `importerRfc` / `agentRfc` / `agencyRfc` (cross-check) | PDF (RFC/CURP pattern matches) | cross-check vs the configured entities; flag divergence |
+| `customsEntryCode` / `customsClearanceCode` | capture step (2 of the 7 fields) | PDF extraction is a later refinement |
+| `tasaImportacion` | capture step (1 of the 7 fields); PDF page-2 positional extraction is a later refinement | **capture, don't calculate** (RGCE 3.7.35, PRD §10); `tasa_vigencias` stays a non-blocking warning |
+
+- **Cross-check (Poka-Yoke).** The PDF-extracted `importerRfc` / `agentRfc` / `agencyRfc` / `patente`
+  are compared against the configured master entities during reconciliation; a mismatch is flagged
+  (advisory) — catching a wrong master config or a wrong PDF, without re-keying.
+- **Body assembly.** The prevalidate/finalize body = importer + agent from the master config +
+  `tipoCambio`/dates from extraction + customs codes/tasa from the capture step + `numeroPedimento`
+  from the row. Nothing stable is re-keyed.
+- **Persistence.** Extend the stored `import_data` (the pedimento row's JSONB) to carry the assembled
+  header (the extracted per-pedimento fields) alongside the 7 visible fields, so prevalidate/finalize
+  need no client round-trip. The configured entities are read fresh from config at build time.
 - **Reconciliation "expected" side** = `buildExpectedFromManifest`, aggregating manifest rows **by
   guía** (the resolved per-guía partida model: sum `customsValueUsd`, one consignee/RFC per guía,
   flag intra-guía divergence), compared against the extracted partida lines (`ExtractedPedimentoLine[]`
@@ -80,13 +100,18 @@ prevalidate/finalize body is assembled from it.
 
 ## Components (isolation & interfaces)
 
+- **`importer_of_record` + `customs_agent` config keys** — super_admin-editable via the existing
+  config/catalogs mechanism (alongside `tasa_vigencias`, `denied_parties`). Zod-validated shapes
+  (`importerSchema` / `agentSchema`). A small admin surface to edit them.
 - **`shared/pedimento/parsePedimentoText.ts`** (extend) — pure header + line parser. Input: PDF text.
-  Output: `ExtractedPedimento` with the extended header. New anchors for agente/importador/fechas/
-  tipoCambio/aduana; `patente` from the number; `tasaImportacion` via the positional pass.
-- **`shared/types/reports.ts`** (extend) — `ExtractedPedimentoHeader` gains `patente`, `agentName`,
-  `agencyRfc`, `importerName`, `importerAddress`, `entryDate`, `paymentDate`, `customsEntryCode`,
-  `tipoCambio` (slots for `agentRfc`/`customsClearanceCode`/`tipoCambio` already exist),
-  `tasaImportacion`. Add `ReconciliationReport` / `ReconciliationLine` types.
+  Output: `ExtractedPedimento` with the extended header. New **pattern-based** anchors only:
+  `patente` from the número (group 3); `tipoCambio` (first ≥4-decimal token); `entryDate`/`paymentDate`
+  (the two `dd/mm/yyyy` dates); `agentRfc`/`agencyRfc` (RFC/CURP patterns in the agente block). No
+  free-text name/address parsing (those come from config). `tasaImportacion` + customs codes stay
+  capture-sourced (positional extraction is a later refinement).
+- **`shared/types/reports.ts`** (extend) — `ExtractedPedimentoHeader` gains `patente`, `agencyRfc`,
+  `entryDate`, `paymentDate` (slots for `agentRfc`/`customsClearanceCode`/`tipoCambio` already exist).
+  Add `ReconciliationReport` / `ReconciliationLine` types.
 - **`server/src/services/pdfExtract/`** (extend) — text-layer (A) → positional firm-up (B) →
   AI fallback (C, gated). Returns `ExtractedPedimento`. Already wraps `parsePedimentoText`.
 - **`shared/pedimento/reconcile.ts`** (new) — `buildExpectedFromManifest(shipments)` +
@@ -121,12 +146,14 @@ prevalidate/finalize body is assembled from it.
 
 ## Testing
 
-- **Unit (shared):** `parsePedimentoText` maps every header field from text fixtures (patente 1653,
-  agente, tipoCambio 20.4568, entry 04/04/2025, pago 05/04/2025, aduana 850, tasa 19.000);
-  `reconcile` returns correct matched/mismatch/missing/extra incl. a **multi-product-per-guía** case.
+- **Unit (shared):** `parsePedimentoText` maps the pattern fields from text fixtures (patente 1653,
+  tipoCambio 20.4568, entry 04/04/2025, pago 05/04/2025, agentRfc GUMM710831UYA, agencyRfc
+  GLG1502247K9); `reconcile` returns correct matched/mismatch/missing/extra incl. a
+  **multi-product-per-guía** case, and flags an importer/agent RFC cross-check mismatch.
   **Never commit a real PDF** — fixtures are trimmed extracted-text strings only.
-- **Backend:** upload endpoint returns scan + extracted + reconciliation and attaches `file_id`;
-  prevalidate consumes the persisted header; import_data persists the full header.
+- **Backend:** the `importer_of_record`/`customs_agent` config keys validate + reject bad shapes;
+  upload endpoint extracts + persists the per-pedimento header; prevalidate assembles the body from
+  config + persisted header.
 - **Frontend:** `CaptureWizard` renders the 4-step stepper; step 2 pre-filled from a mocked
   `extracted` header; step 3 renders `ReconciliationPanel` from a mocked report; `cargado` →
   read-only; a `SeguimientoView` row click opens the modal; inline 7-field form is gone.
@@ -134,17 +161,23 @@ prevalidate/finalize body is assembled from it.
 
 ## Phasing (each phase → its own implementation plan → execution cycle, on this branch)
 
-1. **Extraction core** — extend `ExtractedPedimentoHeader` + the parser (header anchors A +
-   positional firm-up B for tasa), unit-tested against text fixtures. Wire `extractPedimento` into
-   the upload endpoint; persist the extracted header on the pedimento row.
-2. **Reconciliation engine** — `shared/pedimento/reconcile.ts` (`buildExpectedFromManifest` +
-   `reconcile`, per-guía), pure + unit-tested; run advisory on upload; persist the report (JSONB +
-   history) and expose it on the records detail.
-3. **Wizard UI** — `CaptureWizard` modal (4 steps) pre-filled from extraction, `ReconciliationPanel`
-   in step 3, driving the Task 1–6 endpoints; rewire `SeguimientoView` (status chips + entry
-   buttons + auto-open on upload + `cargado` read-only); remove the inline form.
-4. *(Follow-on, optional this branch)* **Reconciliation surfaces** — `ReconciliationPanel` in
+1. **Extraction core** — extend `ExtractedPedimentoHeader` + the parser with the **pattern-based**
+   per-pedimento anchors (patente, tipoCambio, entry/payment dates, agentRfc, agencyRfc),
+   unit-tested against trimmed real-text fixtures. Wire the extended header into the upload endpoint;
+   persist it on the pedimento row's `import_data`.
+2. **Entity master** — `importer_of_record` + `customs_agent` config keys (validated, super_admin-
+   editable) + admin surface; helper that reads them for body assembly + the RFC/patente cross-check.
+3. **Reconciliation engine** — `shared/pedimento/reconcile.ts` (`buildExpectedFromManifest` +
+   `reconcile`, per-guía, + the entity cross-check), pure + unit-tested; run advisory on upload;
+   persist the report (JSONB + history) and expose it on the records detail.
+4. **Wizard UI** — `CaptureWizard` modal (4 steps) pre-filled from extraction + the configured
+   entities, `ReconciliationPanel` in step 3, driving the Task 1–6 endpoints; rewire `SeguimientoView`
+   (status chips + entry buttons + auto-open on upload + `cargado` read-only); remove the inline form.
+   The prevalidate body is assembled server-side or client-side from config + extraction + capture.
+5. *(Follow-on, optional this branch)* **Reconciliation surfaces** — `ReconciliationPanel` in
    Consulta + detail drawer, manual re-run endpoint, XLSX export.
+
+Phases 1 and 2 are independent and could be built in either order; each is its own plan.
 
 ## Out of scope
 

@@ -228,13 +228,27 @@ export function resolveNameClusters(
         continue;
       }
 
-      // Condition b: within edit distance threshold
-      const len = Math.min(a.length, b.length);
-      const threshold = opts?.maxDistance !== undefined
-        ? opts.maxDistance
-        : Math.min(2, Math.ceil(len * 0.15));
-      if (threshold >= 0 && similar(a, b, threshold)) {
-        uf.union(a, b);
+      // Condition b: within edit distance threshold.
+      //
+      // SHORT-NAME GUARD (Fix 3): distance-based merging is only allowed when BOTH
+      // names' norm length ≥ 8. This prevents false-positive merges like
+      // "Maria"/"Mario" (5 chars, distance 1 < threshold 1) or "Ruiz"/"Ruix"
+      // (4 chars) that would otherwise be merged at the default threshold.
+      // Phonetic blocking (condition a above) still applies to short names, but
+      // short-name typos are uncommon in practice and the false-merge risk outweighs
+      // the detection benefit for names shorter than 8 characters.
+      //
+      // Minimum length for distance-based merge: 8 chars (both sides).
+      // Genuine longer typos like "Juan Perez"/"Juan Peres" (10/10 chars) still merge.
+      const MIN_LEN_FOR_DISTANCE = 8;
+      if (a.length >= MIN_LEN_FOR_DISTANCE && b.length >= MIN_LEN_FOR_DISTANCE) {
+        const len = Math.min(a.length, b.length);
+        const threshold = opts?.maxDistance !== undefined
+          ? opts.maxDistance
+          : Math.min(2, Math.ceil(len * 0.15));
+        if (threshold >= 0 && similar(a, b, threshold)) {
+          uf.union(a, b);
+        }
       }
     }
   }

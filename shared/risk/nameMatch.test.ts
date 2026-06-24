@@ -89,18 +89,18 @@ describe('resolveNameClusters', () => {
     expect(c1).toBe(c2);
   });
 
-  it('does NOT cluster clearly distinct names (Maria is not Mario)', () => {
-    const names = ['Maria Lopez', 'Mario Lopez'];
+  it('does NOT cluster "Maria" and "Mario" (short standalone names, ≤8 chars)', () => {
+    // Fix 3: short-name guard — distance-based merging requires BOTH names' norm length ≥ 8.
+    // "maria" (5 chars) and "mario" (5 chars) are below the minimum → must NOT merge.
+    // They also differ in blockingKey, so phonetic blocking does not merge them either.
+    const names = ['Maria', 'Mario'];
     const clusters = resolveNameClusters(names);
-    const c1 = clusters.get('maria lopez');
-    const c2 = clusters.get('mario lopez');
+    const c1 = clusters.get('maria');
+    const c2 = clusters.get('mario');
     expect(c1).toBeDefined();
     expect(c2).toBeDefined();
-    // They may or may not cluster (Maria/Mario distance=1 < threshold=2 for 5-char prefix)
-    // Document behavior: if they cluster, caller should note this in code comments.
-    // For now we accept either outcome but require it to be deterministic.
-    expect(typeof c1).toBe('string');
-    expect(typeof c2).toBe('string');
+    // Short-name guard: MUST NOT cluster.
+    expect(c1).not.toBe(c2);
   });
 
   it('canonical is the lexicographically smallest normalized name in the cluster', () => {
@@ -140,6 +140,33 @@ describe('resolveNameClusters', () => {
     const c2 = clusters.get('ana lopex');
     // 1-typo should cluster
     expect(c1).toBe(c2);
+  });
+});
+
+describe('resolveNameClusters — short-name guard (Fix 3)', () => {
+  // Rule: distance-based merging requires BOTH names' norm length ≥ 8.
+  // Short names (< 8 chars) can only merge via phonetic blocking (same blockingKey).
+  // This prevents false positives like "Maria"/"Mario" (5 chars each).
+
+  it('"Maria" and "Mario" (5 chars) must NOT merge via edit distance', () => {
+    // Both names are 5 chars < MIN_LEN_FOR_DISTANCE=8. Different blockingKeys → no merge.
+    const clusters = resolveNameClusters(['Maria', 'Mario']);
+    const c1 = clusters.get('maria');
+    const c2 = clusters.get('mario');
+    expect(c1).not.toBe(c2);
+  });
+
+  it('"Juan Perez"/"Juan Peres" (10 chars each) still merges — genuine typo case', () => {
+    // Both names are 10 chars ≥ 8 → distance check applies. Distance=1 ≤ threshold=2.
+    const clusters = resolveNameClusters(['Juan Perez', 'Juan Peres']);
+    expect(clusters.get('juan perez')).toBe(clusters.get('juan peres'));
+  });
+
+  it('"Carlos Ruiz"/"Carlos Ruix" (11 chars) merges — full name ≥8 passes the guard', () => {
+    // Full-name length is what is checked, not individual token length.
+    // "carlos ruiz"/"carlos ruix" are 11 chars each → guard passes → distance merge.
+    const clusters = resolveNameClusters(['Carlos Ruiz', 'Carlos Ruix']);
+    expect(clusters.get('carlos ruiz')).toBe(clusters.get('carlos ruix'));
   });
 });
 

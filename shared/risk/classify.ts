@@ -176,10 +176,17 @@ export function scoreManifest(
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
     deniedParties: options?.deniedParties,
-    // F14: use fuzzyNameToken so bbdd signal looks up the cluster-canonical key.
-    // For ID-less consignees this maps typo variants to the same monthlyNameCount bucket.
-    // For ID-keyed consignees the canonical is unchanged (nameCluster has no entry → identity).
+    // F14: nameToken = fuzzy-canonical + base tokenizer (for ID-less consignees only).
+    // nameTokenBase = base tokenizer only (for ID-keyed consignees — no fuzzy canonical).
+    //
+    // gradeSignals selects the correct key function per-row:
+    //   - ID-keyed rows use nameTokenBase → bbdd key matches their PASS-1 counter exactly.
+    //   - ID-less rows use nameToken → bbdd key maps to the cluster-canonical bucket.
+    //
+    // This guarantees: (a) fuzzy clustering NEVER alters ID-keyed consignees' bbdd counts;
+    // (b) typo variants of ID-less consignees DO accumulate to the same bucket.
     nameToken: fuzzyNameToken,
+    nameTokenBase: nameTokenFn ?? undefined,
   };
 
   const resolved = {

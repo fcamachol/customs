@@ -112,17 +112,32 @@ export interface EntityContext {
    */
   deniedParties?: DeniedPartyEntry[];
   /**
-   * F20b: Optional name-dedup tokenizer. Receives `norm(name)` (already normalized)
-   * and returns a dedup token (e.g. HMAC blind index). Defaults to identity when absent.
+   * F14+F20b: Name-dedup tokenizer for ID-less consignees.
+   * Receives `norm(name)` and returns a dedup token that incorporates the fuzzy canonical
+   * (so typo variants map to the same bbdd bucket). Defaults to identity when absent.
    *
-   * The server injects `rawBlindIndex` here (server/src/crypto/blindIndex.ts) so
-   * that PII (normalized names) is never written in the clear to dedup key-spaces.
-   * Behavior is IDENTICAL to identity since both tokenize the same normalized form —
-   * collision structure is fully preserved.
+   * CRITICAL: used ONLY for consignees WITHOUT a valid RFC/CURP. ID-keyed consignees
+   * MUST use `nameTokenBase` (below) for their bbdd key so that fuzzy clustering of
+   * ID-less names never alters the bbdd count of ID-keyed consignees.
    *
    * CONSTRAINT: shared/risk must NOT import Node's `crypto` — inject only.
    */
   nameToken?: (normalizedName: string) => string;
+  /**
+   * F20b: Base name tokenizer (no fuzzy canonical). Receives `norm(name)` and
+   * returns a HMAC blind-index token (or identity when absent).
+   *
+   * Used ONLY for RFC/CURP-keyed consignees in the bbdd signal so their key-space
+   * is never remapped by the fuzzy cluster map (which only contains ID-less names).
+   *
+   * When absent, bbdd falls back to identity (norm'd name), preserving exact-match
+   * back-compat. When F20b is active (server injects nameTokenFn), this field
+   * carries rawBlindIndex — the same function used to tokenize history keys.
+   *
+   * INVARIANT: nameTokenBase(x) === nameToken(x) for any name that was NOT
+   * fuzzily clustered (i.e., for all ID-keyed names and for exact-match ID-less names).
+   */
+  nameTokenBase?: (normalizedName: string) => string;
 }
 
 /**
@@ -251,9 +266,21 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
   }
 
   // bbdd (Ficha-124): fires only when monthlyNameCount > 3, graded by excess over 3.
-  // F20b: keyed by nameToken(norm(name)) — defaults to norm(name) when nameToken is absent.
-  // Collision-preserving: same normalized name → same token → same dedup bucket.
-  const bbddKey = ctx.nameToken ? ctx.nameToken(norm(s.consignee.name)) : norm(s.consignee.name);
+  //
+  // F14 CRITICAL: RFC/CURP-keyed consignees MUST use the base tokenizer (no fuzzy canonical)
+  // so that fuzzy clustering of ID-less names never remaps an ID-keyed consignee's bbdd key.
+  //
+  // Key selection:
+  //   - ID-keyed (has valid RFC/CURP): use nameTokenBase (base tokenizer, no fuzzy canonical).
+  //     This guarantees the bbdd key matches exactly what PASS-1 wrote under rawNorm.
+  //   - ID-less: use nameToken (fuzzy-canonical + base tokenizer) so typo variants resolve
+  //     to the same cluster bucket that PASS-1 accumulated.
+  //
+  // Both default to identity when the respective function is absent (exact-match back-compat).
+  const normName = norm(s.consignee.name);
+  const bbddKey = idRaw
+    ? (ctx.nameTokenBase ? ctx.nameTokenBase(normName) : normName)
+    : (ctx.nameToken    ? ctx.nameToken(normName)    : normName);
   const mc = ctx.monthlyNameCount[bbddKey] ?? 0;
   if (mc > 3) {
     add('bbdd', (mc - 3) / 3, 'Varias importaciones en el mes', { monthlyCount: mc });

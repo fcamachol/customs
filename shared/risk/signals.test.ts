@@ -222,3 +222,100 @@ describe('F14: fuzzy entity resolution', () => {
     expect(bbddCount).toBe(0);
   });
 });
+
+// ─── F14 Fix 1: mixed-ID monotonicity tests ──────────────────────────────────
+// These tests verify the CRITICAL invariant: fuzzy clustering of ID-less names
+// NEVER alters the bbdd count or score of ID-keyed (RFC/CURP) consignees.
+
+describe('F14: mixed-ID monotonicity (Fix 1)', () => {
+  // 4 ID-keyed "Juan Perez" rows → each counts separately → bbdd fires for all 4
+  // (count=4 > threshold=3). Adding ID-less typo variants must NOT change this.
+
+  it('(a) ID-keyed bbdd count is identical with fuzzy ON vs OFF (never reduced)', () => {
+    const idShips = [
+      makeShip(1, 'Juan Perez', 'PERJ800101AA8'),
+      makeShip(2, 'Juan Perez', 'PERJ800101AA8'),
+      makeShip(3, 'Juan Perez', 'PERJ800101AA8'),
+      makeShip(4, 'Juan Perez', 'PERJ800101AA8'),
+    ];
+    // Score with fuzzy ON (default)
+    const withFuzzy = scoreManifest(idShips, {});
+    // Score with fuzzy OFF (exact matching only)
+    const withoutFuzzy = scoreManifest(idShips, {}, { thresholds: { fuzzyEntityResolution: false } });
+
+    // Both should produce the same bbdd fire count — ID-keyed rows are unaffected by fuzzy
+    const bbddWithFuzzy = withFuzzy.filter((s) => s.reasons.some((r) => r.signalId === 'bbdd')).length;
+    const bbddWithoutFuzzy = withoutFuzzy.filter((s) => s.reasons.some((r) => r.signalId === 'bbdd')).length;
+    expect(bbddWithFuzzy).toBe(bbddWithoutFuzzy);
+    // With 4 rows for the same RFC, bbdd should fire for all 4 (count=4 > 3)
+    expect(bbddWithFuzzy).toBe(4);
+  });
+
+  it('(b) adding ID-less typo variants increases the ID-less bucket (not the ID-keyed one)', () => {
+    // 1 ID-less "Juan Peres" alone → count=1 → no bbdd
+    const idLessOnly = scoreManifest([makeShip(1, 'Juan Peres')], {});
+    const bbddIdLessOnly = idLessOnly.filter((s) => s.reasons.some((r) => r.signalId === 'bbdd')).length;
+    expect(bbddIdLessOnly).toBe(0);
+
+    // 4 ID-less typo variants → cluster count=4 → bbdd fires for all
+    const idLessTypos = [
+      makeShip(1, 'Juan Peres'),
+      makeShip(2, 'Juan Perez'),
+      makeShip(3, 'Juan Perex'),
+      makeShip(4, 'Juan Perey'),
+    ];
+    const scoredIdLessTypos = scoreManifest(idLessTypos, {});
+    const bbddIdLessTypos = scoredIdLessTypos.filter((s) => s.reasons.some((r) => r.signalId === 'bbdd')).length;
+    expect(bbddIdLessTypos).toBeGreaterThan(0); // fuzzy increases the count → bbdd fires
+  });
+
+  it('(c) CRITICAL: mixing ID-keyed + ID-less same-name rows — ID-keyed bbdd is never suppressed', () => {
+    // Reproduces the reported bug: 4 ID-keyed "Juan Perez" fire bbdd correctly.
+    // Adding ID-less "Juan Peres"/"Juan Perex" must NOT suppress the ID-keyed rows' bbdd.
+    // Bug before fix: fuzzyNameToken remapped "juan perez" → canonical "juan peres",
+    // so the ID-keyed rows looked up the ID-less bucket (count=2) instead of their own (4)
+    // → bbdd was SUPPRESSED for valid RFC holders.
+    const mixedShips = [
+      makeShip(1, 'Juan Perez', 'PERJ800101AA8'), // ID-keyed
+      makeShip(2, 'Juan Perez', 'PERJ800101AA8'), // ID-keyed
+      makeShip(3, 'Juan Perez', 'PERJ800101AA8'), // ID-keyed
+      makeShip(4, 'Juan Perez', 'PERJ800101AA8'), // ID-keyed → count=4 in their own bucket
+      makeShip(5, 'Juan Peres'),                   // ID-less typo variant
+      makeShip(6, 'Juan Perex'),                   // ID-less typo variant → cluster count=2
+    ];
+    const scored = scoreManifest(mixedShips, {});
+
+    // All 4 ID-keyed rows MUST still fire bbdd (their count=4 > threshold=3)
+    const idKeyedScored = scored.slice(0, 4); // first 4 are ID-keyed
+    const bbddFiredForIdKeyed = idKeyedScored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'bbdd')
+    ).length;
+    expect(bbddFiredForIdKeyed).toBe(4); // was 0 before fix (bug reproduced)
+
+    // ID-less typo variants (ships 5+6) have cluster count=2 → no bbdd (2 ≤ 3)
+    const idLessScored = scored.slice(4, 6);
+    const bbddFiredForIdLess = idLessScored.filter((s) =>
+      s.reasons.some((r) => r.signalId === 'bbdd')
+    ).length;
+    expect(bbddFiredForIdLess).toBe(0);
+  });
+
+  it('(d) no count ever decreases vs exact matching (monotonicity)', () => {
+    // Fuzzy can only INCREASE counts; a row that fires bbdd with fuzzy ON must
+    // also fire with fuzzy ON in a subset of data (not the other way around).
+    // Verify: exact-match score ≤ fuzzy-enabled score for each row.
+    const ships = [
+      makeShip(1, 'Ana Garcia'),
+      makeShip(2, 'Ana Garcia'),
+      makeShip(3, 'Ana Garsia'), // typo variant
+      makeShip(4, 'Ana Garcia'),
+    ];
+    const withFuzzy = scoreManifest(ships, {});
+    const withoutFuzzy = scoreManifest(ships, {}, { thresholds: { fuzzyEntityResolution: false } });
+
+    // Each row's score with fuzzy must be ≥ its score without fuzzy
+    for (let i = 0; i < ships.length; i++) {
+      expect(withFuzzy[i].score).toBeGreaterThanOrEqual(withoutFuzzy[i].score);
+    }
+  });
+});

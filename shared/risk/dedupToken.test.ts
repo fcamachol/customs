@@ -125,12 +125,17 @@ describe('F20b: nameTokenFn injection', () => {
     expect(withIdentity.reasons.some((r) => r.signalId === 'bbdd')).toBe(true);
   });
 
-  // ─── 5. EntityContext exposes nameToken (used by gradeSignals) ────────────
+  // ─── 5. EntityContext exposes nameToken / nameTokenBase (used by gradeSignals) ─
+  //
+  // F14 Fix 1: gradeSignals selects the bbdd key function based on consignee identity:
+  //   - ID-less (no valid RFC/CURP): uses ctx.nameToken (fuzzy canonical + tokenizer).
+  //   - ID-keyed (has valid RFC/CURP): uses ctx.nameTokenBase (base tokenizer only).
+  // This ensures fuzzy clustering NEVER alters the bbdd count of ID-keyed consignees.
 
-  it('gradeSignals uses ctx.nameToken when bbdd lookup is done', () => {
-    // With a stub tokenizer that prepends 'tok:', the lookup key is 'tok:ana'
+  it('gradeSignals uses ctx.nameToken for ID-LESS consignees when bbdd lookup is done', () => {
+    // ID-less consignee (no rfc): bbdd lookup uses ctx.nameToken
     const tokenFn = (n: string): string => `tok:${n}`;
-    const s = ship({ name: 'Ana' }); // norm → 'ana', tokenized → 'tok:ana'
+    const s = ship({ name: 'Ana', rfc: '' }); // no RFC → ID-less
     const c = baseCtx({
       monthlyNameCount: { 'tok:ana': 6 }, // 6 ops under token key
       nameToken: tokenFn,
@@ -141,8 +146,23 @@ describe('F20b: nameTokenFn injection', () => {
     expect(bbdd!.points).toBeGreaterThan(0);
   });
 
+  it('gradeSignals uses ctx.nameTokenBase for ID-KEYED consignees (RFC present)', () => {
+    // ID-keyed consignee: bbdd lookup uses ctx.nameTokenBase (not nameToken)
+    // This prevents fuzzy canonical remapping from affecting RFC holders.
+    const tokenFn = (n: string): string => `tok:${n}`;
+    const s = ship({ name: 'Ana', rfc: 'PERJ800101AA8' }); // valid RFC → ID-keyed
+    const c = baseCtx({
+      monthlyNameCount: { 'tok:ana': 6 }, // 6 ops under token key
+      nameTokenBase: tokenFn, // ID-keyed rows use nameTokenBase
+    });
+    const reasons = gradeSignals(s, c);
+    const bbdd = reasons.find((r) => r.signalId === 'bbdd');
+    expect(bbdd).toBeDefined();
+    expect(bbdd!.points).toBeGreaterThan(0);
+  });
+
   it('gradeSignals with default nameToken (identity) still uses norm(name) as key', () => {
-    const s = ship({ name: 'Ana' }); // norm → 'ana'
+    const s = ship({ name: 'Ana', rfc: '' }); // ID-less, no tokenFn → uses identity
     // No nameToken injected → falls back to norm(name) === 'ana'
     const c = baseCtx({ monthlyNameCount: { ana: 6 } });
     const reasons = gradeSignals(s, c);

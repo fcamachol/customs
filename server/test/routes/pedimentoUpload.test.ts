@@ -42,7 +42,8 @@ function makeTextPdf(lines: string[]): Buffer {
 }
 
 // A pedimento PDF whose master guide matches the manifest mawb_reference (369-94268462).
-function pedimentoPdf(numero: string): Buffer {
+// When extraLines are provided they are appended after the standard header lines (e.g. OBSERVACIONES).
+function pedimentoPdf(numero: string, extraLines: string[] = []): Buffer {
   return makeTextPdf([
     `NUM. PEDIMENTO: ${numero}`,
     'T1',
@@ -53,6 +54,7 @@ function pedimentoPdf(numero: string): Buffer {
     'FECHAS',
     '04/04/2025',
     '05/04/2025',
+    ...extraLines,
   ]);
 }
 
@@ -249,5 +251,43 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
       patente: '1653', cveT1: 'T1', fechaEntrada: '2025-04-04', tipoCambio: 20.4568, paymentDate: '2025-04-05',
     });
     expect(row.rows[0].sub_status).toBe('pendiente'); // pre-fill does not advance the lifecycle
+  });
+
+  it('persists a reconciliation report on upload when extraction yields data', async () => {
+    // Seed a shipment whose guideId matches the OBSERVACIONES line in the PDF fixture.
+    const shipment = {
+      id: crypto.randomUUID(),
+      mawbReference: '369-94268462',
+      guideId: 'JMX999000111',
+      description: 'ITEM',
+      hsCode: '99010001',
+      quantity: 1,
+      unit: '6',
+      customsValueUsd: 120,
+      currency: 'USD',
+      originCountry: 'MX',
+      consignee: { name: 'Juan', rfc: 'TOMM020922D40', address: 'Calle 1' },
+      sender: { name: 'S' },
+      platform: { commercialName: 'P', countryOfOrigin: 'MX' },
+    };
+    await query(
+      'INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)',
+      [shipment.id, manifestId, JSON.stringify(shipment)],
+    );
+
+    // Upload a PDF that contains an OBSERVACIONES line for this guía (real grammar).
+    const obsLine = 'GUIA JMX999000111 VALOR 120.00 USD NOMBRE JUAN RFC-CURP TOMM020922D40';
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001684', [obsLine]), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const row = await query<{ pedimento_reconciliation: Record<string, unknown> | null }>(
+      `SELECT pedimento_reconciliation FROM pedimentos WHERE id=$1`, [res.body.pedimentoId]);
+    const report = row.rows[0].pedimento_reconciliation;
+    expect(report).not.toBeNull();
+    expect((report as { summary: { color: string; matched: number } }).summary.color).toBe('verde');
+    expect((report as { summary: { color: string; matched: number } }).summary.matched).toBe(1);
   });
 });

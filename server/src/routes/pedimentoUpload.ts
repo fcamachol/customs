@@ -9,7 +9,10 @@ import { extractPedimento } from '../services/pdfExtract';
 import { normPedimentoNumero } from '../../../shared/pedimento/subdivision';
 import type { SubdivisionInfo } from '../../../shared/pedimento/subdivision';
 import { loadShipments } from '../services/reportData';
-import type { ExtractedPedimento } from '../../../shared/types/reports';
+import type { ExtractedPedimento, ReconciliationReport } from '../../../shared/types/reports';
+import { buildExpectedFromManifest, reconcile } from '../../../shared/pedimento/reconcile';
+import { crossCheckEntities } from '../../../shared/pedimento/entityCrossCheck';
+import { loadImporterOfRecord, loadCustomsAgent } from '../services/entityMaster';
 
 const EMPTY_SUBDIVISION: SubdivisionInfo = { masterGuide: null, ordinal: null, isLast: false, siblings: [], bultos: null, pesoBrutoKg: null };
 
@@ -134,13 +137,53 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   ].filter(([, v]) => v != null) as [string, unknown][];
   const importPrefill = prefillEntries.length ? Object.fromEntries(prefillEntries) : null;
 
+  // Load all manifest shipments once — reused for both the stray-guía check and reconciliation.
+  const allShipments = await loadShipments(req.params.id);
+
+  // Advisory reconciliation: expected (manifest, covered-guía subset) vs extracted (PDF). Best-effort.
+  let reconciliation: ReconciliationReport | null = null;
+  try {
+    if (extracted.lines.length > 0 || extracted.coveredGuias.length > 0) {
+      const covered = new Set(extracted.coveredGuias);
+      const subset = allShipments
+        .map((s) => s.data)
+        .filter((d) => covered.size === 0 || covered.has(d.guideId));
+      const { expected, warnings: bwWarnings } = buildExpectedFromManifest(
+        subset.map((d) => ({
+          guideId: d.guideId,
+          customsValueUsd: d.customsValueUsd,
+          consignee: { name: d.consignee.name, rfc: d.consignee.rfc, curp: d.consignee.curp },
+        })),
+      );
+      const [importer, agent] = await Promise.all([loadImporterOfRecord(), loadCustomsAgent()]);
+      // crossCheckEntities expects { rfc: string } but the Zod-inferred type with .passthrough()
+      // makes the field optional. The schema validates rfc is required, so the cast is safe.
+      const xc = crossCheckEntities(
+        extracted.header,
+        importer ? (importer as { rfc: string }) : null,
+        agent ? (agent as { patente: string; agentRfc: string; agencyRfc: string }) : null,
+      );
+      const notes = [...bwWarnings];
+      if (xc.importerRfcMismatch) notes.push('RFC del importador en el PDF no coincide con el importador de registro.');
+      if (xc.patenteMismatch) notes.push('La patente del PDF no coincide con el agente aduanal configurado.');
+      const report = reconcile(expected, extracted, { notes, generatedAt: new Date().toISOString() });
+      report.header = [
+        { field: 'importerRfc', expected: importer?.rfc ?? null, actual: extracted.header.importerRfc, ok: !xc.importerRfcMismatch },
+        { field: 'patente', expected: agent?.patente ?? null, actual: extracted.header.patente, ok: !xc.patenteMismatch },
+      ];
+      reconciliation = report;
+    }
+  } catch {
+    reconciliation = null; // advisory — never block the upload
+  }
+
   // INSERT the pedimentos row (decision #1). file_id/pedimento_scan now live here, not on manifests.
   const ins = await query<{ id: string }>(
     `INSERT INTO pedimentos
        (manifest_id, numero_pedimento, master_guide, subdivision_ordinal, is_last_subdivision,
         sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by,
-        import_data)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        import_data, pedimento_reconciliation)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
     [
       req.params.id,
       numeroPedimento,
@@ -155,6 +198,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
       JSON.stringify(scan),
       req.user!.userId,
       importPrefill ? JSON.stringify(importPrefill) : null,
+      reconciliation ? JSON.stringify(reconciliation) : null,
     ],
   );
 
@@ -168,7 +212,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
 
   // Non-blocking warning (decision #4): coveredGuias must be a subset of the manifest's shipment
   // guías. If a pedimento covers a guía not declared on the manifest, surface it but do not reject.
-  const manifestGuias = new Set((await loadShipments(req.params.id)).map((s) => s.data.guideId));
+  const manifestGuias = new Set(allShipments.map((s) => s.data.guideId));
   const strayGuias = extracted.coveredGuias.filter((g) => !manifestGuias.has(g));
   if (strayGuias.length > 0) {
     warnings.push(`El pedimento cubre guías que no están declaradas en el manifiesto: ${strayGuias.join(', ')}`);

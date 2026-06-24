@@ -47,7 +47,7 @@ The platform has made significant progress: real manifest ingestion, an 8-signal
 ### 1.3 Highest-Priority Actions
 
 1. **Fix the pedimento builder** — remove forbidden IVA contribution calculation and force generic HS codes.
-2. **Remove the hardcoded JWT fallback secret**.
+2. **Harden JWT secret resolution** — move fail-closed logic to `token.ts`, allow dev default only in `NODE_ENV=test|development`, remove duplicated literal from `index.ts`.
 3. **Delete/quarantine the legacy simulation-only engine** (`src/engine/*`).
 4. **Build Ficha 124/LA and 125/LA generators** in the official format.
 5. **Begin FIEL + SAAI M3 + SEA integration**.
@@ -299,7 +299,7 @@ The platform has made significant progress: real manifest ingestion, an 8-signal
 1. **Unencrypted name/address/email/phone** in `shipments.data` JSONB
 2. **No global rate limiting / brute-force protection**
 3. **High/critical CVEs** in `xlsx`, `tar`, `glob`
-4. **Hardcoded JWT fallback secret**
+4. **JWT secret resolution hardening** — production already guarded by `index.ts`, residual risk is lack of fail-closed default in token module itself; moving resolution to `token.ts` with lazy evaluation eliminates duplicated literal and centralizes logic
 5. **No JWT revocation / refresh tokens**
 6. **MFA is opt-in**, not mandatory for privileged roles
 7. **No input schema validation library**
@@ -400,7 +400,7 @@ The platform has made significant progress: real manifest ingestion, an 8-signal
 | 2 | No government integration | Certain | Critical | P0 |
 | 3 | No FIEL digital seal | Certain | Critical | P0 |
 | 4 | Missing Ficha 124/125 → permit cancellation | High | Critical | P0 |
-| 5 | Hardcoded JWT secret | Medium | Critical | P0 |
+| 5 | JWT secret resolution hardening | Low | Medium | P1 |
 | 6 | Legacy simulation engine reactivated | Medium | High | P0 |
 | 7 | LFPDPPP non-compliance | High | High | P0 |
 | 8 | No ISO 27001 | High | High | P1 |
@@ -417,7 +417,7 @@ The platform has made significant progress: real manifest ingestion, an 8-signal
 ## 10. Prioritized Roadmap
 
 ### Phase 1 — Production Blockers (0–4 weeks)
-1. Remove JWT fallback secret; fail startup if `JWT_SECRET` missing.
+1. Harden JWT secret resolution; fail startup if `JWT_SECRET` missing or default in production.
 2. Stop computing IVA contributions in T1 pedimento builder.
 3. Force generic HS codes in pedimento builder.
 4. Delete/quarantine legacy `src/engine/*` simulation code.

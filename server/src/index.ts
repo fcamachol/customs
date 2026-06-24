@@ -1,9 +1,13 @@
 import 'dotenv/config';
 import { createApp } from './app';
+import { getJWTSecret } from './auth/token';
 
 if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-in-production') {
-    throw new Error('JWT_SECRET must be set to a non-default value in production');
+  // Validate JWT_SECRET by calling the shared resolver (fail-closed default).
+  try {
+    getJWTSecret();
+  } catch (err) {
+    throw err;
   }
 
   // RNF-05: Validate FIELD_ENCRYPTION_KEY before accepting any traffic.

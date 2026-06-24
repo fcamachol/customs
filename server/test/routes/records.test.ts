@@ -199,6 +199,50 @@ describe('records — detail pedimentos[]', () => {
     expect(res.body.artifacts.pedimentoPdf).toBeNull();
     expect(res.body.coverage.status).toBe('sin_pedimento');
   });
+
+  it('surfaces per-pedimento prevalidation (Task 9) and no legacy top-level pedimento/prevalidation', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('920-1','Cliente L',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const prevalidation = { status: 'APPROVED', errors: [] };
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, prevalidation, created_by)
+       VALUES ($1,'333',$2::jsonb,$3) RETURNING id`,
+      [id, JSON.stringify(prevalidation), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.id).toBe(ped.rows[0].id);
+    // prevalidation is now per-pedimento (Task 9).
+    expect(p.prevalidation).toMatchObject({ status: 'APPROVED' });
+    // Legacy top-level manifest fields must not appear.
+    expect(res.body.pedimento).toBeUndefined();
+    expect(res.body.prevalidation).toBeUndefined();
+  });
+
+  it('per-pedimento lock is APPROVED-locked when prevalidation status is APPROVED', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('930-1','Cliente M',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const prevalidation = { status: 'APPROVED', errors: [] };
+    await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, prevalidation, created_by)
+       VALUES ($1,'444',$2::jsonb,$3)`,
+      [id, JSON.stringify(prevalidation), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    // Per-pedimento lock reflects the pedimento's own prevalidation (not manifests').
+    expect(p.lock).toMatchObject({ editable: false });
+  });
 });
 
 describe('records — Consulta filters (cont.)', () => {

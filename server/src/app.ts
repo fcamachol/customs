@@ -49,7 +49,7 @@ export function createApp(): Express {
   app.use('/api/manifests', manifestsRouter);
   app.use('/api/manifests', pedimentoUploadRouter);
   app.use('/api/manifests', riskRouter);
-  app.use('/api/manifests', pedimentoRouter);
+  app.use('/api/pedimentos', pedimentoRouter);
   app.use('/api/records', recordsRouter);
   app.use('/api/records', exportsRouter);
   app.use('/api/records', reportsRouter);

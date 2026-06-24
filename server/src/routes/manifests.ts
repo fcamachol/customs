@@ -75,11 +75,18 @@ manifestsRouter.get('/:id/staging', requireAuth, requireRole('admin', 'capturist
 // POST /api/manifests/:id/promote — gold-layer promotion gate
 manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
   const id = req.params.id;
-  const man = await query<{ ingestion_status: string; file_id: string | null; prevalidation: { status?: string } | null }>(
-    'SELECT ingestion_status, file_id, prevalidation FROM manifests WHERE id=$1', [id]);
+  const man = await query<{ ingestion_status: string }>(
+    'SELECT ingestion_status FROM manifests WHERE id=$1', [id]);
   if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
   const m = man.rows[0];
-  if (!computeLock({ prevalidation: m.prevalidation, file_id: m.file_id }).editable) { res.status(409).json({ error: 'Manifiesto bloqueado' }); return; }
+
+  // Lock is derived from pedimentos rows (Task 7–9 cutover): manifests.file_id and
+  // manifests.prevalidation are no longer written (Tasks 7 and 9). Block re-promotion if any
+  // pedimento subdivision for this manifest is already finalized (PDF attached or prevalidated).
+  const peds = await query<{ file_id: string | null; prevalidation: { status?: string } | null }>(
+    'SELECT file_id, prevalidation FROM pedimentos WHERE manifest_id=$1', [id]);
+  const anyLocked = peds.rows.some((p) => !computeLock({ prevalidation: p.prevalidation, file_id: p.file_id }).editable);
+  if (anyLocked) { res.status(409).json({ error: 'Manifiesto bloqueado' }); return; }
   if (m.ingestion_status !== 'staged') { res.status(409).json({ error: `No se puede promover desde estado '${m.ingestion_status}'` }); return; }
 
   const staged = await query<{ row_index: number; idempotency_key: string; data: unknown; status: string }>(

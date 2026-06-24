@@ -125,7 +125,7 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
 recordsRouter.get('/:id', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName",
-            m.pedimento, m.prevalidation, m.created_by AS "createdBy",
+            m.created_by AS "createdBy",
             m.risk_stale AS "riskStale",
             (SELECT count(*)::int FROM shipments s WHERE s.manifest_id=m.id) AS "shipmentCount"
      FROM manifests m WHERE m.id=$1`, [req.params.id]);
@@ -147,6 +147,9 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     fileId: p.file_id,
     scanVerdict: p.pedimento_scan?.verdict ?? null,
     lock: computeLock({ prevalidation: p.prevalidation, file_id: p.file_id }),
+    // prevalidation (build output) is now per-pedimento (Task 9). Consumers use this to check
+    // whether the subdivision has been structurally validated before PDF attachment/signing.
+    prevalidation: p.prevalidation ?? null,
     // import_data (capture) is now per-pedimento (Task 8). The frontend capture form reads/writes
     // these per row and posts to POST /api/pedimentos/:id/import-data.
     importData: p.import_data ?? null,
@@ -162,10 +165,10 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
   // since manifests.file_id is being dropped. Per-pedimento PDFs live in pedimentos[].
   const topPedimentoFileId = peds.rows.find((p) => p.file_id)?.file_id ?? null;
 
-  // Top-level edit lock for the (still manifest-scoped) import-data capture form: locked once the
-  // manifest is structurally prevalidated OR any pedimento PDF is attached. computeLock takes a
-  // file_id, so pass the first attached pedimento file id as the structural "a PDF exists" signal.
-  const lock = computeLock({ prevalidation: r.prevalidation, file_id: topPedimentoFileId });
+  // Top-level edit lock for the (still manifest-scoped) import-data capture form: locked once any
+  // pedimento PDF is attached. Prevalidation is now per-pedimento (Task 9); manifests.prevalidation
+  // is no longer written, so the top-level lock gates only on PDF attachment.
+  const lock = computeLock({ prevalidation: null, file_id: topPedimentoFileId });
 
   // Carries import-data (business data) — keep it out of shared caches.
   res.setHeader('Cache-Control', 'no-store, private');

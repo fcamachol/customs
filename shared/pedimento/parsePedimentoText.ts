@@ -24,6 +24,12 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
 
   const num = t.match(NUMERO_RE);
   const numeroPedimento = num ? num[1] + num[2] + num[3] + num[4] : null;
+  // Patente is the 4-digit group of the pedimento number ("25 85 1653 5001684" → "1653").
+  const patente = num ? num[3] : null;
+  // Tipo de cambio: the first decimal token with ≥4 decimals (e.g. "20.45680"). The peso bruto in
+  // the same cluster carries ≤3 decimals, so ≥4 isolates the exchange rate. Best-effort.
+  const tcMatch = t.match(/\b\d{1,3}\.\d{4,6}\b/);
+  const tipoCambio = tcMatch ? Number(tcMatch[0]) : null;
   const clave = /\bT1\b/.test(t) ? 'T1' : null;
   const rfcs = t.match(RFC_RE) ?? [];
   const importerRfc = rfcs[0] ?? null;     // first RFC on the page is the importer block
@@ -34,8 +40,8 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   return {
     header: {
       numeroPedimento, clave, importerRfc,
-      agentRfc: null, agencyRfc: null, patente: null,
-      customsClearanceCode: null, tipoCambio: null,
+      agentRfc: null, agencyRfc: null, patente,
+      customsClearanceCode: null, tipoCambio,
       entryDate: null, paymentDate: null, totalBultos: null,
     },
     lines,

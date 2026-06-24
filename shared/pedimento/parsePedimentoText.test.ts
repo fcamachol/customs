@@ -9,6 +9,8 @@ NUM. PEDIMENTO: CVE. PEDIMENTO:
 ADM130509UQ0
 ADMERCE SA DE CV
 T1
+DESTINO/ORIGEN: TIPO CAMBIO: PESO BRUTO: ADUANA E/S:
+9 20.45680 808.000 850
 PARTIDAS
 99010001	001 00 0 1 6 1.000 6 CHN CHN
 TRAJE
@@ -43,10 +45,16 @@ describe('parsePedimentoText', () => {
   it('exposes the extended header fields, defaulting to null when absent', () => {
     const out = parsePedimentoText(SAMPLE);
     expect(out.header).toMatchObject({
-      patente: null,        // SAMPLE has a numero but Task 2 wires patente; here it is still null
+      patente: '1653',      // SAMPLE now has numero + header values, so patente is extracted
+      tipoCambio: 20.4568,  // and tipoCambio is extracted
       agencyRfc: null,
       entryDate: null,
       paymentDate: null,
     });
+  });
+  it('extracts patente from the numero and tipoCambio from the value cluster', () => {
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header.patente).toBe('1653');     // group 3 of "25 85 1653 5001684"
+    expect(out.header.tipoCambio).toBe(20.4568); // Number("20.45680")
   });
 });

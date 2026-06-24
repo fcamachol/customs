@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { decryptConsignee } from '../crypto/fieldCrypto';
+import type { Shipment } from '../../../shared/types/shipment';
 
 export const consolidatedRouter = Router();
 
@@ -77,20 +79,20 @@ consolidatedRouter.get(
       clientFilter = ` AND m.client_name ILIKE '%' || $${params.length} || '%'`;
     }
 
+    // F20a fix: select the full data jsonb and decrypt PII in JS —
+    // SQL JSON operators cannot decrypt AES-GCM ciphertext, so extracting
+    // s.data->'consignee'->>'name' via SQL would leak "v1:…" ciphertext into
+    // the authority-facing workbook. We decrypt consignee in JS before building rows.
     const { rows } = await query<{
       mawb: string;
       client_name: string;
-      guide_id: string;
-      consignee_name: string;
-      customs_value_usd: number | null;
+      data: Shipment;
       risk_color: string | null;
     }>(
       `SELECT
          m.mawb_reference AS mawb,
          m.client_name,
-         s.data->>'guideId' AS guide_id,
-         s.data->'consignee'->>'name' AS consignee_name,
-         (s.data->>'customsValueUsd')::numeric AS customs_value_usd,
+         s.data,
          s.risk_color
        FROM shipments s
        JOIN manifests m ON m.id = s.manifest_id
@@ -99,15 +101,18 @@ consolidatedRouter.get(
       params,
     );
 
-    const sheetRows = rows.map((r) => ({
-      MAWB: r.mawb,
-      Cliente: r.client_name,
-      Guia: r.guide_id,
-      Consignatario: r.consignee_name,
-      Valor: r.customs_value_usd ?? 0,
-      Resultado: r.risk_color ?? '',
-      Valida: r.risk_color === 'verde',
-    }));
+    const sheetRows = rows.map((r) => {
+      const consignee = decryptConsignee(r.data.consignee);
+      return {
+        MAWB: r.mawb,
+        Cliente: r.client_name,
+        Guia: r.data.guideId,
+        Consignatario: consignee.name,
+        Valor: r.data.customsValueUsd ?? 0,
+        Resultado: r.risk_color ?? '',
+        Valida: r.risk_color === 'verde',
+      };
+    });
 
     const buf = workbook(sheetRows);
 

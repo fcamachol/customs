@@ -6,6 +6,7 @@ import { hashPassword } from '../../src/auth/password';
 import { signToken } from '../../src/auth/token';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
+import { encryptConsignee } from '../../src/crypto/fieldCrypto';
 
 const app = createApp();
 
@@ -164,5 +165,63 @@ describe('GET /api/consolidated.xlsx', () => {
       .get('/api/consolidated.xlsx')
       .set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(400);
+  });
+
+  it('F20a: Consignatario column contains plaintext name even when stored encrypted', async () => {
+    // Seed a fresh manifest + shipment with an ENCRYPTED consignee name
+    // to prove the route decrypts in JS rather than leaking "v1:..." ciphertext.
+    await truncateAll();
+    const hash = await hashPassword('p');
+    const admin = await query(
+      `INSERT INTO users (username,password_hash,role) VALUES ('admin2',$1,'admin') RETURNING id`,
+      [hash],
+    );
+    const token = signToken({ userId: admin.rows[0].id, role: 'admin', tv: 0 });
+
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by, created_at)
+       VALUES ('ENC-1','EncCliente',$1,'2024-05-15T10:00:00Z') RETURNING id`,
+      [admin.rows[0].id],
+    );
+
+    const PLAINTEXT_NAME = 'Maria Lopez Cifrada';
+    const plainShipment = {
+      id: crypto.randomUUID(),
+      mawbReference: 'ENC-1',
+      description: 'ITEM',
+      hsCode: '99010001',
+      quantity: 1,
+      unit: '6',
+      customsValueUsd: 200,
+      currency: 'USD',
+      originCountry: 'MX',
+      guideId: 'enc-g1',
+      consignee: { name: PLAINTEXT_NAME, rfc: 'LOPM800101YYY' },
+      sender: { name: 'SenderEnc' },
+      platform: { commercialName: 'PlatEnc' },
+    };
+
+    // Encrypt the consignee exactly as the ingest path would (F20a).
+    const encryptedConsignee = encryptConsignee(plainShipment.consignee as Parameters<typeof encryptConsignee>[0]);
+    const storedShipment = { ...plainShipment, consignee: encryptedConsignee };
+
+    await query(
+      'INSERT INTO shipments (id,manifest_id,data,risk_color) VALUES ($1,$2,$3,$4)',
+      [plainShipment.id, m.rows[0].id, JSON.stringify(storedShipment), 'verde'],
+    );
+
+    const res = await getXlsx(token, 'period=2024-05');
+    expect(res.status).toBe(200);
+
+    const wb = XLSX.read(res.body, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
+
+    expect(json).toHaveLength(1);
+    const row = json[0];
+
+    // Must be plaintext — NOT a "v1:…" ciphertext blob.
+    expect(row['Consignatario']).toBe(PLAINTEXT_NAME);
+    expect(String(row['Consignatario'])).not.toMatch(/^v1:/);
   });
 });

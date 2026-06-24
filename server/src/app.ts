@@ -14,6 +14,7 @@ import { dashboardRouter } from './routes/dashboard';
 import { filesRouter } from './routes/files';
 import { auditRouter } from './routes/audit';
 import { importDataRouter } from './routes/importData';
+import { pedimentoLifecycleRouter } from './routes/pedimentoLifecycle';
 import { catalogsRouter } from './routes/catalogs';
 import { consolidatedRouter } from './routes/consolidated';
 import { globalLimiter } from './middleware/rateLimit';
@@ -59,6 +60,7 @@ export function createApp(): Express {
   app.use('/api/files', filesRouter);
   app.use('/api/audit', auditRouter);
   app.use('/api/pedimentos', importDataRouter);
+  app.use('/api/pedimentos', pedimentoLifecycleRouter);
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api', consolidatedRouter);
   // Global error handler: log server-side, never leak stack traces to clients.

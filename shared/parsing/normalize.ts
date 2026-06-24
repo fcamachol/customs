@@ -1,4 +1,10 @@
-// Parse a human-entered number that may use comma decimals or dot/space thousands separators.
+/**
+ * Parse a human-entered number that may use comma decimals or dot/space thousands separators.
+ *
+ * INTERNAL PRE-FILL ONLY: This is a lenient parser used only inside mapRowToShipment for initial mapping.
+ * It MUST NOT be used as a validation gate. All required numerics are re-validated with parseNumberStrict
+ * at the boundary (validateManifest), which rejects ambiguous inputs like "1,000" and non-numeric values.
+ */
 export function parseNumber(raw: string): number {
   const s = String(raw ?? '').trim();
   if (!s) return 0;

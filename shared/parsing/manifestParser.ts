@@ -5,7 +5,7 @@ import { parseNumber, toKg } from './normalize';
 import { classifyTaxId } from './taxId';
 import { resolveCountry } from './catalogs';
 
-export interface ParseResult { shipments: Shipment[]; unmappedHeaders: string[]; }
+// mapRowToShipment is an internal mapper; the only sanctioned manifest entry point is validateManifest.
 
 function cleanCell(v: unknown): string {
   return String(v ?? '').replace(/\s*\n\s*/g, ' ').trim();
@@ -50,12 +50,3 @@ export function mapRowToShipment(row: Record<string, unknown>): Shipment {
   return s as Shipment;
 }
 
-export function parseManifestRows(rows: Record<string, unknown>[], mawb: string): ParseResult {
-  const unmapped = new Set<string>();
-  const shipments = rows.map((row) => {
-    for (const rawHeader of Object.keys(row)) if (!resolveHeader(rawHeader)) unmapped.add(rawHeader);
-    const s = mapRowToShipment(row);
-    return { ...s, mawbReference: mawb };
-  });
-  return { shipments, unmappedHeaders: [...unmapped] };
-}

@@ -9,7 +9,12 @@ declare global {
   }
 }
 
-export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+async function verifyAndAttach(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  allowEnrollmentScope: boolean,
+): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) { res.status(401).json({ error: 'Missing bearer token' }); return; }
   let claims: Claims;
@@ -27,8 +32,30 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     res.status(401).json({ error: 'Token revoked' }); return;
   }
 
+  // F10: Reject enrollment-scoped tokens on all routes except mfa/setup and mfa/enable.
+  if (!allowEnrollmentScope && (claims as { scope?: string }).scope === 'mfa_enrollment') {
+    res.status(401).json({ error: 'Enrollment token is only valid for MFA setup and enable routes' });
+    return;
+  }
+
   req.user = claims;
   next();
+}
+
+/**
+ * Standard auth middleware — rejects enrollment-scoped tokens.
+ * Use on all routes except /mfa/setup and /mfa/enable.
+ */
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  return verifyAndAttach(req, res, next, false);
+}
+
+/**
+ * Auth middleware that also accepts enrollment-scoped tokens.
+ * Use ONLY on /mfa/setup and /mfa/enable.
+ */
+export async function requireAuthAllowEnrollment(req: Request, res: Response, next: NextFunction): Promise<void> {
+  return verifyAndAttach(req, res, next, true);
 }
 
 export function requireRole(...roles: Role[]) {
@@ -39,4 +66,17 @@ export function requireRole(...roles: Role[]) {
     if (!ok) { res.status(403).json({ error: 'Forbidden' }); return; }
     next();
   };
+}
+
+/**
+ * Middleware that rejects tokens with scope:'mfa_enrollment'.
+ * Apply to all authenticated routes EXCEPT /mfa/setup and /mfa/enable.
+ * An enrollment-scoped token is only allowed to reach those two endpoints.
+ */
+export function rejectEnrollmentScope(req: Request, res: Response, next: NextFunction): void {
+  if ((req.user as { scope?: string } | undefined)?.scope === 'mfa_enrollment') {
+    res.status(401).json({ error: 'Enrollment token is only valid for MFA setup and enable routes' });
+    return;
+  }
+  next();
 }

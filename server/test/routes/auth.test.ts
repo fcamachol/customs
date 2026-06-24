@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app';
 import { hashPassword } from '../../src/auth/password';
@@ -18,7 +18,17 @@ async function seedAdmin() {
 }
 
 describe('auth routes', () => {
-  beforeEach(async () => { await truncateAll(); await seedAdmin(); });
+  // F10: Use MFA_ENFORCEMENT=warn so existing admin login tests are unaffected.
+  // These tests cover login mechanics (token format, tv claim, logout, audit) — not MFA
+  // enforcement. MFA enforcement is covered separately in mfaEnforcement.test.ts.
+  beforeEach(async () => {
+    process.env.MFA_ENFORCEMENT = 'warn';
+    await truncateAll();
+    await seedAdmin();
+  });
+  afterEach(() => {
+    delete process.env.MFA_ENFORCEMENT;
+  });
 
   it('logs in with valid credentials and returns a token', async () => {
     const res = await request(app).post('/api/auth/login').send({ username: 'admin', password: 'adminpass' });

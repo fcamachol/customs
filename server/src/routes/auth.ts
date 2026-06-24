@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { query } from '../db/pool';
 import { verifyPassword } from '../auth/password';
-import { signToken } from '../auth/token';
-import { requireAuth } from '../auth/middleware';
+import { signToken, signEnrollmentToken, signTokenForUser } from '../auth/token';
+import { requireAuth, requireAuthAllowEnrollment, rejectEnrollmentScope } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { generateSecret, keyUri, verifyTotp } from '../auth/mfa';
 import { loginLimiter } from '../middleware/rateLimit';
+import { isPrivilegedRole, getMfaEnforcement } from '../auth/roles';
 
 export const authRouter = Router();
 
@@ -19,10 +20,23 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   if (!user || !(await verifyPassword(password ?? '', user.password_hash))) {
     res.status(401).json({ error: 'Invalid credentials' }); return;
   }
-  // MFA second factor
+  // MFA second factor — required if already enrolled
   if (user.mfa_enabled) {
     if (!code || !verifyTotp(user.mfa_secret, code)) {
       res.status(401).json({ error: 'mfa_required' }); return;
+    }
+  } else if (isPrivilegedRole(user.role)) {
+    // Privileged user without MFA: enforce or warn depending on env config
+    const enforcement = getMfaEnforcement();
+    if (enforcement === 'enforce') {
+      // Issue a short-lived enrollment-scoped token, not a full session token
+      const enrollmentToken = signEnrollmentToken(user as { id: string; role: import('../auth/token').Role; token_version: number });
+      console.warn(`[MFA] Privileged user ${user.username} (${user.role}) logged in without MFA — issuing enrollment token`);
+      res.status(403).json({ error: 'mfa_enrollment_required', enrollmentToken });
+      return;
+    } else {
+      // warn mode: allow login but log a warning
+      console.warn(`[MFA] WARN: Privileged user ${user.username} (${user.role}) logged in without MFA (enforcement=warn)`);
     }
   }
   await recordAudit({ userId: user.id, action: 'LOGIN', entity: 'session', ip: req.ip });
@@ -30,13 +44,13 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-authRouter.get('/me', requireAuth, async (req, res) => {
+authRouter.get('/me', requireAuth, rejectEnrollmentScope, async (req, res) => {
   const { rows } = await query(`SELECT id, username, role, created_at FROM users WHERE id=$1`, [req.user!.userId]);
   res.json(rows[0]);
 });
 
 // POST /api/auth/logout — bumps token_version, invalidating all outstanding tokens (logout-all).
-authRouter.post('/logout', requireAuth, async (req, res) => {
+authRouter.post('/logout', requireAuth, rejectEnrollmentScope, async (req, res) => {
   const userId = req.user!.userId;
   await query(`UPDATE users SET token_version = token_version + 1 WHERE id=$1`, [userId]);
   await recordAudit({ userId, action: 'LOGOUT', entity: 'session', ip: req.ip });
@@ -44,7 +58,8 @@ authRouter.post('/logout', requireAuth, async (req, res) => {
 });
 
 // POST /api/auth/mfa/setup — generate a secret, store in DB (not yet enabled), return secret + otpauth URL
-authRouter.post('/mfa/setup', requireAuth, async (req, res) => {
+// Uses requireAuthAllowEnrollment so enrollment-scoped tokens (from privileged users without MFA) can access this.
+authRouter.post('/mfa/setup', requireAuthAllowEnrollment, async (req, res) => {
   const userId = req.user!.userId;
   const { rows } = await query(`SELECT username FROM users WHERE id=$1`, [userId]);
   const user = rows[0];
@@ -61,7 +76,8 @@ authRouter.post('/mfa/setup', requireAuth, async (req, res) => {
 });
 
 // POST /api/auth/mfa/enable — verify code against stored secret; on success set mfa_enabled=true
-authRouter.post('/mfa/enable', requireAuth, async (req, res) => {
+// Uses requireAuthAllowEnrollment so enrollment-scoped tokens can complete the enrollment flow.
+authRouter.post('/mfa/enable', requireAuthAllowEnrollment, async (req, res) => {
   const userId = req.user!.userId;
   const { code } = req.body ?? {};
 
@@ -76,5 +92,14 @@ authRouter.post('/mfa/enable', requireAuth, async (req, res) => {
   await query(`UPDATE users SET mfa_enabled=true WHERE id=$1`, [userId]);
   await recordAudit({ userId, action: 'MFA_ENABLED', entity: 'user', entityId: userId, ip: req.ip });
 
-  res.json({ enabled: true });
+  // Mint a FULL session token so the just-enrolled user can proceed without re-login.
+  // Fetch fresh token_version in case it changed.
+  const { rows: freshRows } = await query(
+    `SELECT role, token_version FROM users WHERE id=$1`,
+    [userId],
+  );
+  const freshUser = freshRows[0];
+  const fullToken = signTokenForUser({ id: userId, role: freshUser.role, token_version: freshUser.token_version });
+
+  res.json({ enabled: true, token: fullToken });
 });

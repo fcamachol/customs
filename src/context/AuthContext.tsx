@@ -2,7 +2,22 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { apiPost } from '../api';
 
 interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad' | 'super_admin'; }
-interface AuthValue { user: User | null; login: (u: string, p: string, code?: string) => Promise<void>; logout: () => Promise<void>; }
+
+interface AuthValue {
+  user: User | null;
+  login: (u: string, p: string, code?: string) => Promise<void>;
+  logout: () => Promise<void>;
+  /**
+   * F10: MFA enrollment helpers — called during the enrollment flow with an enrollment-scoped token.
+   * phase='setup': returns secret + otpauthUrl for QR display.
+   * phase='enable': verifies TOTP code, stores full session token, updates user state.
+   */
+  enrollMfa: (
+    phase: 'setup' | 'enable',
+    enrollmentToken: string,
+    code?: string,
+  ) => Promise<{ secret: string; otpauthUrl: string } | void>;
+}
 
 const Ctx = createContext<AuthValue | null>(null);
 
@@ -24,7 +39,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }
 
-  return <Ctx.Provider value={{ user, login, logout }}>{children}</Ctx.Provider>;
+  /** F10: MFA enrollment using an enrollment-scoped token. */
+  async function enrollMfa(
+    phase: 'setup' | 'enable',
+    enrollmentToken: string,
+    code?: string,
+  ): Promise<{ secret: string; otpauthUrl: string } | void> {
+    const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
+    const authHeaders = { Authorization: `Bearer ${enrollmentToken}` };
+
+    if (phase === 'setup') {
+      const res = await fetch(`${BASE}/api/auth/mfa/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+      return res.json() as Promise<{ secret: string; otpauthUrl: string }>;
+    }
+
+    // phase === 'enable'
+    const res = await fetch(`${BASE}/api/auth/mfa/enable`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+    const { token, enabled } = await res.json() as { token: string; enabled: boolean };
+    if (enabled && token) {
+      // Store full session token and fetch user info
+      localStorage.setItem('token', token);
+      const meRes = await fetch(`${BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (meRes.ok) {
+        const me = await meRes.json() as User;
+        setUser(me);
+      }
+    }
+  }
+
+  return <Ctx.Provider value={{ user, login, logout, enrollMfa }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthValue {

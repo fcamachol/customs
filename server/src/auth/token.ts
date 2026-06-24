@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken';
 export type Role = 'capturista' | 'admin' | 'autoridad' | 'super_admin';
-export interface Claims { userId: string; role: Role; tv: number; }
+export interface Claims {
+  userId: string;
+  role: Role;
+  tv: number;
+  /** Present only on enrollment-scoped tokens issued to privileged users without MFA. */
+  scope?: 'mfa_enrollment';
+}
 
 // Default JWT secret to use ONLY in test/development environments (fail-closed pattern).
 const DEV_JWT_SECRET = 'change-me-in-production';
@@ -34,6 +40,13 @@ export function getJWTSecret(): string {
 export function signToken(claims: Claims): string {
   const SECRET = getJWTSecret();
   return jwt.sign(claims, SECRET, { expiresIn: '8h' });
+}
+
+/** Sign a short-lived enrollment-scoped token (10 min) for privileged users without MFA. */
+export function signEnrollmentToken(user: { id: string; role: Role; token_version: number }): string {
+  const SECRET = getJWTSecret();
+  const claims: Claims = { userId: user.id, role: user.role, tv: user.token_version, scope: 'mfa_enrollment' };
+  return jwt.sign(claims, SECRET, { expiresIn: '10m' });
 }
 
 /** Convenience overload for callers that have a db user row with token_version. */

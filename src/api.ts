@@ -7,13 +7,32 @@ function authHeaders(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
+/** Error class that preserves the full JSON body from a non-ok API response. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly body: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  if (!res.ok) {
+    const responseBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+    throw new ApiError(
+      (responseBody.error as string | undefined) ?? res.statusText,
+      res.status,
+      responseBody,
+    );
+  }
   return res.json();
 }
 

@@ -16,6 +16,7 @@ import { importDataRouter } from './routes/importData';
 import { catalogsRouter } from './routes/catalogs';
 import { consolidatedRouter } from './routes/consolidated';
 import { globalLimiter } from './middleware/rateLimit';
+import { rejectEnrollmentScope } from './auth/middleware';
 
 export function createApp(): Express {
   const app = express();

@@ -27,10 +27,12 @@ import {
   Lock,
   ChevronRight,
   Layers,
+  Search,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
-import { Card, Button, Field, Input, Textarea, Modal } from './ui';
+import { Card, Button, Field, Input, Textarea, Modal, SearchSelect } from './ui';
+import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/catalogs';
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
 import { AddClientModal } from './AddClientModal';
@@ -383,8 +385,16 @@ interface ClientesProps {
 function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   // Derive the open client from props so it stays in sync after platform edits refetch.
   const detailClient = detailId ? clients.find((c) => c.id === detailId) ?? null : null;
+
+  const q = search.trim().toLowerCase();
+  const filteredClients = q
+    ? clients.filter((c) =>
+        [c.name, c.tax_id, c.email].some((f) => (f ?? '').toLowerCase().includes(q)),
+      )
+    : clients;
 
   function handleCreated() {
     onToast('Cliente agregado');
@@ -414,6 +424,17 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
     }
   }
 
+  async function editPlatform(clientId: string, pid: string, p: ClientPlatform) {
+    if (!isAdmin) return;
+    try {
+      await apiPut(`/api/catalogs/clients/${clientId}/platforms/${pid}`, p);
+      onToast('Plataforma actualizada');
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
   async function removePlatform(clientId: string, pid: string) {
     if (!isAdmin) return;
     try {
@@ -428,12 +449,16 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
   return (
     <div className="space-y-6">
       <Card className="p-6 shadow-sm">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <SectionHeader icon={Building2}>Clientes</SectionHeader>
-            <p className="text-xs text-slate-500">
-              Datos recurrentes del remitente. Abra un cliente para ver sus datos completos y administrar sus plataformas.
-            </p>
+        <div className="mb-4 flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por nombre, RFC o email"
+              className="pl-10"
+            />
           </div>
           {isAdmin && (
             <Button className="shrink-0" onClick={() => setModalOpen(true)}>
@@ -444,6 +469,8 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
 
         {clients.length === 0 ? (
           <p className="py-4 text-sm text-slate-400">Sin clientes registrados.</p>
+        ) : filteredClients.length === 0 ? (
+          <p className="py-4 text-sm text-slate-400">Sin coincidencias para «{search.trim()}».</p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full text-sm">
@@ -456,7 +483,7 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {clients.map((c) => {
+                {filteredClients.map((c) => {
                   const count = (c.platforms ?? []).length;
                   return (
                     <tr
@@ -498,6 +525,7 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
           isAdmin={isAdmin}
           onClose={() => setDetailId(null)}
           onAddPlatform={(p) => addPlatform(detailClient.id, p)}
+          onEditPlatform={(pid, p) => editPlatform(detailClient.id, pid, p)}
           onRemovePlatform={(pid) => removePlatform(detailClient.id, pid)}
           onDelete={() => removeClient(detailClient.id)}
         />
@@ -735,21 +763,23 @@ function DetailRow({ label, value, mono }: { label: string; value?: string; mono
   );
 }
 
-function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onRemovePlatform, onDelete }: {
+function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onEditPlatform, onRemovePlatform, onDelete }: {
   client: Client;
   isAdmin: boolean;
   onClose: () => void;
   onAddPlatform: (p: ClientPlatform) => void;
+  onEditPlatform: (pid: string, p: ClientPlatform) => void;
   onRemovePlatform: (pid: string) => void;
   onDelete: () => void;
 }) {
   const platforms = client.platforms ?? [];
+  const [editingId, setEditingId] = useState<string | null>(null);
   return (
     <Modal open onClose={onClose} title={client.name}>
       <section className="mb-5">
         <h4 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Datos del cliente</h4>
         <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-          <DetailRow label="RFC / Tax ID" value={client.tax_id} mono />
+          <DetailRow label="Id fiscal" value={client.tax_id} mono />
           <DetailRow label="Correo" value={client.email} />
           <DetailRow label="Teléfono" value={client.phone} />
           <DetailRow label="Sitio web" value={client.website} />
@@ -773,15 +803,31 @@ function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onRemovePl
         ) : (
           <ul className="space-y-2">
             {platforms.map((p) => {
+              if (isAdmin && editingId === p.id) {
+                return (
+                  <li key={p.id}>
+                    <PlatformForm
+                      initial={p}
+                      submitLabel="Guardar cambios"
+                      onSubmit={(updated) => { onEditPlatform(p.id!, updated); setEditingId(null); }}
+                      onCancel={() => setEditingId(null)}
+                    />
+                  </li>
+                );
+              }
               const sub = [
                 p.legalName && p.legalName !== p.commercialName ? p.legalName : null,
-                p.countryOfOrigin,
+                p.countryOfOrigin ? countryDisplayName(p.countryOfOrigin) : null,
                 p.email,
+                p.url,
               ].filter(Boolean).join(' · ');
               return (
                 <li
                   key={p.id}
-                  className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                  className={`flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 ${
+                    isAdmin ? 'cursor-pointer transition hover:border-navy-300 hover:bg-navy-50/40' : ''
+                  }`}
+                  onClick={isAdmin ? () => setEditingId(p.id!) : undefined}
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-slate-800">
@@ -792,7 +838,7 @@ function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onRemovePl
                   {isAdmin && (
                     <button
                       type="button"
-                      onClick={() => onRemovePlatform(p.id!)}
+                      onClick={(e) => { e.stopPropagation(); onRemovePlatform(p.id!); }}
                       className="shrink-0 text-slate-300 transition hover:text-red-600"
                       aria-label="Eliminar plataforma"
                     >
@@ -830,7 +876,6 @@ function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onRemovePl
 
 function PlatformAdder({ onAdd }: { onAdd: (p: ClientPlatform) => void }) {
   const [open, setOpen] = useState(false);
-  const [p, setP] = useState<ClientPlatform>({});
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className="mt-1 text-xs font-medium text-navy-700 hover:underline">
@@ -839,14 +884,38 @@ function PlatformAdder({ onAdd }: { onAdd: (p: ClientPlatform) => void }) {
     );
   }
   return (
+    <PlatformForm
+      initial={{}}
+      submitLabel="Guardar"
+      onSubmit={(p) => { onAdd(p); setOpen(false); }}
+      onCancel={() => setOpen(false)}
+    />
+  );
+}
+
+/** Shared add/edit form for a client platform. */
+function PlatformForm({ initial, submitLabel, onSubmit, onCancel }: {
+  initial: ClientPlatform;
+  submitLabel: string;
+  onSubmit: (p: ClientPlatform) => void;
+  onCancel: () => void;
+}) {
+  const [p, setP] = useState<ClientPlatform>(initial);
+  return (
     <div className="mt-2 space-y-1 rounded border border-slate-200 bg-slate-50 p-2">
       <Input placeholder="Nombre comercial" value={p.commercialName ?? ''} onChange={(e) => setP({ ...p, commercialName: e.target.value })} />
-      <Input placeholder="País de origen" value={p.countryOfOrigin ?? ''} onChange={(e) => setP({ ...p, countryOfOrigin: e.target.value })} />
+      <SearchSelect
+        placeholder="País de origen"
+        options={ANAM_COUNTRY_OPTIONS}
+        value={p.countryOfOrigin ?? ''}
+        onChange={(v) => setP({ ...p, countryOfOrigin: v })}
+      />
       <Input placeholder="Razón social" value={p.legalName ?? ''} onChange={(e) => setP({ ...p, legalName: e.target.value })} />
       <Input placeholder="Correo" value={p.email ?? ''} onChange={(e) => setP({ ...p, email: e.target.value })} />
+      <Input placeholder="URL" value={p.url ?? ''} onChange={(e) => setP({ ...p, url: e.target.value })} />
       <div className="flex gap-2 pt-1">
-        <Button type="button" onClick={() => { onAdd(p); setP({}); setOpen(false); }}>Guardar</Button>
-        <Button variant="secondary" type="button" onClick={() => { setP({}); setOpen(false); }}>Cancelar</Button>
+        <Button type="button" onClick={() => onSubmit(p)}>{submitLabel}</Button>
+        <Button variant="secondary" type="button" onClick={onCancel}>Cancelar</Button>
       </div>
     </div>
   );

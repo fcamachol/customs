@@ -1,10 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check, ChevronDown, Search, X } from 'lucide-react';
+import { Check, ChevronDown, Plus, Search, X } from 'lucide-react';
 
 export interface SearchSelectOption {
   value: string;
   label: string;
+}
+
+export interface SearchSelectAction {
+  label: string;
+  onClick: () => void;
 }
 
 /**
@@ -20,6 +25,7 @@ export function SearchSelect({
   disabled = false,
   className = '',
   id,
+  action,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -28,6 +34,8 @@ export function SearchSelect({
   disabled?: boolean;
   className?: string;
   id?: string;
+  /** Optional persistent action shown at the bottom of the dropdown (e.g. "+ Agregar cliente"). */
+  action?: SearchSelectAction;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -37,10 +45,11 @@ export function SearchSelect({
 
   const selected = options.find((o) => o.value === value) ?? null;
 
+  // Cap the visible list so the dropdown stays scannable; users narrow further by typing.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    const matches = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+    return matches.slice(0, 10);
   }, [options, query]);
 
   // Close on click-outside.
@@ -63,6 +72,12 @@ export function SearchSelect({
     onChange(v);
     setOpen(false);
     setQuery('');
+  }
+
+  function runAction() {
+    setOpen(false);
+    setQuery('');
+    action?.onClick();
   }
 
   function onKeyDown(e: ReactKeyboardEvent) {
@@ -124,6 +139,18 @@ export function SearchSelect({
           role="listbox"
           className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
+          {action && (
+            <li className="sticky top-0 z-10 mb-1 border-b border-slate-100 bg-white">
+              <button
+                type="button"
+                onClick={runAction}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-navy-700 transition-colors hover:bg-navy-50"
+              >
+                <Plus className="h-4 w-4 shrink-0" />
+                {action.label}
+              </button>
+            </li>
+          )}
           {filtered.length === 0 ? (
             <li className="px-3 py-2 text-sm text-slate-400">Sin coincidencias</li>
           ) : (

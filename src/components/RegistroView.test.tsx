@@ -19,7 +19,9 @@ const mExtract = extractMawb as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mGet.mockResolvedValue([{ id: 'c1', name: 'ACME' }]);
+  mGet.mockResolvedValue([
+    { id: 'c1', name: 'ACME', platforms: [{ id: 'p1', commercialName: 'Plat A' }] },
+  ]);
   mExtract.mockResolvedValue({ mawb: '369-94705516', ambiguous: false });
 });
 
@@ -27,6 +29,12 @@ function selectFile() {
   const input = document.getElementById('manifest-file') as HTMLInputElement;
   const file = new File(['x'], 'm.xlsx');
   fireEvent.change(input, { target: { files: [file] } });
+}
+
+// SearchSelect is a typeahead combobox: focus opens it, click the option to commit.
+function pickOption(labelText: string, optionLabel: string) {
+  fireEvent.focus(screen.getByLabelText(labelText));
+  fireEvent.click(screen.getByText(optionLabel));
 }
 
 describe('RegistroView', () => {
@@ -50,13 +58,17 @@ describe('RegistroView', () => {
     await waitFor(() => expect((mawb as HTMLInputElement).value).toBe('369-94705516'));
   });
 
-  it('keeps "Realizar análisis" disabled until a client is selected', async () => {
+  it('keeps "Realizar análisis" disabled until both client and platform are selected', async () => {
     render(<RegistroView />);
     selectFile();
     fireEvent.click(await screen.findByRole('button', { name: /Continuar/i }));
     const analyze = await screen.findByRole('button', { name: /Realizar an[aá]lisis/i });
     expect((analyze as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(await screen.findByLabelText('Cliente'), { target: { value: 'c1' } });
+    await screen.findByLabelText('Cliente');
+    pickOption('Cliente', 'ACME');
+    // Still disabled with no platform chosen.
+    await waitFor(() => expect((analyze as HTMLButtonElement).disabled).toBe(true));
+    pickOption('Plataforma', 'Plat A');
     await waitFor(() => expect((analyze as HTMLButtonElement).disabled).toBe(false));
   });
 
@@ -74,7 +86,9 @@ describe('RegistroView', () => {
     render(<RegistroView />);
     selectFile();
     fireEvent.click(await screen.findByRole('button', { name: /Continuar/i }));
-    fireEvent.change(await screen.findByLabelText('Cliente'), { target: { value: 'c1' } });
+    await screen.findByLabelText('Cliente');
+    pickOption('Cliente', 'ACME');
+    pickOption('Plataforma', 'Plat A');
     fireEvent.click(screen.getByRole('button', { name: /Realizar an[aá]lisis/i }));
 
     await waitFor(() => expect(mPost).toHaveBeenCalledWith('/api/manifests/m1/risk', {}));
@@ -84,6 +98,8 @@ describe('RegistroView', () => {
       '/api/manifests/m1/promote',
       '/api/manifests/m1/risk',
     ]);
+    // Client link carries both the selected client and platform.
+    expect(mPost).toHaveBeenCalledWith('/api/manifests/m1/client', { clientId: 'c1', platformId: 'p1' });
     expect(mUpload).toHaveBeenCalledWith('/api/manifests', expect.any(FormData));
     // Verify FormData contents: clientName and mawbReference must reach the upload
     const fd = mUpload.mock.calls[0][1] as FormData;

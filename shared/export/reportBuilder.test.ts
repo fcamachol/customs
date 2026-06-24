@@ -28,7 +28,7 @@ describe('buildReportRows', () => {
     expect(rows[0].Motivo).toBe('Piratería (Nike)');
   });
 
-  it('output row contains all 34 LAYOUT_HEADERS plus Resultado and Motivo (36 cols total)', () => {
+  it('output row contains all 35 LAYOUT_HEADERS plus Resultado and Motivo (37 cols total)', () => {
     const rows = buildReportRows({
       shipments: [{ ...baseShipment }],
       riskByGuide: { g1: { color: 'verde', incidences: [] } },
@@ -38,7 +38,7 @@ describe('buildReportRows', () => {
     }
     expect(rows[0]).toHaveProperty('Resultado');
     expect(rows[0]).toHaveProperty('Motivo');
-    expect(Object.keys(rows[0])).toHaveLength(LAYOUT_HEADERS.length + 2); // 34 + Resultado + Motivo
+    expect(Object.keys(rows[0])).toHaveLength(LAYOUT_HEADERS.length + 2); // 35 + Resultado + Motivo
   });
 
   it('overlays importData fields into the correct columns', () => {
@@ -76,6 +76,7 @@ describe('buildReportRows', () => {
           countryOfOrigin: 'MX',
           legalName: 'Plataforma SA de CV',
           email: 'plat@plat.com',
+          url: 'https://miplataforma.com',
         },
       },
     });
@@ -88,5 +89,6 @@ describe('buildReportRows', () => {
     expect(rows[0]['Plataforma País de origen']).toBe('MX');
     expect(rows[0]['Plataforma Razón social']).toBe('Plataforma SA de CV');
     expect(rows[0]['Plataforma Correo']).toBe('plat@plat.com');
+    expect(rows[0]['Plataforma URL']).toBe('https://miplataforma.com');
   });
 });

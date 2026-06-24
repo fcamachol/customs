@@ -48,7 +48,9 @@ describe('ConfigurationView', () => {
         <ConfigurationView domain="cfg_clientes" onToast={() => {}} />
       </Wrapper>,
     );
-    expect(screen.getByText('Clientes')).toBeTruthy();
+    // The section title comes from the page layout (SECTION_META), not the pane itself;
+    // assert on the Clientes-pane search field, which is unique to this domain.
+    expect(screen.getByPlaceholderText('Buscar por nombre, RFC o email')).toBeTruthy();
   });
 
   it('loads config from the API on mount', async () => {

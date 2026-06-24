@@ -22,6 +22,7 @@ export interface ClientData {
     countryOfOrigin?: string;
     legalName?: string;
     email?: string;
+    url?: string;
   };
 }
 
@@ -92,6 +93,7 @@ export function buildReportRows(input: ReportInput): Record<string, string>[] {
         if (p.countryOfOrigin != null) out['Plataforma País de origen'] = p.countryOfOrigin;
         if (p.legalName != null) out['Plataforma Razón social'] = p.legalName;
         if (p.email != null) out['Plataforma Correo'] = p.email;
+        if (p.url != null) out['Plataforma URL'] = p.url;
       }
     }
 

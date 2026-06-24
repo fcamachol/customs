@@ -38,6 +38,7 @@ export const createClientBody = z.object({
     countryOfOrigin: z.string().optional(),
     legalName: z.string().optional(),
     email: z.string().email().optional().or(z.literal('')),
+    url: z.string().optional(),
   }).optional(),
 });
 
@@ -57,6 +58,7 @@ export const clientPlatformBody = z.object({
   countryOfOrigin: z.string().optional(),
   legalName: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
+  url: z.string().optional(),
 });
 
 // catalogs — config

@@ -57,7 +57,16 @@ function AuthenticatedApp() {
 }
 
 function AuthGate() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  // While the persisted session is being restored, hold off rendering so a valid
+  // session doesn't flash the login screen on refresh.
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-navy-800" />
+      </div>
+    );
+  }
   if (!user) return <LoginView />;
   return <AuthenticatedApp />;
 }

@@ -8,6 +8,7 @@ export interface ClientPlatform {
   countryOfOrigin?: string;
   legalName?: string;
   email?: string;
+  url?: string;
 }
 
 export interface Client {
@@ -80,7 +81,7 @@ export function AddClientModal({ open, onClose, onCreated }: {
         <Field label="Nombre / razón social" htmlFor="c-name">
           <Input id="c-name" value={form.name} onChange={(e) => set('name', e.target.value)} />
         </Field>
-        <Field label="Id fiscal (RFC)" htmlFor="c-tax">
+        <Field label="Id fiscal" htmlFor="c-tax">
           <Input id="c-tax" value={form.tax_id} onChange={(e) => set('tax_id', e.target.value)} />
         </Field>
         <Field label="Domicilio" htmlFor="c-addr">

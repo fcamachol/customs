@@ -41,8 +41,8 @@ describe('GET /api/records/:id/reports.json', () => {
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toContain('no-store');
     expect(res.body.layout).toHaveLength(1);
-    expect(Object.keys(res.body.layout[0])).toHaveLength(34);
-    expect(Object.keys(res.body.report[0])).toHaveLength(36);
+    expect(Object.keys(res.body.layout[0])).toHaveLength(35);
+    expect(Object.keys(res.body.report[0])).toHaveLength(37);
     expect(res.body.risk[0]).toMatchObject({ guide: 'g1', consignee: 'Juan', resultado: 'rojo', motivo: 'valor atipico' });
     // capturista sees full PII
     expect(res.body.layout[0]['Consignatario RFC']).toBe(RFC);

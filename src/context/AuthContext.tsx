@@ -1,10 +1,12 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import { apiPost } from '../api';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { apiGet, apiPost } from '../api';
 
 interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad' | 'super_admin'; }
 
 interface AuthValue {
   user: User | null;
+  /** True while the persisted session is being restored on initial load. */
+  loading: boolean;
   login: (u: string, p: string, code?: string) => Promise<void>;
   logout: () => Promise<void>;
   /**
@@ -23,6 +25,29 @@ const Ctx = createContext<AuthValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Restore the persisted session on initial load: if a token is in localStorage,
+  // validate it against the server and rehydrate the user so a refresh doesn't
+  // bounce the user back to the login screen.
+  useEffect(() => {
+    let cancelled = false;
+    async function restore() {
+      const token = localStorage.getItem('token');
+      if (!token) { setLoading(false); return; }
+      try {
+        const me = await apiGet<User>('/api/auth/me');
+        if (!cancelled) setUser(me);
+      } catch {
+        // Token is missing/expired/revoked — clear it and fall back to login.
+        localStorage.removeItem('token');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void restore();
+    return () => { cancelled = true; };
+  }, []);
 
   async function login(username: string, password: string, code?: string) {
     const body: Record<string, string> = { username, password };
@@ -79,7 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  return <Ctx.Provider value={{ user, login, logout, enrollMfa }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, logout, enrollMfa }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthValue {

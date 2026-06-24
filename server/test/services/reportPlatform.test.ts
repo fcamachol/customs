@@ -22,14 +22,16 @@ describe('report platform overlay', () => {
   it('overlays the selected platform into the Plataforma columns', async () => {
     const { manifestId, clientId } = await seedManifestWithShipment();
     const p = await query(
-      `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin) VALUES ($1,'Tienda','CN') RETURNING id`,
+      `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, url) VALUES ($1,'Tienda','CN','https://tienda.com') RETURNING id`,
       [clientId]);
     await query('UPDATE manifests SET platform_id=$1 WHERE id=$2', [p.rows[0].id, manifestId]);
 
     const loaded = await loadShipments(manifestId);
     const rows = await buildReportRowsForManifest(manifestId, loaded);
     expect(rows[0]['Plataforma Nombre comercial']).toBe('Tienda');
-    expect(rows[0]['Plataforma País de origen']).toBe('CN');
+    // country_of_origin is stored as the ANAM clave ('CN') but rendered as the display name.
+    expect(rows[0]['Plataforma País de origen']).toBe('China');
+    expect(rows[0]['Plataforma URL']).toBe('https://tienda.com');
   });
 
   it('leaves the Plataforma block blank when no platform is selected', async () => {

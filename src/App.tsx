@@ -5,6 +5,7 @@ import { PageHeader } from './components/ui';
 import { SECTION_META, visibleSectionsFor, type Section, type ConfigSection } from './nav';
 import { LoginView } from './components/LoginView';
 import { AcercaDeView } from './components/AcercaDeView';
+import { SimulationBanner } from './components/SimulationBanner';
 import DashboardView from './components/DashboardView';
 import RegistroView from './components/RegistroView';
 import ConsultaView from './components/ConsultaView';
@@ -38,6 +39,7 @@ function AuthenticatedApp() {
       <Sidebar role={user!.role} active={current} onSelect={setSection} username={user!.username} onLogout={logout} />
       <main className="min-w-0 flex-1 px-8 py-8">
         <div className="mx-auto max-w-7xl">
+          <SimulationBanner />
           <PageHeader title={meta.title} subtitle={meta.subtitle} />
           {current === 'dashboard' && <DashboardView onNavigate={setSection} />}
           {current === 'registro' && <RegistroView />}

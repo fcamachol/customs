@@ -45,7 +45,7 @@ export function makeGlobalLimiter(opts: GlobalLimiterOptions = {}): RateLimitReq
     max: opts.max ?? 300,
     standardHeaders: true,   // Return rate-limit info in the `RateLimit-*` headers
     legacyHeaders: false,     // Disable the `X-RateLimit-*` headers
-    skip: (req) => req.path === '/api/health',
+    skip: (req) => req.path === '/health',
   } as Partial<Options> as Options);
 }
 

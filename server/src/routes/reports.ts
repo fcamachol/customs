@@ -29,7 +29,6 @@ const PII_COLUMNS: Record<string, string> = {
 const PII_FIELD_NAMES = Object.keys(PII_COLUMNS);
 const MASK = '•••••';
 
-
 function parseReveal(raw: unknown): Set<string> {
   if (raw == null) return new Set();
   const list = String(raw).split(',').map((s) => s.trim()).filter(Boolean);

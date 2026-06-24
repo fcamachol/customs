@@ -14,7 +14,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { makeGlobalLimiter, makeLoginLimiter } from '../../src/middleware/rateLimit';
+import { makeGlobalLimiter, makeLoginLimiter, makePiiReportLimiter } from '../../src/middleware/rateLimit';
 import { hashPassword } from '../../src/auth/password';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
@@ -50,6 +50,17 @@ function buildGlobalLimiterApp(maxRequests: number, windowMs: number) {
   app.use(express.json());
   app.use('/api', limiter);
   app.get('/api/data', (_req, res) => res.json({ ok: true }));
+
+  return app;
+}
+
+function buildPiiReportLimiterApp(maxRequests: number, windowMs: number) {
+  const limiter = makePiiReportLimiter({ windowMs, max: maxRequests, _forceEnable: true });
+
+  const app = express();
+  app.use(express.json());
+  app.use(limiter);
+  app.get('/reports', (_req, res) => res.json({ ok: true }));
 
   return app;
 }
@@ -146,6 +157,27 @@ describe('globalLimiter (real limiter via factory with _forceEnable)', () => {
     }
 
     const res = await request(app).get('/api/data');
+    expect(res.status).toBe(429);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PII report limiter smoke test
+// ---------------------------------------------------------------------------
+
+describe('piiReportLimiter (real limiter via factory with _forceEnable)', () => {
+  const MAX = 4;
+  const WINDOW_MS = 5_000;
+
+  it('returns 429 after MAX requests to the same endpoint', async () => {
+    const app = buildPiiReportLimiterApp(MAX, WINDOW_MS);
+
+    for (let i = 0; i < MAX; i++) {
+      const res = await request(app).get('/reports');
+      expect(res.status).toBe(200);
+    }
+
+    const res = await request(app).get('/reports');
     expect(res.status).toBe(429);
   });
 });

@@ -25,10 +25,11 @@ interface PedimentoRow {
   prevalidation: { status?: string } | null;
   import_data: Record<string, unknown> | null;
   import_data_version: number;
+  sub_status: string;
 }
 
 const PEDIMENTO_COLS = `id, manifest_id, numero_pedimento, subdivision_ordinal, is_last_subdivision,
-  sibling_numeros, covered_guias, file_id, pedimento_scan, prevalidation, import_data, import_data_version`;
+  sibling_numeros, covered_guias, file_id, pedimento_scan, prevalidation, import_data, import_data_version, sub_status`;
 
 /** Coverage input for a pedimentos row (numero + declared siblings + covered guías). */
 function coverageInput(p: PedimentoRow) {
@@ -167,6 +168,7 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     // these per row and posts to POST /api/pedimentos/:id/import-data.
     importData: p.import_data ?? null,
     importDataVersion: p.import_data_version,
+    subStatus: p.sub_status,
     coveredGuias: p.covered_guias ?? [],
     pedimentoPdf: p.file_id ? `/api/files/${p.file_id}` : null,
     // Per-pedimento report artifacts (Task 10): Reporte General + Layout built over this

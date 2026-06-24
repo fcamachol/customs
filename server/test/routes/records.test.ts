@@ -231,6 +231,17 @@ describe('records — detail pedimentos[]', () => {
     expect(res.body.prevalidation).toBeUndefined();
   });
 
+  it('surfaces subStatus on each pedimento row (defaults to pendiente)', async () => {
+    const m = await query(`INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('940-1','Cliente N',$1) RETURNING id`, [userId]);
+    const id = m.rows[0].id;
+    await addPedimento(id, { numero: '555' });
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.subStatus).toBe('pendiente');
+  });
+
   it('per-pedimento lock is APPROVED-locked when prevalidation status is APPROVED', async () => {
     const m = await query(
       `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('930-1','Cliente M',$1) RETURNING id`,

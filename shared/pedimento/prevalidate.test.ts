@@ -80,12 +80,12 @@ describe('prevalidatePedimento', () => {
     const p = basePedimento(); p.partidas[0].fraccion = '12345678';
     expect(prevalidatePedimento(p).status).toBe('REJECTED');
   });
-  it('warns (does not reject) on a shape-valid importer RFC with a wrong check digit', () => {
+  it('rejects a shape-valid importer RFC with a wrong check digit', () => {
     const p = basePedimento(); p.header.importer.rfc = 'PERJ800101AAA'; // shape ok, checksum wrong
     const r = prevalidatePedimento(p);
-    expect(r.status).toBe('APPROVED');
-    expect(r.errors.join(' ')).not.toMatch(/importador/i);
-    expect(r.warnings.join(' ')).toMatch(/dígito verificador/i);
+    expect(r.status).toBe('REJECTED');
+    expect(r.errors.join(' ')).toMatch(/importador/i);
+    expect(r.errors.join(' ')).toMatch(/dígito verificador|inválido/i);
   });
   it('rejects a T1 partida carrying contributions', () => {
     const p = basePedimento();

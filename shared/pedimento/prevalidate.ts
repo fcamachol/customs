@@ -36,13 +36,11 @@ export function prevalidatePedimento(p: Pedimento): PrevalidationResult {
 
   if (!/^\d{15}$/.test(p.header.numeroPedimento)) errors.push('El número de pedimento debe tener 15 dígitos.');
   if (p.header.clave !== 'T1') errors.push('Clave debe ser T1.');
-  if (!isValidTaxId(p.header.importer.rfc)) errors.push('RFC del importador inválido.');
-  if (!isValidTaxId(p.header.agent.agentRfc)) errors.push('RFC del agente inválido.');
-  // Shape passes but the official check digit doesn't — warn (P1: RFC/CURP checksum).
-  if (isValidTaxId(p.header.importer.rfc) && !isValidTaxIdStrict(p.header.importer.rfc))
-    warnings.push('RFC del importador: dígito verificador no coincide.');
-  if (isValidTaxId(p.header.agent.agentRfc) && !isValidTaxIdStrict(p.header.agent.agentRfc))
-    warnings.push('RFC del agente: dígito verificador no coincide.');
+  // F05: RFC/CURP checksum now blocking (not just a warning)
+  if (!isValidTaxIdStrict(p.header.importer.rfc)) errors.push('RFC del importador inválido (dígito verificador no coincide).');
+  if (!isValidTaxIdStrict(p.header.agent.agentRfc)) errors.push('RFC del agente inválido (dígito verificador no coincide).');
+  if (p.header.agent.agencyRfc && !isValidTaxIdStrict(p.header.agent.agencyRfc))
+    errors.push('RFC de la agencia inválido (dígito verificador no coincide).');
   if (!p.header.observations?.trim()) errors.push('Faltan observaciones a nivel pedimento.');
 
   p.partidas.forEach((pa) => {

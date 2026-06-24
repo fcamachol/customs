@@ -3,15 +3,30 @@ import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { validate } from '../validation/middleware';
-import { createClientBody, configKeyParam, configValueBody, validatedRfcBody } from '../validation/schemas';
+import { createClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam } from '../validation/schemas';
 
 export const catalogsRouter = Router();
 
 // GET /api/catalogs/clients — any authenticated role
 catalogsRouter.get('/clients', requireAuth, async (req, res) => {
   const { rows } = await query(
-    `SELECT id, name, tax_id, address, phone, email, website, platform, created_by, created_at
-     FROM clients ORDER BY name`,
+    `SELECT c.id, c.name, c.tax_id, c.address, c.phone, c.email, c.website, c.created_by, c.created_at,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', p.id,
+                  'commercialName', p.commercial_name,
+                  'countryOfOrigin', p.country_of_origin,
+                  'legalName', p.legal_name,
+                  'email', p.email
+                ) ORDER BY p.created_at
+              ) FILTER (WHERE p.id IS NOT NULL),
+              '[]'
+            ) AS platforms
+       FROM clients c
+       LEFT JOIN client_platforms p ON p.client_id = c.id
+       GROUP BY c.id
+       ORDER BY c.name`,
   );
   res.json(rows);
 });
@@ -116,6 +131,84 @@ catalogsRouter.delete(
       entityId: id,
       before: before.rows[0],
       ip: req.ip,
+    });
+    res.json({ ok: true });
+  },
+);
+
+// ─── Client platforms (one client → many) ───────────────────────────────────
+
+const PLATFORM_RETURNING =
+  `id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
+   legal_name AS "legalName", email`;
+
+// helper: normalize '' → null
+const orNull = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+// POST /api/catalogs/clients/:id/platforms — admin or capturista
+catalogsRouter.post(
+  '/clients/:id/platforms',
+  requireAuth,
+  requireRole('admin', 'capturista'),
+  validate({ params: idParam, body: clientPlatformBody }),
+  async (req, res) => {
+    const { id } = req.params;
+    const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    const { commercialName, countryOfOrigin, legalName, email } = req.body;
+    const { rows } = await query(
+      `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING ${PLATFORM_RETURNING}`,
+      [id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email), req.user!.userId],
+    );
+    await recordAudit({
+      userId: req.user!.userId, action: 'CREATE_CLIENT_PLATFORM', entity: 'client_platform',
+      entityId: rows[0].id, after: rows[0], ip: req.ip,
+    });
+    res.status(201).json(rows[0]);
+  },
+);
+
+// PUT /api/catalogs/clients/:id/platforms/:pid — admin or capturista
+catalogsRouter.put(
+  '/clients/:id/platforms/:pid',
+  requireAuth,
+  requireRole('admin', 'capturista'),
+  validate({ body: clientPlatformBody }),
+  async (req, res) => {
+    const { id, pid } = req.params;
+    const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    const { commercialName, countryOfOrigin, legalName, email } = req.body;
+    const { rows } = await query(
+      `UPDATE client_platforms
+         SET commercial_name = $3, country_of_origin = $4, legal_name = $5, email = $6
+       WHERE id = $1 AND client_id = $2
+       RETURNING ${PLATFORM_RETURNING}`,
+      [pid, id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email)],
+    );
+    await recordAudit({
+      userId: req.user!.userId, action: 'UPDATE_CLIENT_PLATFORM', entity: 'client_platform',
+      entityId: pid, before: before.rows[0], after: rows[0], ip: req.ip,
+    });
+    res.json(rows[0]);
+  },
+);
+
+// DELETE /api/catalogs/clients/:id/platforms/:pid — admin only
+catalogsRouter.delete(
+  '/clients/:id/platforms/:pid',
+  requireAuth,
+  requireRole('admin'),
+  async (req, res) => {
+    const { id, pid } = req.params;
+    const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    await query('DELETE FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
+    await recordAudit({
+      userId: req.user!.userId, action: 'DELETE_CLIENT_PLATFORM', entity: 'client_platform',
+      entityId: pid, before: before.rows[0], ip: req.ip,
     });
     res.json({ ok: true });
   },

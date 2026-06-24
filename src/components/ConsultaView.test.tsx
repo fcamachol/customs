@@ -13,6 +13,10 @@ const recordDetail = {
   clientName: 'Acme Corp',
   pedimentoFileId: 'file-9',
   shipmentCount: 5,
+  pedimentos: [
+    { id: 'p1', numeroPedimento: '258516535001684', subdivisionOrdinal: 1, isLast: false, pedimentoPdf: '/api/files/file-9' },
+    { id: 'p2', numeroPedimento: '258516535001685', subdivisionOrdinal: 2, isLast: true, pedimentoPdf: '/api/files/file-10' },
+  ],
   artifacts: {
     riskAnalysis: '/api/records/rec-1/risk.xlsx',
     pedimentoPdf: '/api/files/file-9',
@@ -75,6 +79,22 @@ describe('ConsultaView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Descargar' }));
     await waitFor(() => {
       expect(apiDownload).toHaveBeenCalledWith('/api/records/rec-1/risk.xlsx', 'Analisis_de_Riesgo.xlsx');
+    });
+  });
+
+  it('lists each pedimento (subdivisión) PDF with its own download', async () => {
+    render(<ConsultaView />);
+    fireEvent.click(await screen.findByText(/MAWB-123/));
+
+    // Both subdivisión numbers render, each with a per-pedimento download button.
+    await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
+    expect(screen.getByText('258516535001685')).toBeTruthy();
+    expect(screen.getByText(/subdivisión 2 \(última\)/)).toBeTruthy();
+
+    const downloads = screen.getAllByRole('button', { name: /Descargar PDF/ });
+    fireEvent.click(downloads[1]);
+    await waitFor(() => {
+      expect(apiDownload).toHaveBeenCalledWith('/api/files/file-10', 'Pedimento_258516535001685.pdf');
     });
   });
 });

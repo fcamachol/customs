@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, X } from 'lucide-react';
-import { apiGet } from '../api';
+import { Search, X, Download } from 'lucide-react';
+import { apiGet, apiDownload } from '../api';
 import { Card, Input, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
 import { ReportTabs } from './ReportTabs';
@@ -12,12 +12,22 @@ interface RecordSummary {
   createdAt: string;
 }
 
+// A subdivisión (pedimento) attached to the manifest, each with its own PDF.
+interface PedimentoItem {
+  id: string;
+  numeroPedimento: string | null;
+  subdivisionOrdinal: number | null;
+  isLast: boolean;
+  pedimentoPdf: string | null;
+}
+
 interface RecordDetail {
   id: string;
   mawbReference: string;
   clientName: string;
   pedimentoFileId: string | null;
   shipmentCount: number;
+  pedimentos: PedimentoItem[];
   artifacts: {
     riskAnalysis: string;
     pedimentoPdf: string | null;
@@ -336,7 +346,42 @@ export default function ConsultaView() {
         </ul>
       )}
 
-      {detail && <ReportTabs recordId={detail.id} pedimentoPdf={detail.artifacts.pedimentoPdf} />}
+      {detail && (
+        <>
+          <PedimentosList pedimentos={detail.pedimentos ?? []} />
+          <ReportTabs recordId={detail.id} pedimentoPdf={detail.artifacts.pedimentoPdf} />
+        </>
+      )}
     </div>
+  );
+}
+
+// Lists every pedimento (subdivisión) PDF attached to the selected manifest.
+function PedimentosList({ pedimentos }: { pedimentos: PedimentoItem[] }) {
+  const withPdf = pedimentos.filter((p) => p.pedimentoPdf);
+  if (withPdf.length === 0) return null;
+  return (
+    <Card className="p-5 shadow-sm">
+      <h2 className="mb-3 text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h2>
+      <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        {withPdf.map((p) => (
+          <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+            <span className="min-w-0">
+              <span className="font-semibold text-slate-800">{p.numeroPedimento ?? 'Sin número'}</span>
+              {p.subdivisionOrdinal != null && (
+                <span className="text-slate-500"> — subdivisión {p.subdivisionOrdinal}{p.isLast ? ' (última)' : ''}</span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => apiDownload(p.pedimentoPdf!, `Pedimento_${p.numeroPedimento ?? p.id}.pdf`)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+            >
+              <Download className="h-3.5 w-3.5" /> Descargar PDF
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }

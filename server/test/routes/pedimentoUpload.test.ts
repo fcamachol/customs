@@ -45,8 +45,14 @@ function makeTextPdf(lines: string[]): Buffer {
 function pedimentoPdf(numero: string): Buffer {
   return makeTextPdf([
     `NUM. PEDIMENTO: ${numero}`,
+    'T1',
     'SEGUNDA SUBDIVISION DE LA GUIA MASTER NO. 369-94268462',
     '34 BULTOS CON UN PESO DE 808 KG.',
+    'DESTINO/ORIGEN: TIPO CAMBIO: PESO BRUTO: ADUANA E/S:',
+    '9 20.45680 808.000 850',
+    'FECHAS',
+    '04/04/2025',
+    '05/04/2025',
   ]);
 }
 
@@ -229,5 +235,19 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
       if (originalEnv === undefined) delete process.env.PEDIMENTO_MIN_BYTES;
       else process.env.PEDIMENTO_MIN_BYTES = originalEnv;
     }
+  });
+
+  it('pre-fills import_data on the new pedimento row from the extracted header', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001684'), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    const row = await query<{ import_data: Record<string, unknown> | null; sub_status: string }>(
+      `SELECT import_data, sub_status FROM pedimentos WHERE id=$1`, [res.body.pedimentoId]);
+    expect(row.rows[0].import_data).toMatchObject({
+      patente: '1653', cveT1: 'T1', fechaEntrada: '2025-04-04', tipoCambio: 20.4568, paymentDate: '2025-04-05',
+    });
+    expect(row.rows[0].sub_status).toBe('pendiente'); // pre-fill does not advance the lifecycle
   });
 });

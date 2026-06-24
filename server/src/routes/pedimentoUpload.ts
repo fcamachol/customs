@@ -125,12 +125,22 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
 
   const meta = await saveFile({ kind: 'pedimento_pdf', originalName: req.file.originalname, bytes: req.file.buffer, uploadedBy: req.user!.userId });
 
+  // Pre-fill the capture form from the extracted header (best-effort). Store only the non-null
+  // fields; null when nothing was extracted, so an unparseable PDF leaves import_data NULL.
+  const h = extracted.header;
+  const prefillEntries: [string, unknown][] = [
+    ['cveT1', h.clave], ['patente', h.patente], ['fechaEntrada', h.entryDate],
+    ['tipoCambio', h.tipoCambio], ['paymentDate', h.paymentDate],
+  ].filter(([, v]) => v != null) as [string, unknown][];
+  const importPrefill = prefillEntries.length ? Object.fromEntries(prefillEntries) : null;
+
   // INSERT the pedimentos row (decision #1). file_id/pedimento_scan now live here, not on manifests.
   const ins = await query<{ id: string }>(
     `INSERT INTO pedimentos
        (manifest_id, numero_pedimento, master_guide, subdivision_ordinal, is_last_subdivision,
-        sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by,
+        import_data)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [
       req.params.id,
       numeroPedimento,
@@ -144,6 +154,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
       meta.id,
       JSON.stringify(scan),
       req.user!.userId,
+      importPrefill ? JSON.stringify(importPrefill) : null,
     ],
   );
 

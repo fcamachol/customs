@@ -11,12 +11,11 @@
  * Used in classify.ts PASS-1 to cluster ID-less consignees; RFC/CURP-keyed entities are
  * NEVER merged here.
  *
- * PRIVACY NOTE: blockingKey is a lossy, name-derived value. It is less identifying than
- * plaintext but more exposed than the HMAC blind-index token from F20. The block_key
- * stored in monthly_history (for cross-manifest fuzzy) partially re-introduces name-derived
- * data that F20 encrypted. This trade-off is intentional for typo evasion detection and
- * must be reviewed before deploying. Keep RFC/CURP as authoritative identity — block_key
- * is ONLY used for ID-less consignees.
+ * SCOPE: in-manifest only. Clustering runs on DECRYPTED plaintext names in-memory during
+ * classify.ts PASS-1; nothing name-derived is persisted. (An earlier design stored a
+ * phonetic block_key in monthly_history for cross-manifest fuzzy, but that was removed —
+ * it re-introduced name-derived data F20 encrypted and was never wired into scoring.
+ * Cross-manifest typo recurrence is a deferred enhancement pending a privacy review.)
  *
  * NO Node crypto imports here. shared/risk must stay crypto-free.
  */

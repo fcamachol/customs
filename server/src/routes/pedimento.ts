@@ -67,8 +67,8 @@ pedimentoRouter.post(
       // Write to the pedimentos row — manifests.pedimento / manifests.prevalidation are no longer
       // written after this cutover (Task 9). The manifests columns will be dropped in Task 11.
       await query(
-        'UPDATE pedimentos SET pedimento=$1, prevalidation=$2, sub_status=$4 WHERE id=$3',
-        [JSON.stringify(ped), JSON.stringify(prevalidation), req.params.pedimentoId, t.next],
+        'UPDATE pedimentos SET pedimento=$1, prevalidation=$2, sub_status=$3 WHERE id=$4',
+        [JSON.stringify(ped), JSON.stringify(prevalidation), t.next, req.params.pedimentoId],
       );
 
       await recordAudit({

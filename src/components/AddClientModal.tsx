@@ -95,19 +95,10 @@ export function AddClientModal({ open, onClose, onCreated }: {
         <Field label="Sitio web" htmlFor="c-website">
           <Input id="c-website" value={form.website} onChange={(e) => set('website', e.target.value)} />
         </Field>
-        <Field label="Plataforma — Nombre comercial" htmlFor="c-pcomm">
-          <Input id="c-pcomm" value={form.commercialName} onChange={(e) => set('commercialName', e.target.value)} />
-        </Field>
-        <Field label="Plataforma — País de origen" htmlFor="c-pcountry">
-          <Input id="c-pcountry" value={form.countryOfOrigin} onChange={(e) => set('countryOfOrigin', e.target.value)} />
-        </Field>
-        <Field label="Plataforma — Razón social" htmlFor="c-plegal">
-          <Input id="c-plegal" value={form.legalName} onChange={(e) => set('legalName', e.target.value)} />
-        </Field>
-        <Field label="Plataforma — Correo" htmlFor="c-pemail">
-          <Input id="c-pemail" type="email" value={form.platformEmail} onChange={(e) => set('platformEmail', e.target.value)} />
-        </Field>
       </div>
+      <p className="mt-3 text-xs text-slate-500">
+        Las plataformas se agregan al abrir el cliente, una vez creado.
+      </p>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="secondary" type="button" onClick={close}>Cancelar</Button>
         <Button type="button" onClick={submit} disabled={saving}>Guardar cliente</Button>

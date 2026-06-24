@@ -72,9 +72,7 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
     expect(rows[0].import_data.patente).toBe('3250');
     expect(rows[0].import_data.agenteAduanal).toBe('Juan Pérez');
 
-    // The cutover stops writing manifests.import_data entirely.
-    const m = await query('SELECT import_data FROM manifests WHERE id=$1', [manifestId]);
-    expect(m.rows[0].import_data).toBeNull();
+    // manifests.import_data was dropped in Task 11 — schema enforces it.
   });
 
   it('writes are isolated per-pedimento (sibling row untouched)', async () => {

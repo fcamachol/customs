@@ -163,10 +163,8 @@ describe('GET /api/pedimentos/:pedimentoId/report.xlsx — per-pedimento artifac
       'SELECT kind FROM files WHERE id=$1', [pRows[0].report_file_id]);
     expect(fRows[0].kind).toBe('report');
 
-    // The manifest report cache column is NOT touched (report is per-pedimento now).
-    const { rows: mRows } = await query<{ report_file_id: string | null }>(
-      'SELECT report_file_id FROM manifests WHERE id=$1', [manifestId]);
-    expect(mRows[0].report_file_id).toBeNull();
+    // manifests.report_file_id was dropped in Task 11 — the column no longer exists.
+    // Enforcement is now at the schema level; no SELECT needed.
   });
 
   it('second GET /report.xlsx returns the stored bytes (immutable)', async () => {

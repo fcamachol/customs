@@ -80,9 +80,7 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     expect(ped.rows[0].file_id).toBe(res.body.fileId);
     expect(ped.rows[0].pedimento_scan.verdict).toBe('clean');
 
-    const man = await query('SELECT file_id, pedimento_scan FROM manifests WHERE id=$1', [manifestId]);
-    expect(man.rows[0].file_id).toBeNull();
-    expect(man.rows[0].pedimento_scan).toBeNull();
+    // manifests.file_id and manifests.pedimento_scan were dropped in Task 11 — schema enforces it.
 
     const scans = await query('SELECT verdict FROM pedimento_scans WHERE manifest_id=$1', [manifestId]);
     expect(scans.rows).toHaveLength(1);

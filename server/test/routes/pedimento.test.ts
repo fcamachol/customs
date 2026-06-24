@@ -82,11 +82,7 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
       'SELECT pedimento, prevalidation FROM pedimentos WHERE id=$1', [pedimentoId]);
     expect(row.rows[0].prevalidation?.status).toBe('APPROVED');
 
-    // manifests table should NOT have pedimento/prevalidation written.
-    const mRow = await query<{ pedimento: unknown; prevalidation: unknown }>(
-      'SELECT pedimento, prevalidation FROM manifests WHERE id=$1', [manifestId]);
-    expect(mRow.rows[0].pedimento).toBeNull();
-    expect(mRow.rows[0].prevalidation).toBeNull();
+    // manifests.pedimento and manifests.prevalidation were dropped in Task 11 — schema enforces it.
   });
 
   it('leaves sibling pedimento rows untouched when one pedimento is built', async () => {

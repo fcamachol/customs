@@ -4,11 +4,7 @@ import { getJWTSecret } from './auth/token';
 
 if (process.env.NODE_ENV === 'production') {
   // Validate JWT_SECRET by calling the shared resolver (fail-closed default).
-  try {
-    getJWTSecret();
-  } catch (err) {
-    throw err;
-  }
+  getJWTSecret();
 
   // RNF-05: Validate FIELD_ENCRYPTION_KEY before accepting any traffic.
   const fek = process.env.FIELD_ENCRYPTION_KEY;

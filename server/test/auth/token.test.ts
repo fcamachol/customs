@@ -1,14 +1,19 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { signToken, verifyToken, getJWTSecret } from '../../src/auth/token';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { signToken, verifyToken } from '../../src/auth/token';
 
 describe('token', () => {
-  const originalEnv = { ...process.env };
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalJwtSecret = process.env.JWT_SECRET;
 
-  // Reset memoized secret between tests by re-importing the module.
   afterEach(() => {
-    // Restore NODE_ENV and JWT_SECRET.
-    process.env.NODE_ENV = originalEnv.NODE_ENV;
-    process.env.JWT_SECRET = originalEnv.JWT_SECRET;
+    // Restore env state precisely — avoid setting "undefined" as a string.
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
+    }
+    vi.resetModules();
   });
 
   it('round-trips a payload in test environment', () => {
@@ -22,44 +27,34 @@ describe('token', () => {
     expect(() => verifyToken('not.a.token')).toThrow();
   });
 
-  it('throws when NODE_ENV is production and JWT_SECRET is unset', () => {
+  it('throws when NODE_ENV is production and JWT_SECRET is unset', async () => {
+    // Set env BEFORE importing so the fresh module's resolver sees the right values.
     delete process.env.JWT_SECRET;
     process.env.NODE_ENV = 'production';
-    // Clear memoized value by reimport—simulate first-call scenario.
-    // Since we can't directly clear the module cache in vitest without helpers,
-    // we'll test by direct call after setting env (memoization persists, so we skip this
-    // and test via integration with index.ts instead).
-    // For now, verify the getter logic:
-    expect(() => {
-      // Force re-evaluation by testing the condition.
-      if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-        throw new Error('JWT_SECRET must be set to a non-default value');
-      }
-    }).toThrow('JWT_SECRET must be set to a non-default value');
+    vi.resetModules();
+    const { getJWTSecret } = await import('../../src/auth/token');
+    expect(() => getJWTSecret()).toThrow(/JWT_SECRET must be set to a non-default value/);
   });
 
-  it('throws when NODE_ENV is production and JWT_SECRET is the default', () => {
+  it('throws when NODE_ENV is production and JWT_SECRET is the default', async () => {
     process.env.JWT_SECRET = 'change-me-in-production';
     process.env.NODE_ENV = 'production';
-    // Similar to above: memoization prevents re-evaluation, but we can test the condition.
-    expect(() => {
-      if (
-        process.env.NODE_ENV === 'production' &&
-        process.env.JWT_SECRET === 'change-me-in-production'
-      ) {
-        throw new Error('JWT_SECRET must be set to a non-default value');
-      }
-    }).toThrow('JWT_SECRET must be set to a non-default value');
+    vi.resetModules();
+    const { getJWTSecret } = await import('../../src/auth/token');
+    expect(() => getJWTSecret()).toThrow(/JWT_SECRET must be set to a non-default value/);
   });
 
-  it('uses a real JWT_SECRET when provided in production', () => {
-    const realSecret = 'real-secret-key-12345678901234567890';
+  it('uses a real JWT_SECRET when provided in production', async () => {
+    const realSecret = 'a-strong-real-secret-that-is-not-the-default';
     process.env.JWT_SECRET = realSecret;
     process.env.NODE_ENV = 'production';
-    // Verify that signToken/verifyToken work (but memoization means we test indirectly).
-    // In actual prod, a real secret would be set at boot time.
-    const token = signToken({ userId: 'u2', role: 'capturista' });
-    const claims = verifyToken(token);
+    vi.resetModules();
+    const { getJWTSecret, signToken: freshSign, verifyToken: freshVerify } = await import('../../src/auth/token');
+    // Resolver must return the real secret without throwing.
+    expect(getJWTSecret()).toBe(realSecret);
+    // Sign/verify round-trip works with the real secret.
+    const token = freshSign({ userId: 'u2', role: 'capturista' });
+    const claims = freshVerify(token);
     expect(claims.userId).toBe('u2');
     expect(claims.role).toBe('capturista');
   });

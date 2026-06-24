@@ -8,16 +8,17 @@ import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
 import { computeLock } from '../services/manifestLock';
 import { withTransaction } from '../db/tx';
+import { validate } from '../validation/middleware';
+import { manifestCreateBody, manifestClientBody } from '../validation/schemas';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const MAX_ROWS = 5000; // synchronous ceiling (async deferred to Increment 2)
 
 export const manifestsRouter = Router();
 
-manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), async (req, res) => {
-  const { mawbReference, clientName } = req.body ?? {};
+manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), validate({ body: manifestCreateBody }), async (req, res) => {
+  const { mawbReference, clientName } = req.body;
   if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
-  if (!mawbReference) { res.status(400).json({ error: 'mawbReference required' }); return; }
 
   const result = ingestWorkbook(req.file.buffer, mawbReference);
   if (result.fileRejected) {
@@ -105,10 +106,9 @@ manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturis
 });
 
 // POST /api/manifests/:id/client — associate a client to a manifest
-manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
+manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturista'), validate({ body: manifestClientBody }), async (req, res) => {
   const { id } = req.params;
-  const { clientId } = req.body ?? {};
-  if (!clientId) { res.status(400).json({ error: 'clientId is required' }); return; }
+  const { clientId } = req.body;
 
   const existing = await query('SELECT id FROM manifests WHERE id=$1', [id]);
   if (existing.rows.length === 0) { res.status(404).json({ error: 'Manifest not found' }); return; }

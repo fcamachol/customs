@@ -11,6 +11,8 @@ import type { Shipment } from '../../../shared/types/shipment';
 import { decryptShipment } from '../crypto/fieldCrypto';
 import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
 import type { DeniedPartyEntry } from '../../../shared/risk/lists';
+import { validate } from '../validation/middleware';
+import { riskBody } from '../validation/schemas';
 
 export const riskRouter = Router();
 
@@ -20,8 +22,8 @@ async function loadConfig<T>(key: string): Promise<T | undefined> {
   return rows[0]?.value;
 }
 
-riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), async (req, res) => {
-  const period: string = req.body?.period ?? new Date().toISOString().slice(0, 7);
+riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), validate({ body: riskBody }), async (req, res) => {
+  const period: string = req.body.period ?? new Date().toISOString().slice(0, 7);
   const { rows } = await query<{ id: string; data: Shipment }>(
     'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);
   const shipments = rows.map((r) => decryptShipment(r.data));

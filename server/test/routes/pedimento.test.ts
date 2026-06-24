@@ -49,6 +49,8 @@ describe('POST /api/manifests/:id/pedimento', () => {
         entryDate: '2025-04-04', paymentDate: '2025-04-05',
       });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/importer/);
+    expect(res.body.error).toBe('Validation failed');
+    // Zod details should mention the missing importer field
+    expect(JSON.stringify(res.body.details)).toMatch(/importer/);
   });
 });

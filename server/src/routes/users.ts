@@ -4,12 +4,13 @@ import { hashPassword } from '../auth/password';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { isPrivilegedRole } from '../auth/roles';
+import { validate } from '../validation/middleware';
+import { createUserBody, updateUserRoleBody } from '../validation/schemas';
 
 export const usersRouter = Router();
 
-usersRouter.post('/', requireAuth, requireRole('admin'), async (req, res) => {
-  const { username, password, role } = req.body ?? {};
-  if (!['capturista', 'admin', 'autoridad'].includes(role)) { res.status(400).json({ error: 'Invalid role' }); return; }
+usersRouter.post('/', requireAuth, requireRole('admin'), validate({ body: createUserBody }), async (req, res) => {
+  const { username, password, role } = req.body;
   const hash = await hashPassword(password);
   const { rows } = await query(`INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3) RETURNING id, username, role`, [username, hash, role]);
   // F10: Record MFA-pending audit note for privileged users — enforcement happens at first login.
@@ -19,12 +20,9 @@ usersRouter.post('/', requireAuth, requireRole('admin'), async (req, res) => {
 });
 
 // PATCH /api/users/:id/role — update a user's role and bump token_version to invalidate outstanding tokens.
-usersRouter.patch('/:id/role', requireAuth, requireRole('admin'), async (req, res) => {
+usersRouter.patch('/:id/role', requireAuth, requireRole('admin'), validate({ body: updateUserRoleBody }), async (req, res) => {
   const { id } = req.params;
-  const { role } = req.body ?? {};
-  if (!['capturista', 'admin', 'autoridad'].includes(role)) {
-    res.status(400).json({ error: 'Invalid role' }); return;
-  }
+  const { role } = req.body;
   const { rows } = await query(
     `UPDATE users SET role=$1, token_version = token_version + 1 WHERE id=$2 RETURNING id, username, role`,
     [role, id],

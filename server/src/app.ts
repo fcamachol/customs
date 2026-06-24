@@ -1,5 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import { ZodError } from 'zod';
 import { authRouter } from './routes/auth';
 import { usersRouter } from './routes/users';
 import { manifestsRouter } from './routes/manifests';
@@ -17,6 +18,7 @@ import { catalogsRouter } from './routes/catalogs';
 import { consolidatedRouter } from './routes/consolidated';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
+import { ValidationError } from './validation/middleware';
 
 export function createApp(): Express {
   const app = express();
@@ -60,6 +62,14 @@ export function createApp(): Express {
   // Global error handler: log server-side, never leak stack traces to clients.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof ValidationError) {
+      res.status(400).json({ error: 'Validation failed', details: err.details });
+      return;
+    }
+    if (err instanceof ZodError) {
+      res.status(400).json({ error: 'Validation failed', details: err.flatten() });
+      return;
+    }
     console.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal error' });
   });

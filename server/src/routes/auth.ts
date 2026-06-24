@@ -7,6 +7,8 @@ import { recordAudit } from '../services/audit';
 import { generateSecret, keyUri, verifyTotp } from '../auth/mfa';
 import { loginLimiter } from '../middleware/rateLimit';
 import { isPrivilegedRole, getMfaEnforcement } from '../auth/roles';
+import { validate } from '../validation/middleware';
+import { mfaEnableBody } from '../validation/schemas';
 
 export const authRouter = Router();
 
@@ -77,15 +79,15 @@ authRouter.post('/mfa/setup', requireAuthAllowEnrollment, async (req, res) => {
 
 // POST /api/auth/mfa/enable — verify code against stored secret; on success set mfa_enabled=true
 // Uses requireAuthAllowEnrollment so enrollment-scoped tokens can complete the enrollment flow.
-authRouter.post('/mfa/enable', requireAuthAllowEnrollment, async (req, res) => {
+authRouter.post('/mfa/enable', requireAuthAllowEnrollment, validate({ body: mfaEnableBody }), async (req, res) => {
   const userId = req.user!.userId;
-  const { code } = req.body ?? {};
+  const { code } = req.body;
 
   const { rows } = await query(`SELECT mfa_secret FROM users WHERE id=$1`, [userId]);
   const user = rows[0];
   if (!user?.mfa_secret) { res.status(400).json({ error: 'MFA not set up. Call /mfa/setup first.' }); return; }
 
-  if (!code || !verifyTotp(user.mfa_secret, code)) {
+  if (!verifyTotp(user.mfa_secret, code)) {
     res.status(400).json({ error: 'Invalid TOTP code' }); return;
   }
 

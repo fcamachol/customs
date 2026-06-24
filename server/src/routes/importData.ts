@@ -3,6 +3,8 @@ import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { computeLock } from '../services/manifestLock';
+import { validate } from '../validation/middleware';
+import { importDataBody } from '../validation/schemas';
 
 export const importDataRouter = Router();
 
@@ -56,6 +58,7 @@ importDataRouter.post(
   '/:id/import-data',
   requireAuth,
   requireRole('admin', 'capturista'),
+  validate({ body: importDataBody }),
   async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const data: Record<string, unknown> = Object.fromEntries(FIELDS.map((f) => [f, body[f] ?? null]));

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { validate } from '../validation/middleware';
+import { createClientBody, configKeyParam, configValueBody, validatedRfcBody } from '../validation/schemas';
 
 export const catalogsRouter = Router();
 
@@ -19,12 +21,9 @@ catalogsRouter.post(
   '/clients',
   requireAuth,
   requireRole('admin', 'capturista'),
+  validate({ body: createClientBody }),
   async (req, res) => {
-    const { name, tax_id, address, phone, email, platform } = req.body ?? {};
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
-    }
+    const { name, tax_id, address, phone, email, platform } = req.body;
     const { rows } = await query(
       `INSERT INTO clients (name, tax_id, address, phone, email, platform, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -137,12 +136,8 @@ const ALLOWED_CONFIG_KEYS = new Set([
 const SUPER_ADMIN_CONFIG_KEYS = new Set(['tasa_vigencias', 'denied_parties']);
 
 // GET /api/catalogs/config/:key — any authenticated role
-catalogsRouter.get('/config/:key', requireAuth, async (req, res) => {
+catalogsRouter.get('/config/:key', requireAuth, validate({ params: configKeyParam }), async (req, res) => {
   const { key } = req.params;
-  if (!ALLOWED_CONFIG_KEYS.has(key)) {
-    res.status(400).json({ error: 'Unknown config key' });
-    return;
-  }
   const { rows } = await query('SELECT value FROM config WHERE key=$1', [key]);
   res.json({ key, value: rows[0]?.value ?? null });
 });
@@ -152,22 +147,15 @@ catalogsRouter.put(
   '/config/:key',
   requireAuth,
   requireRole('admin'),
+  validate({ params: configKeyParam, body: configValueBody }),
   async (req, res) => {
     const { key } = req.params;
-    if (!ALLOWED_CONFIG_KEYS.has(key)) {
-      res.status(400).json({ error: 'Unknown config key' });
-      return;
-    }
     // §10: tasa-global vigencias may only be edited by super_admin.
     if (SUPER_ADMIN_CONFIG_KEYS.has(key) && req.user!.role !== 'super_admin') {
       res.status(403).json({ error: 'Solo el Super Admin puede modificar las vigencias de tasa global' });
       return;
     }
     const value = req.body?.value;
-    if (value === undefined) {
-      res.status(400).json({ error: 'value is required' });
-      return;
-    }
     const { rows } = await query(
       `INSERT INTO config (key, value, updated_by, updated_at)
        VALUES ($1, $2, $3, now())
@@ -198,12 +186,8 @@ catalogsRouter.get('/validated-rfcs', requireAuth, async (_req, res) => {
 });
 
 // POST /api/catalogs/validated-rfcs — admin (super_admin via superset)
-catalogsRouter.post('/validated-rfcs', requireAuth, requireRole('admin'), async (req, res) => {
-  const { id_ref, rfc, curp, name } = req.body ?? {};
-  if (!id_ref) {
-    res.status(400).json({ error: 'id_ref is required' });
-    return;
-  }
+catalogsRouter.post('/validated-rfcs', requireAuth, requireRole('admin'), validate({ body: validatedRfcBody }), async (req, res) => {
+  const { id_ref, rfc, curp, name } = req.body;
   const { rows } = await query(
     `INSERT INTO validated_rfcs (id_ref, rfc, curp, name, created_by)
      VALUES ($1, $2, $3, $4, $5)

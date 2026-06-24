@@ -1,3 +1,5 @@
+import { canonicalize, norm } from './normalize';
+
 // From Risk analysis 17 feb '25.xlsx — piracy brands (col BL) + prohibited keywords (col BA).
 export const PIRACY_BRANDS = [
   'Adidas', 'Nike', 'Bimba y Lola', 'Gucci', 'Samsung',
@@ -9,6 +11,56 @@ export const PROHIBITED_KEYWORDS = [
   'pegamento', 'autoparte', 'pistola', 'droga', 'mariguana',
   'suplemento', 'vitamina', 'medicamento',
 ];
+
+/**
+ * Pre-computed canonical forms for the default lists.
+ * Memoized at module scope to avoid re-canonicalizing on every call (hot path).
+ * Only default-list entries are memoized; injected override lists are smaller
+ * and less frequent so they are canonicalized on the fly.
+ */
+const BRAND_CANONICALS = PIRACY_BRANDS.map((b) => canonicalize(b));
+const PROHIBITED_CANONICALS = PROHIBITED_KEYWORDS.map((k) => canonicalize(k));
+
+/**
+ * False-positive guard threshold for the tight path.
+ * Only use tight matching when the needle's tight form is >= 4 characters.
+ * Short collapsed forms (e.g. "id", "ok", "s4") would match too broadly after
+ * all whitespace and punctuation are removed.
+ */
+const TIGHT_MIN_LENGTH = 4;
+
+/**
+ * Core matching function used by matchesBrand and matchesProhibited.
+ *
+ * Matching strategy (evasion-resistant, two-path):
+ *   1. Loose path (always): checks if the loose-form needle appears in the
+ *      loose-form haystack. Catches: diacritic evasion, Cyrillic/Greek homoglyphs.
+ *   2. Tight path (needle tight form >= 4 chars only): checks if the tight-form
+ *      needle appears in the tight-form haystack. Catches: leetspeak evasion
+ *      (N1ke → nike) and token-split evasion (Guc ci → gucci).
+ *
+ * @param description - Raw shipment description (haystack).
+ * @param entries     - List of brand/keyword strings (needles).
+ * @param canonicals  - Pre-computed canonical forms for `entries` (1:1 correspondence).
+ * @returns The first matching entry string, or null if no match.
+ */
+function matchAgainst(
+  description: string,
+  entries: string[],
+  canonicals: ReturnType<typeof canonicalize>[],
+): string | null {
+  const d = canonicalize(description);
+  for (let i = 0; i < entries.length; i++) {
+    const ec = canonicals[i];
+    // Loose path: always on — catches diacritics and confusable/homoglyph evasion
+    if (d.loose.includes(ec.loose)) return entries[i];
+    // Tight path: catches leetspeak and token-split evasion.
+    // Guard: only apply when the needle's tight form is >= TIGHT_MIN_LENGTH chars
+    // to prevent short collapsed forms from matching too broadly.
+    if (ec.tight.length >= TIGHT_MIN_LENGTH && d.tight.includes(ec.tight)) return entries[i];
+  }
+  return null;
+}
 
 /**
  * A single entry in the denied-party / sanctions screening list.
@@ -23,10 +75,6 @@ export interface DeniedPartyEntry {
   ids?: string[];
   source?: 'OFAC' | 'BIS' | 'EU' | 'UN';
   program?: string;
-}
-
-function norm(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
 /**
@@ -75,16 +123,32 @@ export function matchesDeniedParty(
   return null;
 }
 
-/** Returns the matched brand name or null. Accepts an optional override list; falls back to PIRACY_BRANDS. */
+/**
+ * Returns the matched brand name or null.
+ * Accepts an optional override list; falls back to PIRACY_BRANDS.
+ *
+ * Uses evasion-resistant two-path canonicalization (see matchAgainst).
+ */
 export function matchesBrand(description: string, brands?: string[]): string | null {
-  const list = brands && brands.length > 0 ? brands : PIRACY_BRANDS;
-  const d = norm(description);
-  return list.find((b) => d.includes(norm(b))) ?? null;
+  if (brands && brands.length > 0) {
+    // Override list: canonicalize on the fly (less frequent, smaller list)
+    return matchAgainst(description, brands, brands.map((b) => canonicalize(b)));
+  }
+  // Default list: use pre-computed module-scope canonicals
+  return matchAgainst(description, PIRACY_BRANDS, BRAND_CANONICALS);
 }
 
-/** Returns the matched keyword or null. Accepts an optional override list; falls back to PROHIBITED_KEYWORDS. */
+/**
+ * Returns the matched prohibited keyword or null.
+ * Accepts an optional override list; falls back to PROHIBITED_KEYWORDS.
+ *
+ * Uses evasion-resistant two-path canonicalization (see matchAgainst).
+ */
 export function matchesProhibited(description: string, keywords?: string[]): string | null {
-  const list = keywords && keywords.length > 0 ? keywords : PROHIBITED_KEYWORDS;
-  const d = norm(description);
-  return list.find((k) => d.includes(norm(k))) ?? null;
+  if (keywords && keywords.length > 0) {
+    // Override list: canonicalize on the fly (less frequent, smaller list)
+    return matchAgainst(description, keywords, keywords.map((k) => canonicalize(k)));
+  }
+  // Default list: use pre-computed module-scope canonicals
+  return matchAgainst(description, PROHIBITED_KEYWORDS, PROHIBITED_CANONICALS);
 }

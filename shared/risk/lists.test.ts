@@ -13,6 +13,34 @@ describe('lists', () => {
     expect(matchesProhibited('libro')).toBeNull();
   });
 
+  // ─── F12: evasion resistance — leet, token-split, homoglyph ────────────────
+  describe('evasion resistance (F12)', () => {
+    it('matchesBrand: N1ke (leet) → Nike', () => {
+      expect(matchesBrand('tenis N1ke air')).toBe('Nike');
+    });
+
+    it('matchesBrand: Guc ci (token-split) → Gucci', () => {
+      expect(matchesBrand('bolsa Guc ci edicion')).toBe('Gucci');
+    });
+
+    it('matchesBrand: Cyrillic і (U+0456) in Nіke → Nike', () => {
+      const cyrillicI = 'і'; // Cyrillic і
+      expect(matchesBrand(`N${cyrillicI}ke zapato`)).toBe('Nike');
+    });
+
+    it('matchesProhibited: l1quido (leet) → liquido', () => {
+      expect(matchesProhibited('l1quido peligroso')).toBe('liquido');
+    });
+
+    it('matchesProhibited: p4st1lla (multi-leet) → pastilla', () => {
+      expect(matchesProhibited('p4st1lla vitamina extra')).toBe('pastilla');
+    });
+
+    it('false-positive guard: matchesBrand("modelo A1B2 camisa") → null', () => {
+      expect(matchesBrand('modelo A1B2 camisa')).toBeNull();
+    });
+  });
+
   // Tests for injected override lists
   it('matchesProhibited uses injected list — faro is NOT a default keyword but matches when injected', () => {
     expect(matchesProhibited('Faro delantero', ['faro'])).toBe('faro');

@@ -2,6 +2,7 @@ import type { Shipment } from '../types/shipment';
 import { cleanId, validateTaxId } from '../parsing/taxId';
 import { matchesBrand, matchesProhibited, matchesDeniedParty, type DeniedPartyEntry } from './lists';
 import { resolveThresholds, type Thresholds, type Weights } from './ruleset';
+import { norm as _norm } from './normalize';
 
 export interface RiskContext {
   nameCounts: Record<string, number>;
@@ -27,8 +28,15 @@ export interface SignalResult {
   incidence?: string;
 }
 
-export const norm = (s: string): string =>
-  (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+/**
+ * Loose-form normalization: NFD diacritic strip + lowercase. Preserves whitespace.
+ * Re-exported from normalize.ts — semantics are identical to the prior inline definition:
+ *   (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase()
+ * Used for entity keying (bbdd, address, smurfing signals). DO NOT change this to the
+ * canonicalize() loose form (which also applies confusable folding) — that would silently
+ * shift stored entity keys in the monthly_history DB.
+ */
+export const norm = _norm;
 
 export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
   const t = ctx.thresholds ?? resolveThresholds();

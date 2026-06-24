@@ -102,7 +102,7 @@ describe('scoreManifest', () => {
 
   it('ruleset_version and ruleset_hash are set on every scored shipment', () => {
     const out = scoreManifest([ship()], {});
-    expect(out[0].ruleset_version).toBe('2026-06');
+    expect(out[0].ruleset_version).toBe('2026-07');
     expect(out[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 

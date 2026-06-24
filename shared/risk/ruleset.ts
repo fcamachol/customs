@@ -15,7 +15,7 @@
  * classify.ts — no other code changes needed.
  */
 export const RULESET = {
-  version: '2026-06',
+  version: '2026-07',
   thresholds: {
     cantidad: 10,
     montoMin: 1,

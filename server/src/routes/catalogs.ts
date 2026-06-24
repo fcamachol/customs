@@ -39,23 +39,35 @@ catalogsRouter.post(
   validate({ body: createClientBody }),
   async (req, res) => {
     const { name, tax_id, address, phone, email, website, platform } = req.body;
-    const { rows } = await query(
-      `INSERT INTO clients (name, tax_id, address, phone, email, website, platform, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, tax_id, address, phone, email, website, platform, created_by, created_at`,
-      [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null,
-       platform != null ? JSON.stringify(platform) : null,
-       req.user!.userId],
+    const inserted = await query(
+      `INSERT INTO clients (name, tax_id, address, phone, email, website, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, tax_id, address, phone, email, website, created_by, created_at`,
+      [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null, req.user!.userId],
     );
+    const client = inserted.rows[0];
+
+    // Create the initial platform row when the caller supplied non-empty platform data.
+    const p = (platform ?? {}) as Record<string, unknown>;
+    const pn = (k: string) => (typeof p[k] === 'string' && (p[k] as string).trim() !== '' ? (p[k] as string).trim() : null);
+    let platforms: unknown[] = [];
+    if (pn('commercialName') || pn('countryOfOrigin') || pn('legalName') || pn('email')) {
+      const pr = await query(
+        `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
+                   legal_name AS "legalName", email`,
+        [client.id, pn('commercialName'), pn('countryOfOrigin'), pn('legalName'), pn('email'), req.user!.userId],
+      );
+      platforms = pr.rows;
+    }
+
+    const after = { ...client, platforms };
     await recordAudit({
-      userId: req.user!.userId,
-      action: 'CREATE_CLIENT',
-      entity: 'client',
-      entityId: rows[0].id,
-      after: rows[0],
-      ip: req.ip,
+      userId: req.user!.userId, action: 'CREATE_CLIENT', entity: 'client',
+      entityId: client.id, after, ip: req.ip,
     });
-    res.status(201).json(rows[0]);
+    res.status(201).json(after);
   },
 );
 
@@ -66,43 +78,26 @@ catalogsRouter.put(
   requireRole('admin', 'capturista'),
   async (req, res) => {
     const { id } = req.params;
-    const { name, tax_id, address, phone, email, website, platform } = req.body ?? {};
+    const { name, tax_id, address, phone, email, website } = req.body ?? {};
 
-    // Fetch before state for audit
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
-    if (before.rows.length === 0) {
-      res.status(404).json({ error: 'Client not found' });
-      return;
-    }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
 
     const { rows } = await query(
       `UPDATE clients
-       SET name     = COALESCE($2, name),
-           tax_id   = COALESCE($3, tax_id),
-           address  = COALESCE($4, address),
-           phone    = COALESCE($5, phone),
-           email    = COALESCE($6, email),
-           website  = COALESCE($7, website),
-           platform = COALESCE($8, platform)
+         SET name    = COALESCE($2, name),
+             tax_id  = COALESCE($3, tax_id),
+             address = COALESCE($4, address),
+             phone   = COALESCE($5, phone),
+             email   = COALESCE($6, email),
+             website = COALESCE($7, website)
        WHERE id = $1
-       RETURNING id, name, tax_id, address, phone, email, website, platform, created_by, created_at`,
-      [id,
-       name ?? null,
-       tax_id ?? null,
-       address ?? null,
-       phone ?? null,
-       email ?? null,
-       website ?? null,
-       platform != null ? JSON.stringify(platform) : null],
+       RETURNING id, name, tax_id, address, phone, email, website, created_by, created_at`,
+      [id, name ?? null, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null],
     );
     await recordAudit({
-      userId: req.user!.userId,
-      action: 'UPDATE_CLIENT',
-      entity: 'client',
-      entityId: id,
-      before: before.rows[0],
-      after: rows[0],
-      ip: req.ip,
+      userId: req.user!.userId, action: 'UPDATE_CLIENT', entity: 'client',
+      entityId: id, before: before.rows[0], after: rows[0], ip: req.ip,
     });
     res.json(rows[0]);
   },

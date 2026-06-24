@@ -69,4 +69,31 @@ describe('client platforms CRUD', () => {
       .set('Authorization', `Bearer ${adminToken}`).send({ commercialName: 'X' });
     expect(res.status).toBe(404);
   });
+
+  it('POST /clients with a platform creates the client and its first platform row', async () => {
+    const res = await request(app).post('/api/catalogs/clients')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'NewCo', platform: { commercialName: 'NC Shop', countryOfOrigin: 'MX' } });
+    expect(res.status).toBe(201);
+    expect(res.body.platforms).toHaveLength(1);
+    expect(res.body.platforms[0].commercialName).toBe('NC Shop');
+  });
+
+  it('POST /clients with an all-empty platform creates no platform row', async () => {
+    const res = await request(app).post('/api/catalogs/clients')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'EmptyCo', platform: { commercialName: '', countryOfOrigin: '', legalName: '', email: '' } });
+    expect(res.status).toBe(201);
+    expect(res.body.platforms).toEqual([]);
+  });
+
+  it('PUT /clients ignores a platform field (no row created)', async () => {
+    await request(app).put(`/api/catalogs/clients/${clientId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'ACME2', platform: { commercialName: 'ShouldBeIgnored' } });
+    const list = await request(app).get('/api/catalogs/clients').set('Authorization', `Bearer ${adminToken}`);
+    const acme = list.body.find((c: { id: string }) => c.id === clientId);
+    expect(acme.name).toBe('ACME2');
+    expect(acme.platforms).toEqual([]);
+  });
 });

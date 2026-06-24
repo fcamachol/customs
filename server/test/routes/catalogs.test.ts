@@ -32,8 +32,8 @@ beforeEach(async () => {
 });
 
 describe('POST /api/catalogs/clients', () => {
-  it('capturista can create a client → 201 and verifies persistence including platform jsonb', async () => {
-    const platform = { name: 'DHL', code: 'DHL01' };
+  it('capturista can create a client → 201 and verifies persistence; platform goes to client_platforms', async () => {
+    const platform = { commercialName: 'DHL Shop', countryOfOrigin: 'MX' };
     const res = await request(app)
       .post('/api/catalogs/clients')
       .set('Authorization', `Bearer ${capturistaToken}`)
@@ -48,13 +48,17 @@ describe('POST /api/catalogs/clients', () => {
     expect(res.status).toBe(201);
     expect(res.body.id).toBeTruthy();
     expect(res.body.name).toBe('Acme Corp');
+    expect(res.body.platforms).toHaveLength(1);
+    expect(res.body.platforms[0].commercialName).toBe('DHL Shop');
 
-    // Verify in DB
+    // Verify in DB — client row exists; platform is in client_platforms (not jsonb)
     const { rows } = await query('SELECT * FROM clients WHERE id = $1', [res.body.id]);
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe('Acme Corp');
     expect(rows[0].tax_id).toBe('ACM010101AAA');
-    expect(rows[0].platform).toEqual(platform);
+    const { rows: pRows } = await query('SELECT * FROM client_platforms WHERE client_id = $1', [res.body.id]);
+    expect(pRows).toHaveLength(1);
+    expect(pRows[0].commercial_name).toBe('DHL Shop');
   });
 
   it('autoridad POST → 403', async () => {

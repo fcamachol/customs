@@ -175,7 +175,7 @@ catalogsRouter.put(
   '/clients/:id/platforms/:pid',
   requireAuth,
   requireRole('admin', 'capturista'),
-  validate({ body: clientPlatformBody }),
+  validate({ params: idParam.passthrough(), body: clientPlatformBody }),
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
@@ -201,6 +201,7 @@ catalogsRouter.delete(
   '/clients/:id/platforms/:pid',
   requireAuth,
   requireRole('admin'),
+  validate({ params: idParam.passthrough() }),
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);

@@ -15,7 +15,7 @@ beforeEach(async () => {
   await truncateAll();
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('c',$1,'capturista') RETURNING id`, [hash]);
-  token = signToken({ userId: u.rows[0].id, role: 'capturista' });
+  token = signToken({ userId: u.rows[0].id, role: 'capturista' , tv: 0 });
 });
 
 describe('GET /api/files/:id', () => {

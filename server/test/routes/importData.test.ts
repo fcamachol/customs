@@ -18,13 +18,13 @@ beforeEach(async () => {
     `INSERT INTO users (username,password_hash,role) VALUES ('cap',$1,'capturista') RETURNING id`,
     [hash],
   );
-  capturistaToken = signToken({ userId: capRes.rows[0].id, role: 'capturista' });
+  capturistaToken = signToken({ userId: capRes.rows[0].id, role: 'capturista' , tv: 0 });
 
   const authRes = await query(
     `INSERT INTO users (username,password_hash,role) VALUES ('auth',$1,'autoridad') RETURNING id`,
     [hash],
   );
-  autoridadToken = signToken({ userId: authRes.rows[0].id, role: 'autoridad' });
+  autoridadToken = signToken({ userId: authRes.rows[0].id, role: 'autoridad' , tv: 0 });
 
   const mRes = await query(
     `INSERT INTO manifests (mawb_reference, client_name) VALUES ('TEST-001','Cliente Test') RETURNING id`,

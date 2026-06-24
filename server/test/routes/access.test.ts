@@ -18,9 +18,9 @@ beforeEach(async () => {
   const a = await query(`INSERT INTO users (username,password_hash,role) VALUES ('a',$1,'capturista') RETURNING id`, [hash]);
   const b = await query(`INSERT INTO users (username,password_hash,role) VALUES ('b',$1,'capturista') RETURNING id`, [hash]);
   const aut = await query(`INSERT INTO users (username,password_hash,role) VALUES ('aut',$1,'autoridad') RETURNING id`, [hash]);
-  tokenA = signToken({ userId: a.rows[0].id, role: 'capturista' });
-  tokenB = signToken({ userId: b.rows[0].id, role: 'capturista' });
-  tokenAut = signToken({ userId: aut.rows[0].id, role: 'autoridad' });
+  tokenA = signToken({ userId: a.rows[0].id, role: 'capturista' , tv: 0 });
+  tokenB = signToken({ userId: b.rows[0].id, role: 'capturista' , tv: 0 });
+  tokenAut = signToken({ userId: aut.rows[0].id, role: 'autoridad' , tv: 0 });
   const m = await query(
     `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('369-1','Cliente A',$1) RETURNING id`,
     [a.rows[0].id]);

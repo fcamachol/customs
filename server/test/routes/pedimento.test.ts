@@ -13,7 +13,7 @@ beforeEach(async () => {
   await truncateAll();
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('a',$1,'admin') RETURNING id`, [hash]);
-  token = signToken({ userId: u.rows[0].id, role: 'admin' });
+  token = signToken({ userId: u.rows[0].id, role: 'admin' , tv: 0 });
   const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ('369-1') RETURNING id`);
   manifestId = m.rows[0].id;
   const s = { id: crypto.randomUUID(), mawbReference: '369-1', description: 'TRAJE', hsCode: '99010001',

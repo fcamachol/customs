@@ -13,7 +13,7 @@ beforeEach(async () => {
   await truncateAll();
   const hash = await hashPassword('p');
   const u = await query(`INSERT INTO users (username,password_hash,role) VALUES ('c',$1,'capturista') RETURNING id`, [hash]);
-  userId = u.rows[0].id; token = signToken({ userId, role: 'capturista' });
+  userId = u.rows[0].id; token = signToken({ userId, role: 'capturista', tv: 0 });
   const m = await query(`INSERT INTO manifests (mawb_reference, created_by) VALUES ('369-1',$1) RETURNING id`, [userId]);
   const mid = m.rows[0].id;
   const mk = (color: string) => query('INSERT INTO shipments (id,manifest_id,data,risk_color) VALUES (gen_random_uuid(),$1,$2,$3)', [mid, '{}', color]);

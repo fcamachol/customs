@@ -19,13 +19,13 @@ beforeEach(async () => {
   const hash = await hashPassword('p');
 
   const admin = await query(`INSERT INTO users (username,password_hash,role) VALUES ('admin',$1,'admin') RETURNING id`, [hash]);
-  adminToken = signToken({ userId: admin.rows[0].id, role: 'admin' });
+  adminToken = signToken({ userId: admin.rows[0].id, role: 'admin' , tv: 0 });
 
   const cap = await query(`INSERT INTO users (username,password_hash,role) VALUES ('cap',$1,'capturista') RETURNING id`, [hash]);
-  capturistaToken = signToken({ userId: cap.rows[0].id, role: 'capturista' });
+  capturistaToken = signToken({ userId: cap.rows[0].id, role: 'capturista' , tv: 0 });
 
   const auth = await query(`INSERT INTO users (username,password_hash,role) VALUES ('aut',$1,'autoridad') RETURNING id`, [hash]);
-  autoridadToken = signToken({ userId: auth.rows[0].id, role: 'autoridad' });
+  autoridadToken = signToken({ userId: auth.rows[0].id, role: 'autoridad' , tv: 0 });
 
   // Insert 2 manifests with shipments in the target period
   const m1 = await query(

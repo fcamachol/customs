@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 export type Role = 'capturista' | 'admin' | 'autoridad' | 'super_admin';
-export interface Claims { userId: string; role: Role; }
+export interface Claims { userId: string; role: Role; tv: number; }
 
 // Default JWT secret to use ONLY in test/development environments (fail-closed pattern).
 const DEV_JWT_SECRET = 'change-me-in-production';
@@ -34,6 +34,11 @@ export function getJWTSecret(): string {
 export function signToken(claims: Claims): string {
   const SECRET = getJWTSecret();
   return jwt.sign(claims, SECRET, { expiresIn: '8h' });
+}
+
+/** Convenience overload for callers that have a db user row with token_version. */
+export function signTokenForUser(user: { id: string; role: Role; token_version: number }): string {
+  return signToken({ userId: user.id, role: user.role, tv: user.token_version });
 }
 
 export function verifyToken(token: string): Claims {

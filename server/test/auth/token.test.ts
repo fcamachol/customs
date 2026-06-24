@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { signToken, verifyToken } from '../../src/auth/token';
+import { signToken, verifyToken, signTokenForUser } from '../../src/auth/token';
 
 describe('token', () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -17,10 +17,24 @@ describe('token', () => {
   });
 
   it('round-trips a payload in test environment', () => {
-    const token = signToken({ userId: 'u1', role: 'admin' });
+    const token = signToken({ userId: 'u1', role: 'admin', tv: 0 });
     const claims = verifyToken(token);
     expect(claims.userId).toBe('u1');
     expect(claims.role).toBe('admin');
+  });
+
+  it('round-trip preserves tv claim', () => {
+    const token = signToken({ userId: 'u1', role: 'admin', tv: 3 });
+    const claims = verifyToken(token);
+    expect(claims.tv).toBe(3);
+  });
+
+  it('signTokenForUser embeds token_version as tv', () => {
+    const user = { id: 'u42', role: 'capturista' as const, token_version: 7 };
+    const token = signTokenForUser(user);
+    const claims = verifyToken(token);
+    expect(claims.userId).toBe('u42');
+    expect(claims.tv).toBe(7);
   });
 
   it('throws on a tampered token', () => {
@@ -53,7 +67,7 @@ describe('token', () => {
     // Resolver must return the real secret without throwing.
     expect(getJWTSecret()).toBe(realSecret);
     // Sign/verify round-trip works with the real secret.
-    const token = freshSign({ userId: 'u2', role: 'capturista' });
+    const token = freshSign({ userId: 'u2', role: 'capturista', tv: 0 });
     const claims = freshVerify(token);
     expect(claims.userId).toBe('u2');
     expect(claims.role).toBe('capturista');

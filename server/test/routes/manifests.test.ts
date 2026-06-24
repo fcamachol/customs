@@ -14,7 +14,7 @@ beforeEach(async () => {
   await truncateAll();
   const hash = await hashPassword('p');
   const { rows } = await query(`INSERT INTO users (username,password_hash,role) VALUES ('cap',$1,'capturista') RETURNING id`, [hash]);
-  token = signToken({ userId: rows[0].id, role: 'capturista' });
+  token = signToken({ userId: rows[0].id, role: 'capturista' , tv: 0 });
 });
 
 function xlsxBuffer(aoa: unknown[][]): Buffer {

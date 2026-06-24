@@ -12,7 +12,7 @@ export const authRouter = Router();
 authRouter.post('/login', loginLimiter, async (req, res) => {
   const { username, password, code } = req.body ?? {};
   const { rows } = await query(
-    `SELECT id, username, password_hash, role, mfa_secret, mfa_enabled FROM users WHERE username=$1`,
+    `SELECT id, username, password_hash, role, mfa_secret, mfa_enabled, token_version FROM users WHERE username=$1`,
     [username],
   );
   const user = rows[0];
@@ -26,13 +26,21 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
     }
   }
   await recordAudit({ userId: user.id, action: 'LOGIN', entity: 'session', ip: req.ip });
-  const token = signToken({ userId: user.id, role: user.role });
+  const token = signToken({ userId: user.id, role: user.role, tv: user.token_version });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
 });
 
 authRouter.get('/me', requireAuth, async (req, res) => {
   const { rows } = await query(`SELECT id, username, role, created_at FROM users WHERE id=$1`, [req.user!.userId]);
   res.json(rows[0]);
+});
+
+// POST /api/auth/logout — bumps token_version, invalidating all outstanding tokens (logout-all).
+authRouter.post('/logout', requireAuth, async (req, res) => {
+  const userId = req.user!.userId;
+  await query(`UPDATE users SET token_version = token_version + 1 WHERE id=$1`, [userId]);
+  await recordAudit({ userId, action: 'LOGOUT', entity: 'session', ip: req.ip });
+  res.json({ ok: true });
 });
 
 // POST /api/auth/mfa/setup — generate a secret, store in DB (not yet enabled), return secret + otpauth URL

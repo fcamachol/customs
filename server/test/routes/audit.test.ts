@@ -18,8 +18,8 @@ beforeEach(async () => {
   const cap = await query(`INSERT INTO users (username,password_hash,role) VALUES ('cap',$1,'capturista') RETURNING id`, [hash]);
   const aut = await query(`INSERT INTO users (username,password_hash,role) VALUES ('aut',$1,'autoridad') RETURNING id`, [hash]);
   userId = cap.rows[0].id;
-  capToken = signToken({ userId, role: 'capturista' });
-  authToken = signToken({ userId: aut.rows[0].id, role: 'autoridad' });
+  capToken = signToken({ userId, role: 'capturista', tv: 0 });
+  authToken = signToken({ userId: aut.rows[0].id, role: 'autoridad' , tv: 0 });
 });
 
 describe('audit query endpoint', () => {

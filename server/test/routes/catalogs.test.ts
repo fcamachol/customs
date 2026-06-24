@@ -26,9 +26,9 @@ beforeEach(async () => {
     `INSERT INTO users (username, password_hash, role) VALUES ('aut1', $1, 'autoridad') RETURNING id`,
     [hash],
   );
-  adminToken = signToken({ userId: adminRows[0].id, role: 'admin' });
-  capturistaToken = signToken({ userId: capRows[0].id, role: 'capturista' });
-  autoridadToken = signToken({ userId: autRows[0].id, role: 'autoridad' });
+  adminToken = signToken({ userId: adminRows[0].id, role: 'admin' , tv: 0 });
+  capturistaToken = signToken({ userId: capRows[0].id, role: 'capturista' , tv: 0 });
+  autoridadToken = signToken({ userId: autRows[0].id, role: 'autoridad' , tv: 0 });
 });
 
 describe('POST /api/catalogs/clients', () => {

@@ -23,9 +23,9 @@ beforeEach(async () => {
     query(`INSERT INTO users (username,password_hash,role) VALUES ('capB',$1,'capturista') RETURNING id`, [hash]),
   ]);
 
-  autoridadToken = signToken({ userId: autoridad.rows[0].id, role: 'autoridad' });
-  capturistaAToken = signToken({ userId: capA.rows[0].id, role: 'capturista' });
-  capturistaBToken = signToken({ userId: capB.rows[0].id, role: 'capturista' });
+  autoridadToken = signToken({ userId: autoridad.rows[0].id, role: 'autoridad' , tv: 0 });
+  capturistaAToken = signToken({ userId: capA.rows[0].id, role: 'capturista' , tv: 0 });
+  capturistaBToken = signToken({ userId: capB.rows[0].id, role: 'capturista' , tv: 0 });
 
   // Create a manifest owned by capturista A
   const m = await query(

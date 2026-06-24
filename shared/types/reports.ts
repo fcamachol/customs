@@ -42,6 +42,7 @@ export interface ReportsBundle {
 }
 
 // ---- Manifest ↔ pedimento reconciliation ----
+import type { SubdivisionInfo } from '../pedimento/subdivision';
 
 export interface ExtractedPedimentoLine {
   guia: string;
@@ -69,6 +70,8 @@ export interface ExtractedPedimento {
   usedPositional: boolean;
   confidence: number;           // 0..1
   warnings: string[];
+  subdivision: SubdivisionInfo;
+  coveredGuias: string[];
 }
 
 /** Built from the manifest's shipments (+ optional import data) — the "should be" side. */

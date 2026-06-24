@@ -1,5 +1,15 @@
 import type { ExtractedPedimento, ExtractedPedimentoLine } from '../types/reports';
+import type { SubdivisionInfo } from './subdivision';
 import { parseObservation } from './observation';
+
+const emptySubdivision: SubdivisionInfo = {
+  masterGuide: null,
+  ordinal: null,
+  isLast: false,
+  siblings: [],
+  bultos: null,
+  pesoBrutoKg: null,
+};
 
 const NUMERO_RE = /\b(\d{2})\s+(\d{2})\s+(\d{4})\s+(\d{7})\b/;       // "25 85 1653 5001684"
 const RFC_RE = /\b[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}\b/g;
@@ -31,5 +41,7 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
     usedPositional: false,
     confidence: lines.length > 0 ? 0.9 : 0.1,
     warnings,
+    subdivision: emptySubdivision,
+    coveredGuias: [],
   };
 }

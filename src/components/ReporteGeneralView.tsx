@@ -161,16 +161,18 @@ export default function ReporteGeneralView() {
       <Card className="p-6 shadow-sm space-y-5">
         <h2 className="text-sm font-bold text-slate-800">Cliente y plataforma</h2>
         <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Cliente">
+          <Field label="Cliente" htmlFor="rg-cliente">
             <SearchSelect
+              id="rg-cliente"
               value={selectedClientId}
               onChange={handleClientChange}
               options={clientOptions}
               placeholder="Selecciona un cliente…"
             />
           </Field>
-          <Field label="Plataforma">
+          <Field label="Plataforma" htmlFor="rg-plataforma">
             <SearchSelect
+              id="rg-plataforma"
               value={selectedPlatformId}
               onChange={setSelectedPlatformId}
               options={platformOptions}

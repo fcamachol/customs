@@ -33,7 +33,12 @@ export const createClientBody = z.object({
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
   website: z.string().optional(),
-  platform: z.unknown().optional(),
+  platform: z.object({
+    commercialName: z.string().optional(),
+    countryOfOrigin: z.string().optional(),
+    legalName: z.string().optional(),
+    email: z.string().email().optional().or(z.literal('')),
+  }).optional(),
 });
 
 export const updateClientBody = z.object({

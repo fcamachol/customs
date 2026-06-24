@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
-import { createClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam } from '../validation/schemas';
+import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam } from '../validation/schemas';
 
 export const catalogsRouter = Router();
 
@@ -83,6 +83,7 @@ catalogsRouter.put(
   '/clients/:id',
   requireAuth,
   requireRole('admin', 'capturista'),
+  validate({ params: idParam, body: updateClientBody }),
   async (req, res) => {
     const { id } = req.params;
     const { name, tax_id, address, phone, email, website } = req.body ?? {};

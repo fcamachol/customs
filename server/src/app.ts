@@ -15,9 +15,13 @@ import { auditRouter } from './routes/audit';
 import { importDataRouter } from './routes/importData';
 import { catalogsRouter } from './routes/catalogs';
 import { consolidatedRouter } from './routes/consolidated';
+import { globalLimiter } from './middleware/rateLimit';
 
 export function createApp(): Express {
   const app = express();
+  // SECURITY NOTE: `trust proxy: true` accepts any X-Forwarded-For value.
+  // For production, tighten to the known proxy hop count (e.g. 1) to prevent
+  // XFF spoofing of the rate-limit key.
   app.set('trust proxy', true);
   // Allow the browser client (different origin/port in dev) to call the API.
   // CORS_ORIGIN can be a comma-separated allowlist; defaults to permissive for dev.
@@ -34,6 +38,8 @@ export function createApp(): Express {
   }
   app.use(cors({ origin: corsOrigin }));
   app.use(express.json({ limit: '5mb' }));
+  // Global per-IP rate limiter applied to all /api/* routes (no-op in test env).
+  app.use('/api', globalLimiter);
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);

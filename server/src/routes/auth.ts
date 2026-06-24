@@ -5,10 +5,11 @@ import { signToken } from '../auth/token';
 import { requireAuth } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { generateSecret, keyUri, verifyTotp } from '../auth/mfa';
+import { loginLimiter } from '../middleware/rateLimit';
 
 export const authRouter = Router();
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', loginLimiter, async (req, res) => {
   const { username, password, code } = req.body ?? {};
   const { rows } = await query(
     `SELECT id, username, password_hash, role, mfa_secret, mfa_enabled FROM users WHERE username=$1`,

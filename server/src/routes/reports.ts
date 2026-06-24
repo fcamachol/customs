@@ -1,9 +1,10 @@
-import { Router, type Request, type Response, type NextFunction } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { createHash } from 'node:crypto';
 import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
 import { recordAudit, stableStringify } from '../services/audit';
 import { computeLock } from '../services/manifestLock';
+import { piiReportLimiter } from '../middleware/rateLimit';
 import {
   assertManifestAccess,
   loadShipments,
@@ -28,19 +29,6 @@ const PII_COLUMNS: Record<string, string> = {
 const PII_FIELD_NAMES = Object.keys(PII_COLUMNS);
 const MASK = '•••••';
 
-// Minimal in-memory per-user rate limiter for this PII route (no external dependency).
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 60;
-const hits = new Map<string, number[]>();
-function rateLimit(req: Request, res: Response, next: NextFunction): void {
-  const key = req.user?.userId ?? req.ip ?? 'anon';
-  const now = Date.now();
-  const recent = (hits.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-  if (recent.length >= RATE_MAX) { res.status(429).json({ error: 'Demasiadas solicitudes; intente de nuevo en un momento.' }); return; }
-  recent.push(now);
-  hits.set(key, recent);
-  next();
-}
 
 function parseReveal(raw: unknown): Set<string> {
   if (raw == null) return new Set();
@@ -62,7 +50,7 @@ function redactRows(rows: Record<string, string>[], reveal: Set<string>): boolea
   return masked;
 }
 
-reportsRouter.get('/:id/reports.json', requireAuth, rateLimit, async (req, res, next) => {
+reportsRouter.get('/:id/reports.json', requireAuth, piiReportLimiter, async (req, res, next) => {
  try {
   res.setHeader('Cache-Control', 'no-store, private');
 

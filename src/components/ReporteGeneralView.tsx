@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Search, Download } from 'lucide-react';
 import { apiGet, apiPost, apiDownload } from '../api';
-import { Card, Field, Input, Button } from './ui';
+import { Card, Field, Input, Button, SearchSelect } from './ui';
+import type { SearchSelectOption } from './ui';
+import type { Client } from './AddClientModal';
 
 interface RecordSummary {
   id: string;
@@ -34,6 +36,34 @@ export default function ReporteGeneralView() {
   const [denominacionPlataforma, setDenominacionPlataforma] = useState('');
   const [correoPlataforma, setCorreoPlataforma] = useState('');
 
+  // Cascading client → platform selection
+  const [clients, setClients] = useState<Client[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedPlatformId, setSelectedPlatformId] = useState('');
+
+  // Load clients on mount for the cascading selector
+  useEffect(() => {
+    apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => setClients([]));
+  }, []);
+
+  const clientOptions: SearchSelectOption[] = useMemo(
+    () => clients.map((c) => ({ value: c.id, label: c.name })),
+    [clients],
+  );
+
+  const platformOptions: SearchSelectOption[] = useMemo(() => {
+    const c = clients.find((c) => c.id === selectedClientId);
+    return (c?.platforms ?? []).map((p) => ({
+      value: p.id!,
+      label: p.commercialName || p.legalName || 'Plataforma',
+    }));
+  }, [clients, selectedClientId]);
+
+  function handleClientChange(id: string) {
+    setSelectedClientId(id);
+    setSelectedPlatformId(''); // platform list depends on the client
+  }
+
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -57,26 +87,15 @@ export default function ReporteGeneralView() {
 
   async function handleGenerateReport() {
     if (!selectedId) return;
+    if (!selectedClientId) { setError('Selecciona un cliente.'); return; }
+    if (!selectedPlatformId) { setError('Selecciona una plataforma.'); return; }
     setError(null);
     setDownloading(true);
     try {
-      // 1. Create (or upsert) the client in the catalog
-      const created = await apiPost<{ id: string }>('/api/catalogs/clients', {
-        name: nombreCompleto,
-        tax_id: idFiscal || undefined,
-        address: domicilio || undefined,
-        phone: telefono || undefined,
-        email: correoRemitente || undefined,
-        platform: {
-          commercialName: nombreComercial || undefined,
-          countryOfOrigin: paisOrigen || undefined,
-          legalName: denominacionPlataforma || undefined,
-          email: correoPlataforma || undefined,
-        },
+      await apiPost(`/api/manifests/${selectedId}/client`, {
+        clientId: selectedClientId,
+        platformId: selectedPlatformId,
       });
-      // 2. Associate client to the manifest
-      await apiPost(`/api/manifests/${selectedId}/client`, { clientId: created.id });
-      // 3. Download the report
       await apiDownload(`/api/records/${selectedId}/report.xlsx`, 'Reporte_General.xlsx');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al generar el reporte.');
@@ -137,6 +156,30 @@ export default function ReporteGeneralView() {
           Registro seleccionado: <span className="font-semibold">{selectedLabel}</span>
         </div>
       )}
+
+      {/* Cliente y plataforma */}
+      <Card className="p-6 shadow-sm space-y-5">
+        <h2 className="text-sm font-bold text-slate-800">Cliente y plataforma</h2>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="Cliente">
+            <SearchSelect
+              value={selectedClientId}
+              onChange={handleClientChange}
+              options={clientOptions}
+              placeholder="Selecciona un cliente…"
+            />
+          </Field>
+          <Field label="Plataforma">
+            <SearchSelect
+              value={selectedPlatformId}
+              onChange={setSelectedPlatformId}
+              options={platformOptions}
+              placeholder={selectedClientId ? 'Selecciona una plataforma…' : 'Elige un cliente primero'}
+              disabled={!selectedClientId}
+            />
+          </Field>
+        </div>
+      </Card>
 
       {/* Datos del Remitente */}
       <Card className="p-6 shadow-sm space-y-5">

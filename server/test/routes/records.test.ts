@@ -17,11 +17,11 @@ async function addShipment(manifestId: string, guideId: string, riskColor: strin
 }
 
 async function addPedimento(manifestId: string, fields: {
-  numero?: string; covered?: string[]; siblings?: string[]; fileId?: string; scanVerdict?: string;
+  numero?: string; covered?: string[]; siblings?: string[]; fileId?: string; scanVerdict?: string; subStatus?: string;
 } = {}) {
   await query(
-    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, sibling_numeros, file_id, pedimento_scan, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, sibling_numeros, file_id, pedimento_scan, sub_status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [
       manifestId,
       fields.numero ?? null,
@@ -29,6 +29,7 @@ async function addPedimento(manifestId: string, fields: {
       fields.siblings ?? null,
       fields.fileId ?? null,
       fields.scanVerdict ? JSON.stringify({ verdict: fields.scanVerdict, findings: [] }) : null,
+      fields.subStatus ?? 'pendiente',
       userId,
     ]);
 }
@@ -154,7 +155,7 @@ describe('records — detail pedimentos[]', () => {
     const id = m.rows[0].id;
     await addShipment(id, 'GUIA-A');
     const f = await query(`INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`, [userId]);
-    await addPedimento(id, { numero: '111', covered: ['GUIA-A'], fileId: f.rows[0].id, scanVerdict: 'clean' });
+    await addPedimento(id, { numero: '111', covered: ['GUIA-A'], fileId: f.rows[0].id, scanVerdict: 'clean', subStatus: 'cargado' });
 
     const res = await request(app).get(`/api/records/${id}`).set(auth());
     expect(res.status).toBe(200);
@@ -164,7 +165,7 @@ describe('records — detail pedimentos[]', () => {
     expect(p.fileId).toBe(f.rows[0].id);
     expect(p.scanVerdict).toBe('clean');
     expect(p.pedimentoPdf).toBe(`/api/files/${f.rows[0].id}`);
-    // A pedimento with an attached file is locked (computeLock on the row).
+    // A pedimento is locked when sub_status='cargado' (lifecycle-driven; PDF alone no longer locks).
     expect(p.lock).toMatchObject({ editable: false });
     expect(p.coveredGuias).toEqual(['GUIA-A']);
     // Per-pedimento report artifacts (Task 10): each subdivisión carries its own report/layout URLs.
@@ -242,23 +243,22 @@ describe('records — detail pedimentos[]', () => {
     expect(p.subStatus).toBe('pendiente');
   });
 
-  it('per-pedimento lock is APPROVED-locked when prevalidation status is APPROVED', async () => {
+  it('per-pedimento lock is cargado-locked when sub_status is cargado', async () => {
     const m = await query(
       `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('930-1','Cliente M',$1) RETURNING id`,
       [userId],
     );
     const id = m.rows[0].id;
-    const prevalidation = { status: 'APPROVED', errors: [] };
     await query(
-      `INSERT INTO pedimentos (manifest_id, numero_pedimento, prevalidation, created_by)
-       VALUES ($1,'444',$2::jsonb,$3)`,
-      [id, JSON.stringify(prevalidation), userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, sub_status, created_by)
+       VALUES ($1,'444','cargado',$2)`,
+      [id, userId],
     );
 
     const res = await request(app).get(`/api/records/${id}`).set(auth());
     expect(res.status).toBe(200);
     const p = res.body.pedimentos[0];
-    // Per-pedimento lock reflects the pedimento's own prevalidation (not manifests').
+    // Per-pedimento lock is lifecycle-driven: locked only when sub_status='cargado'.
     expect(p.lock).toMatchObject({ editable: false });
   });
 });

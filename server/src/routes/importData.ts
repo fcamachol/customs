@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { computeLock } from '../services/manifestLock';
+import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { validate } from '../validation/middleware';
 import { importDataBody } from '../validation/schemas';
 
@@ -68,10 +69,9 @@ importDataRouter.post(
       manifest_id: string;
       import_data: Record<string, unknown> | null;
       import_data_version: number;
-      prevalidation: { status?: string } | null;
-      file_id: string | null;
+      sub_status: SubStatus;
     }>(
-      'SELECT manifest_id, import_data, import_data_version, prevalidation, file_id FROM pedimentos WHERE id=$1',
+      'SELECT manifest_id, import_data, import_data_version, sub_status FROM pedimentos WHERE id=$1',
       [req.params.pedimentoId],
     );
     if (!before.rows.length) {
@@ -79,9 +79,9 @@ importDataRouter.post(
       return;
     }
 
-    // Edit-before-lock: once THIS pedimento is finalized the declaration is immutable. Lock is
-    // computed from the pedimento's own prevalidation + attached PDF (file_id).
-    const lock = computeLock(before.rows[0]);
+    // Edit-before-lock: once THIS pedimento is finalized (sub_status='cargado') the declaration is
+    // immutable. The source PDF no longer locks; only the lifecycle sub_status gates capture.
+    const lock = computeLock({ sub_status: before.rows[0].sub_status });
     if (!lock.editable) {
       res.status(409).json({ error: lock.reason, locked: true });
       return;

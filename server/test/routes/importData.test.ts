@@ -13,11 +13,11 @@ let capId: string;
 let manifestId: string;
 let pedimentoId: string;
 
-async function addPedimento(mId: string, fields: { fileId?: string | null; prevalidation?: object | null } = {}) {
+async function addPedimento(mId: string, fields: { fileId?: string | null; prevalidation?: object | null; subStatus?: string } = {}) {
   const r = await query<{ id: string }>(
-    `INSERT INTO pedimentos (manifest_id, numero_pedimento, file_id, prevalidation, created_by)
-     VALUES ($1,'111',$2,$3,$4) RETURNING id`,
-    [mId, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, capId],
+    `INSERT INTO pedimentos (manifest_id, numero_pedimento, file_id, prevalidation, sub_status, created_by)
+     VALUES ($1,'111',$2,$3,$4,$5) RETURNING id`,
+    [mId, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
   );
   return r.rows[0].id;
 }
@@ -105,17 +105,27 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
     expect(stale.body.conflict).toBe(true);
   });
 
-  it('rejects edits with 409 once the pedimento row is locked (PDF attached)', async () => {
-    const f = await query(
-      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('pedimento_pdf','p.pdf','/p',1,$1) RETURNING id`,
-      [capId]);
-    const lockedId = await addPedimento(manifestId, { fileId: f.rows[0].id });
+  it('rejects edits with 409 once the pedimento row is finalized (sub_status=cargado)', async () => {
+    const lockedId = await addPedimento(manifestId, { subStatus: 'cargado' });
     const res = await request(app)
       .post(`/api/pedimentos/${lockedId}/import-data`)
       .set('Authorization', `Bearer ${capturistaToken}`)
       .send(IMPORT_DATA);
     expect(res.status).toBe(409);
     expect(res.body.locked).toBe(true);
+  });
+
+  it('PDF attached but sub_status not cargado → still editable (PDF no longer locks)', async () => {
+    const f = await query(
+      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('pedimento_pdf','p.pdf','/p',1,$1) RETURNING id`,
+      [capId]);
+    const editableId = await addPedimento(manifestId, { fileId: f.rows[0].id, subStatus: 'capturado' });
+    const res = await request(app)
+      .post(`/api/pedimentos/${editableId}/import-data`)
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send(IMPORT_DATA);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 
   it("busts THIS pedimento's cached report but leaves risk_stale untouched", async () => {

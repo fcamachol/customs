@@ -4,6 +4,7 @@ import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
 import { recordAudit, stableStringify } from '../services/audit';
 import { computeLock } from '../services/manifestLock';
+import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { piiReportLimiter } from '../middleware/rateLimit';
 import {
   assertManifestAccess,
@@ -104,9 +105,9 @@ pedimentoReportsRouter.get('/:pedimentoId/reports.json', requireAuth, piiReportL
   const scope = await loadPedimentoScope(req.params.pedimentoId);
   if (!scope) { res.status(404).json({ error: 'Not found' }); return; }
 
-  // Lock is derived from the pedimento's own finalization state (prevalidation + attached PDF).
-  const lockRow = await query<{ prevalidation: { status?: string } | null; file_id: string | null }>(
-    'SELECT prevalidation, file_id FROM pedimentos WHERE id=$1', [req.params.pedimentoId]);
+  // Lock is derived from the pedimento's lifecycle sub_status (cargado = finalized, immutable).
+  const lockRow = await query<{ sub_status: SubStatus }>(
+    'SELECT sub_status FROM pedimentos WHERE id=$1', [req.params.pedimentoId]);
 
   const loadedManifest = await loadShipments(scope.manifestId);
   const subset = subsetForCoverage(loadedManifest, scope.coveredGuias);
@@ -131,7 +132,7 @@ pedimentoReportsRouter.get('/:pedimentoId/reports.json', requireAuth, piiReportL
   const bundle: PedimentoReportsBundle = {
     report,
     layout,
-    lock: computeLock(lockRow.rows[0]),
+    lock: computeLock({ sub_status: lockRow.rows[0]?.sub_status }),
     masked,
     generatedAt,
     contentHash,

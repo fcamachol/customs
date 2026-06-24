@@ -102,24 +102,18 @@ describe('POST /api/manifests/:id/promote', () => {
     expect(ships.rows[0].n).toBe(0);
   });
 
-  it('blocks promotion when any pedimento subdivision is locked (file attached)', async () => {
+  it('blocks promotion when any pedimento subdivision is finalized (sub_status=cargado)', async () => {
     // Stage a manifest with one valid row so it can be promoted.
     const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
       .field('mawbReference', '369-5').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
     const id = up.body.manifestId;
 
-    // Seed a locked pedimento row (has a file_id → computeLock returns editable:false).
-    // This mirrors production: after Task 7–9 cutover, lock comes from pedimentos rows only,
-    // NOT from manifests.file_id / manifests.prevalidation (which are no longer written).
+    // Seed a finalized pedimento row (sub_status='cargado' → computeLock returns editable:false).
+    // Lock is lifecycle-driven: source PDF and prevalidation alone no longer block promotion.
     const u = await query('SELECT id FROM users WHERE username=$1', ['cap']);
-    const f = await query(
-      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by)
-       VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`,
-      [u.rows[0].id],
-    );
     await query(
-      'INSERT INTO pedimentos (manifest_id, file_id, created_by) VALUES ($1,$2,$3)',
-      [id, f.rows[0].id, u.rows[0].id],
+      `INSERT INTO pedimentos (manifest_id, sub_status, created_by) VALUES ($1,'cargado',$2)`,
+      [id, u.rows[0].id],
     );
 
     const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
@@ -130,21 +124,24 @@ describe('POST /api/manifests/:id/promote', () => {
     expect(ships.rows[0].n).toBe(0);
   });
 
-  it('blocks promotion when any pedimento subdivision is locked (prevalidation APPROVED)', async () => {
+  it('does NOT block promotion when pedimento has file_id but sub_status is not cargado (PDF no longer locks)', async () => {
     const up = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
       .field('mawbReference', '369-6').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
     const id = up.body.manifestId;
 
     const u = await query('SELECT id FROM users WHERE username=$1', ['cap']);
+    const f = await query(
+      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by)
+       VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`,
+      [u.rows[0].id],
+    );
     await query(
-      `INSERT INTO pedimentos (manifest_id, prevalidation, created_by)
-       VALUES ($1,$2::jsonb,$3)`,
-      [id, JSON.stringify({ status: 'APPROVED', errors: [] }), u.rows[0].id],
+      `INSERT INTO pedimentos (manifest_id, file_id, sub_status, created_by) VALUES ($1,$2,'capturado',$3)`,
+      [id, f.rows[0].id, u.rows[0].id],
     );
 
     const prom = await request(app).post(`/api/manifests/${id}/promote`).set('Authorization', `Bearer ${token}`);
-    expect(prom.status).toBe(409);
-    expect(prom.body.error).toMatch(/bloqueado/i);
+    expect(prom.status).toBe(200);
   });
 
   it('allows promotion when pedimentos exist but none is locked', async () => {

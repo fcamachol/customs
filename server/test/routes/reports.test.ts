@@ -34,12 +34,12 @@ beforeEach(async () => {
 /** Create a pedimento (subdivisión) covering the given guías. */
 async function addPedimento(
   coveredGuias: string[] = ['g1'],
-  fields: { fileId?: string | null; prevalidation?: object | null } = {},
+  fields: { fileId?: string | null; prevalidation?: object | null; subStatus?: string } = {},
 ): Promise<string> {
   const r = await query<{ id: string }>(
-    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, file_id, prevalidation, created_by)
-     VALUES ($1,'111',$2,$3,$4,$5) RETURNING id`,
-    [manifestId, coveredGuias, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, capId],
+    `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, file_id, prevalidation, sub_status, created_by)
+     VALUES ($1,'111',$2,$3,$4,$5,$6) RETURNING id`,
+    [manifestId, coveredGuias, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
   );
   return r.rows[0].id;
 }
@@ -142,8 +142,8 @@ describe('GET /api/pedimentos/:pedimentoId/reports.json — per-pedimento report
     expect(actions).toContain('REVEAL_PII');
   });
 
-  it('reflects lock state from THIS pedimento finalization', async () => {
-    const pedimentoId = await addPedimento(['g1'], { prevalidation: { status: 'APPROVED' } });
+  it('reflects lock state from THIS pedimento finalization (sub_status=cargado)', async () => {
+    const pedimentoId = await addPedimento(['g1'], { subStatus: 'cargado' });
     const res = await getPedReports(pedimentoId, capToken);
     expect(res.body.lock.editable).toBe(false);
   });
@@ -161,8 +161,8 @@ describe('per-pedimento import-data: lock + concurrency + report read/cache cohe
     return request(app).post(`/api/pedimentos/${pedimentoId}/import-data`).set('Authorization', `Bearer ${capToken}`).send(body);
   }
 
-  it('rejects edits with 409 once the pedimento row is locked', async () => {
-    const pedimentoId = await addPedimento(['g1'], { prevalidation: { status: 'APPROVED' } });
+  it('rejects edits with 409 once the pedimento row is finalized (sub_status=cargado)', async () => {
+    const pedimentoId = await addPedimento(['g1'], { subStatus: 'cargado' });
     const res = await postImport(pedimentoId, DATA);
     expect(res.status).toBe(409);
     expect(res.body.locked).toBe(true);

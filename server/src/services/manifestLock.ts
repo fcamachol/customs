@@ -1,10 +1,7 @@
 import type { ReportLockState } from '../../../shared/types/reports';
+import type { SubStatus } from '../../../shared/pedimento/subStatus';
 
-export interface ManifestLockInput {
-  prevalidation?: { status?: string } | null;
-  /** pedimento PDF file id (manifests.file_id) — present once a pedimento document is attached. */
-  file_id?: string | null;
-}
+export interface PedimentoLockInput { sub_status?: SubStatus | null }
 
 /**
  * Single source of truth for whether a manifest's import-data may still be edited.
@@ -20,22 +17,13 @@ export interface ManifestLockInput {
  * When Track 2 ships, this function should gate the immutable lock on the presence of a real sello
  * (RSA-SHA256 CSD signature) and/or an acuse de recibo from VUCEM — NOT on structural APPROVED.
  */
-export function computeLock(m: ManifestLockInput | null | undefined): ReportLockState {
-  // Structural lock — NOT a legal seal (see jsdoc above)
-  if (m?.prevalidation?.status === 'APPROVED') {
+export function computeLock(p: PedimentoLockInput | null | undefined): ReportLockState {
+  if (p?.sub_status === 'cargado') {
     return {
       editable: false,
       reason:
-        'El pedimento ya fue prevalidado estructuralmente (APROBADO); los datos están bloqueados. ' +
-        'NOTA: esta es una pre-validación local, no una firma legal. El documento no ha sido transmitido al SAT/VUCEM.',
-    };
-  }
-  if (m?.file_id) {
-    return {
-      editable: false,
-      reason:
-        'Ya se adjuntó el pedimento PDF; los datos están bloqueados. ' +
-        'NOTA: la adjunción de un PDF no equivale a firma legal ni transmisión al SAT/VUCEM.',
+        'El pedimento ya fue finalizado (cargado); los datos están bloqueados. ' +
+        'NOTA: esta es una finalización local, no una firma legal ni transmisión al SAT/VUCEM.',
     };
   }
   return { editable: true, reason: null };

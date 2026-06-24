@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
 import { canSeeAll } from '../auth/access';
 import { computeLock } from '../services/manifestLock';
+import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { computeCoverage } from '../../../shared/pedimento/coverage';
 import { loadShipments } from '../services/reportData';
 
@@ -25,7 +26,7 @@ interface PedimentoRow {
   prevalidation: { status?: string } | null;
   import_data: Record<string, unknown> | null;
   import_data_version: number;
-  sub_status: string;
+  sub_status: SubStatus;
 }
 
 const PEDIMENTO_COLS = `id, manifest_id, numero_pedimento, subdivision_ordinal, is_last_subdivision,
@@ -160,7 +161,7 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     isLast: p.is_last_subdivision ?? false,
     fileId: p.file_id,
     scanVerdict: p.pedimento_scan?.verdict ?? null,
-    lock: computeLock({ prevalidation: p.prevalidation, file_id: p.file_id }),
+    lock: computeLock({ sub_status: p.sub_status }),
     // prevalidation (build output) is now per-pedimento (Task 9). Consumers use this to check
     // whether the subdivision has been structurally validated before PDF attachment/signing.
     prevalidation: p.prevalidation ?? null,
@@ -187,10 +188,10 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
   // since manifests.file_id is being dropped. Per-pedimento PDFs live in pedimentos[].
   const topPedimentoFileId = peds.rows.find((p) => p.file_id)?.file_id ?? null;
 
-  // Top-level edit lock for the (still manifest-scoped) import-data capture form: locked once any
-  // pedimento PDF is attached. Prevalidation is now per-pedimento (Task 9); manifests.prevalidation
-  // is no longer written, so the top-level lock gates only on PDF attachment.
-  const lock = computeLock({ prevalidation: null, file_id: topPedimentoFileId });
+  // Top-level edit lock: aggregate signal — locked only when ALL pedimentos are finalized (cargado).
+  // The per-pedimento lock (pedimentos[].lock) is the authoritative gate for capture; this manifest-
+  // level field is a convenience indicator for the UI and will be removed in Task 7.
+  const lock = computeLock({ sub_status: peds.rows.length > 0 && peds.rows.every((p) => p.sub_status === 'cargado') ? 'cargado' : null });
 
   // Carries import-data (business data) — keep it out of shared caches.
   res.setHeader('Cache-Control', 'no-store, private');

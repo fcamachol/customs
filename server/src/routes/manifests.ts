@@ -7,6 +7,7 @@ import { encryptShipmentPii } from '../crypto/fieldCrypto';
 import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
 import { computeLock } from '../services/manifestLock';
+import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
 import { manifestCreateBody, manifestClientBody } from '../validation/schemas';
@@ -82,10 +83,10 @@ manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturis
 
   // Lock is derived from pedimentos rows (Task 7–9 cutover): manifests.file_id and
   // manifests.prevalidation are no longer written (Tasks 7 and 9). Block re-promotion if any
-  // pedimento subdivision for this manifest is already finalized (PDF attached or prevalidated).
-  const peds = await query<{ file_id: string | null; prevalidation: { status?: string } | null }>(
-    'SELECT file_id, prevalidation FROM pedimentos WHERE manifest_id=$1', [id]);
-  const anyLocked = peds.rows.some((p) => !computeLock({ prevalidation: p.prevalidation, file_id: p.file_id }).editable);
+  // pedimento subdivision for this manifest is already finalized (sub_status='cargado').
+  const peds = await query<{ sub_status: SubStatus }>(
+    'SELECT sub_status FROM pedimentos WHERE manifest_id=$1', [id]);
+  const anyLocked = peds.rows.some((p) => !computeLock({ sub_status: p.sub_status }).editable);
   if (anyLocked) { res.status(409).json({ error: 'Manifiesto bloqueado' }); return; }
   if (m.ingestion_status !== 'staged') { res.status(409).json({ error: `No se puede promover desde estado '${m.ingestion_status}'` }); return; }
 

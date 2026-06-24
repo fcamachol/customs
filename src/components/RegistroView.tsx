@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
-import { Upload, Check, Plus } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Upload, Check } from 'lucide-react';
 import { apiGet, apiPost, apiUpload } from '../api';
-import { Stepper, Button, Field, Input } from './ui';
+import { Stepper, Button, Field, Input, SearchSelect } from './ui';
+import type { SearchSelectOption } from './ui';
 import { extractMawb } from '../lib/extractMawb';
-import { AddClientModal, type Client } from './AddClientModal';
+import { AddClientModal, type Client, type ClientPlatform } from './AddClientModal';
+import { AddPlatformModal } from './AddPlatformModal';
 import { RiskSummary, RiskResultTable, type RiskRow, type RiskSummaryData } from './RiskResultTable';
 
 interface StagingResponse {
@@ -34,16 +36,15 @@ const VALIDATION_LABELS = [
 
 const STEPS = ['Cargar manifiesto', 'Datos del manifiesto', 'Análisis de riesgo', 'Resultado'];
 
-const SELECT_CLS =
-  'w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/25';
-
 export default function RegistroView() {
   const [current, setCurrent] = useState(0);
   const [mawbReference, setMawbReference] = useState('');
   const [mawbAmbiguous, setMawbAmbiguous] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [clientId, setClientId] = useState('');
+  const [platformId, setPlatformId] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [platformModalOpen, setPlatformModalOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unmappedHeaders, setUnmappedHeaders] = useState<string[]>([]);
@@ -54,6 +55,24 @@ export default function RegistroView() {
   useEffect(() => {
     apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => {});
   }, []);
+
+  const clientOptions: SearchSelectOption[] = useMemo(
+    () => clients.map((c) => ({ value: c.id, label: c.name })),
+    [clients],
+  );
+
+  const platformOptions: SearchSelectOption[] = useMemo(() => {
+    const c = clients.find((c) => c.id === clientId);
+    return (c?.platforms ?? []).map((p) => ({
+      value: p.id!,
+      label: p.commercialName || p.legalName || 'Plataforma',
+    }));
+  }, [clients, clientId]);
+
+  function handleClientChange(id: string) {
+    setClientId(id);
+    setPlatformId(''); // platform list depends on the client
+  }
 
   // Checklist animation runs while on the análisis step (index 2).
   useEffect(() => {
@@ -79,6 +98,17 @@ export default function RegistroView() {
   function handleClientCreated(c: Client) {
     setClients((prev) => [...prev, c]);
     setClientId(c.id);
+    setPlatformId(''); // a freshly-created client has no platforms yet
+  }
+
+  function handlePlatformCreated(p: ClientPlatform) {
+    // Append the new platform to the selected client and select it.
+    setClients((prev) =>
+      prev.map((c) =>
+        c.id === clientId ? { ...c, platforms: [...(c.platforms ?? []), p] } : c,
+      ),
+    );
+    if (p.id) setPlatformId(p.id);
   }
 
   async function runAnalysis() {
@@ -90,6 +120,7 @@ export default function RegistroView() {
     if (!file) { setError('Selecciona un archivo de manifiesto.'); return; }
     if (!mawbReference.trim()) { setError('El MAWB es requerido.'); return; }
     if (!clientId) { setError('Selecciona un cliente.'); return; }
+    if (!platformId) { setError('Selecciona una plataforma.'); return; }
 
     setCurrent(2);
     setCheckedCount(0);
@@ -110,7 +141,7 @@ export default function RegistroView() {
         return;
       }
 
-      await apiPost(`/api/manifests/${stagingResult.manifestId}/client`, { clientId });
+      await apiPost(`/api/manifests/${stagingResult.manifestId}/client`, { clientId, platformId });
       await apiPost(`/api/manifests/${stagingResult.manifestId}/promote`, {});
       const risk = await apiPost<RiskResponse>(`/api/manifests/${stagingResult.manifestId}/risk`, {});
       setResult(risk);
@@ -198,24 +229,29 @@ export default function RegistroView() {
             </p>
           )}
 
-          <Field label="Cliente" htmlFor="cliente">
-            <div className="flex items-center gap-2">
-              <select
-                id="cliente"
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Cliente" htmlFor="reg-cliente">
+              <SearchSelect
+                id="reg-cliente"
                 value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                className={SELECT_CLS}
-              >
-                <option value="">Selecciona un cliente…</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-              <Button variant="secondary" type="button" onClick={() => setModalOpen(true)}>
-                <Plus className="h-4 w-4" /> Agregar cliente
-              </Button>
-            </div>
-          </Field>
+                onChange={handleClientChange}
+                options={clientOptions}
+                placeholder="Selecciona un cliente…"
+                action={{ label: 'Agregar cliente', onClick: () => setModalOpen(true) }}
+              />
+            </Field>
+            <Field label="Plataforma" htmlFor="reg-plataforma">
+              <SearchSelect
+                id="reg-plataforma"
+                value={platformId}
+                onChange={setPlatformId}
+                options={platformOptions}
+                placeholder={clientId ? 'Selecciona una plataforma…' : 'Elige un cliente primero'}
+                disabled={!clientId}
+                action={{ label: 'Agregar plataforma', onClick: () => setPlatformModalOpen(true) }}
+              />
+            </Field>
+          </div>
 
           <div className="flex gap-2">
             <Button variant="secondary" type="button" onClick={() => setCurrent(0)}>
@@ -223,7 +259,7 @@ export default function RegistroView() {
             </Button>
             <Button
               type="button"
-              disabled={!mawbReference.trim() || !clientId}
+              disabled={!mawbReference.trim() || !clientId || !platformId}
               onClick={runAnalysis}
             >
               Realizar análisis de Riesgo
@@ -271,6 +307,14 @@ export default function RegistroView() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onCreated={handleClientCreated}
+      />
+
+      <AddPlatformModal
+        open={platformModalOpen}
+        clientId={clientId}
+        clientName={clients.find((c) => c.id === clientId)?.name}
+        onClose={() => setPlatformModalOpen(false)}
+        onCreated={handlePlatformCreated}
       />
     </div>
   );

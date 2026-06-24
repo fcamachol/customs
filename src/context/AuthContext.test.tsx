@@ -26,6 +26,27 @@ describe('AuthContext', () => {
     localStorage.clear();
   });
 
+  it('restores a persisted session on mount when a token is present', async () => {
+    localStorage.setItem('token', 'existing');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/me')) {
+        return { ok: true, json: async () => ({ id: '1', username: 'admin', role: 'admin' }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    }) as any);
+    render(<AuthProvider><Probe /></AuthProvider>);
+    // Without restore, this would stay 'anon'; with restore it rehydrates from /me.
+    await waitFor(() => expect(screen.getByText('admin')).toBeTruthy());
+  });
+
+  it('clears an invalid persisted token on mount and stays logged out', async () => {
+    localStorage.setItem('token', 'stale');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'Token revoked' }) })) as any);
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await waitFor(() => expect(screen.getByText('anon')).toBeTruthy());
+    expect(localStorage.getItem('token')).toBeNull();
+  });
+
   it('logs in and exposes the user', async () => {
     render(<AuthProvider><Probe /></AuthProvider>);
     screen.getByText('anon').click();

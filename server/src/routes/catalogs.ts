@@ -19,7 +19,8 @@ catalogsRouter.get('/clients', requireAuth, async (req, res) => {
                   'commercialName', p.commercial_name,
                   'countryOfOrigin', p.country_of_origin,
                   'legalName', p.legal_name,
-                  'email', p.email
+                  'email', p.email,
+                  'url', p.url
                 ) ORDER BY p.created_at
               ) FILTER (WHERE p.id IS NOT NULL),
               '[]'
@@ -55,13 +56,13 @@ catalogsRouter.post(
       const client = inserted.rows[0];
 
       let platforms: unknown[] = [];
-      if (pn('commercialName') || pn('countryOfOrigin') || pn('legalName') || pn('email')) {
+      if (pn('commercialName') || pn('countryOfOrigin') || pn('legalName') || pn('email') || pn('url')) {
         const pr = await q(
-          `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, url, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
-                     legal_name AS "legalName", email`,
-          [client.id, pn('commercialName'), pn('countryOfOrigin'), pn('legalName'), pn('email'), req.user!.userId],
+                     legal_name AS "legalName", email, url`,
+          [client.id, pn('commercialName'), pn('countryOfOrigin'), pn('legalName'), pn('email'), pn('url'), req.user!.userId],
         );
         platforms = pr.rows;
       }
@@ -143,7 +144,7 @@ catalogsRouter.delete(
 
 const PLATFORM_RETURNING =
   `id, commercial_name AS "commercialName", country_of_origin AS "countryOfOrigin",
-   legal_name AS "legalName", email`;
+   legal_name AS "legalName", email, url`;
 
 // helper: normalize '' → null
 const orNull = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -158,12 +159,12 @@ catalogsRouter.post(
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
     if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
-    const { commercialName, countryOfOrigin, legalName, email } = req.body;
+    const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
-      `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, url, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING ${PLATFORM_RETURNING}`,
-      [id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email), req.user!.userId],
+      [id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email), orNull(url), req.user!.userId],
     );
     await recordAudit({
       userId: req.user!.userId, action: 'CREATE_CLIENT_PLATFORM', entity: 'client_platform',
@@ -183,13 +184,13 @@ catalogsRouter.put(
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
     if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
-    const { commercialName, countryOfOrigin, legalName, email } = req.body;
+    const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
       `UPDATE client_platforms
-         SET commercial_name = $3, country_of_origin = $4, legal_name = $5, email = $6
+         SET commercial_name = $3, country_of_origin = $4, legal_name = $5, email = $6, url = $7
        WHERE id = $1 AND client_id = $2
        RETURNING ${PLATFORM_RETURNING}`,
-      [pid, id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email)],
+      [pid, id, orNull(commercialName), orNull(countryOfOrigin), orNull(legalName), orNull(email), orNull(url)],
     );
     await recordAudit({
       userId: req.user!.userId, action: 'UPDATE_CLIENT_PLATFORM', entity: 'client_platform',

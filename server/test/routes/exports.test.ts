@@ -25,7 +25,7 @@ beforeEach(async () => {
 });
 
 describe('exports', () => {
-  it('returns a parseable LayOut workbook with 34 columns', async () => {
+  it('returns a parseable LayOut workbook with 35 columns', async () => {
     const res = await request(app).get(`/api/records/${manifestId}/layout.xlsx`).set('Authorization', `Bearer ${token}`).buffer().parse((r, cb) => {
       const chunks: Buffer[] = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks)));
     });
@@ -33,7 +33,7 @@ describe('exports', () => {
     const wb = XLSX.read(res.body, { type: 'buffer' });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const json = XLSX.utils.sheet_to_json(sheet);
-    expect(Object.keys(json[0] as object)).toHaveLength(34);
+    expect(Object.keys(json[0] as object)).toHaveLength(35);
   });
 
   it('populates report Motivo from persisted risk incidences', async () => {

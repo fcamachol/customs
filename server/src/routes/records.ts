@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { requireAuth } from '../auth/middleware';
 import { canSeeAll } from '../auth/access';
 import { computeLock } from '../services/manifestLock';
+import { computeSeguimientoStatus } from '../../../shared/pedimento/seguimientoStatus';
 
 export const recordsRouter = Router();
 
@@ -57,9 +58,28 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
   }
 
   const { rows } = await query(
-    `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName", m.created_at AS "createdAt"
+    `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName", m.created_at AS "createdAt",
+            m.import_data AS "importData", m.prevalidation, m.file_id AS "fileId", m.pedimento_scan AS "pedimentoScan"
      FROM manifests m WHERE ${clauses.join(' AND ')} ORDER BY m.created_at DESC`, params);
-  res.json(rows);
+  // Derive the Seguimiento status/lock for the two-tab work queue (no dedicated status column).
+  const summaries = rows.map((r) => {
+    const { status, locked, scanVerdict } = computeSeguimientoStatus({
+      importData: r.importData,
+      prevalidationStatus: r.prevalidation?.status ?? null,
+      fileId: r.fileId,
+      scanVerdict: r.pedimentoScan?.verdict ?? null,
+    });
+    return {
+      id: r.id,
+      mawbReference: r.mawbReference,
+      clientName: r.clientName,
+      createdAt: r.createdAt,
+      status,
+      locked,
+      scanVerdict,
+    };
+  });
+  res.json(summaries);
 });
 
 recordsRouter.get('/:id', requireAuth, async (req, res) => {

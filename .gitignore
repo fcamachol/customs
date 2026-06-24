@@ -14,3 +14,6 @@ server/.env
 
 # Local dev credentials (never commit)
 DEV_CREDENTIALS.md
+
+# Local Claude Code config + worktrees (not source)
+.claude/

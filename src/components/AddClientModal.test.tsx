@@ -23,7 +23,7 @@ describe('AddClientModal', () => {
     render(<AddClientModal open onClose={onClose} onCreated={onCreated} />);
 
     fireEvent.change(screen.getByLabelText('Nombre / razón social'), { target: { value: 'ACME' } });
-    fireEvent.change(screen.getByLabelText('Id fiscal (RFC)'), { target: { value: 'ACM010101AAA' } });
+    fireEvent.change(screen.getByLabelText('Id fiscal'), { target: { value: 'ACM010101AAA' } });
     fireEvent.click(screen.getByRole('button', { name: /Guardar cliente/i }));
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: 'c1', name: 'ACME' }));

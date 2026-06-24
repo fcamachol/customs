@@ -4,6 +4,7 @@ import type { Claims } from '../auth/token';
 import { decryptShipment } from '../crypto/fieldCrypto';
 import { toLayoutRows } from '../../../shared/export/layoutExport';
 import { buildReportRows } from '../../../shared/export/reportBuilder';
+import { countryDisplayName } from '../../../shared/parsing/catalogs';
 import type { Shipment } from '../../../shared/types/shipment';
 import type { RiskScreenRow, RiskResultado } from '../../../shared/types/reports';
 
@@ -62,7 +63,7 @@ export async function buildReportRowsForManifest(
 ): Promise<Record<string, string>[]> {
   const m = await query(
     `SELECT m.import_data, c.name, c.tax_id, c.address, c.phone, c.email,
-            p.commercial_name, p.country_of_origin, p.legal_name, p.email AS platform_email
+            p.commercial_name, p.country_of_origin, p.legal_name, p.email AS platform_email, p.url AS platform_url
      FROM manifests m
      LEFT JOIN clients c ON c.id = m.client_id
      LEFT JOIN client_platforms p ON p.id = m.platform_id
@@ -105,9 +106,10 @@ export async function buildReportRowsForManifest(
       // four fields are empty strings, which clears the Plataforma block.
       platform: {
         commercialName: manifest.commercial_name ?? '',
-        countryOfOrigin: manifest.country_of_origin ?? '',
+        countryOfOrigin: countryDisplayName(manifest.country_of_origin ?? ''),
         legalName: manifest.legal_name ?? '',
         email: manifest.platform_email ?? '',
+        url: manifest.platform_url ?? '',
       },
     } : undefined,
   });

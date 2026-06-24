@@ -47,6 +47,12 @@ export function mapRowToShipment(row: Record<string, unknown>): Shipment {
   const proc = s.procedenceCountry || s.sender?.countryCode || s.sender?.countryName || '';
   const resolvedProc = resolveCountry(proc);
   s.procedenceCountry = resolvedProc ?? (proc ? String(proc).toUpperCase() : '');
+  // país de origen (platform): normalize to the ANAM clave, else keep uppercased raw.
+  const origin = s.platform?.countryOfOrigin || '';
+  if (origin) {
+    const resolvedOrigin = resolveCountry(origin);
+    s.platform.countryOfOrigin = resolvedOrigin ?? String(origin).toUpperCase();
+  }
   return s as Shipment;
 }
 

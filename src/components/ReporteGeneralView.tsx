@@ -4,6 +4,7 @@ import { Search, Download } from 'lucide-react';
 import { apiGet, apiPost, apiDownload } from '../api';
 import { Card, Field, Input, Button, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
+import { ANAM_COUNTRY_OPTIONS } from '../../shared/parsing/catalogs';
 import type { Client } from './AddClientModal';
 
 interface RecordSummary {
@@ -63,6 +64,14 @@ export default function ReporteGeneralView() {
     setSelectedClientId(id);
     setSelectedPlatformId(''); // platform list depends on the client
   }
+
+  // Prefill país de origen from the chosen platform's configured clave.
+  useEffect(() => {
+    if (!selectedPlatformId) { setPaisOrigen(''); return; }
+    const c = clients.find((c) => c.id === selectedClientId);
+    const p = c?.platforms?.find((p) => p.id === selectedPlatformId);
+    setPaisOrigen(p?.countryOfOrigin ?? '');
+  }, [selectedPlatformId, selectedClientId, clients]);
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -251,11 +260,11 @@ export default function ReporteGeneralView() {
             />
           </Field>
           <Field label="País de origen" htmlFor="plataforma-pais">
-            <Input
+            <SearchSelect
               id="plataforma-pais"
-              type="text"
               value={paisOrigen}
-              onChange={(e) => setPaisOrigen(e.target.value)}
+              onChange={setPaisOrigen}
+              options={ANAM_COUNTRY_OPTIONS}
               placeholder="México, China, EUA…"
             />
           </Field>

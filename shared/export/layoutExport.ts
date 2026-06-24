@@ -1,3 +1,4 @@
+// LayOut_sistema — 35-column flat register (cols 31–35 = Plataforma block incl. URL).
 import type { Shipment } from '../types/shipment';
 import { GENERIC_T1_FRACTION_LAYOUT } from '../pedimento/fraction';
 
@@ -11,7 +12,7 @@ export const LAYOUT_HEADERS = [
   'Consignatario ID Fiscal país residencia', 'Consignatario No. Seguridad Social',
   'Consignatario No. pasaporte', 'Consignatario Domicilio', 'Consignatario Teléfono', 'Consignatario Correo',
   'Remitente Nombre/razón social', 'Remitente Id fiscal', 'Remitente Domicilio', 'Remitente Teléfono', 'Remitente Correo',
-  'Plataforma Nombre comercial', 'Plataforma País de origen', 'Plataforma Razón social', 'Plataforma Correo',
+  'Plataforma Nombre comercial', 'Plataforma País de origen', 'Plataforma Razón social', 'Plataforma Correo', 'Plataforma URL',
 ] as const;
 
 export function toLayoutRows(shipments: Shipment[]): Record<string, string>[] {
@@ -26,7 +27,7 @@ export function toLayoutRows(shipments: Shipment[]): Record<string, string>[] {
       s.consignee.foreignTaxId ?? '', s.consignee.socialSecurity ?? '',
       s.consignee.passport ?? '', s.consignee.address ?? '', s.consignee.phone ?? '', s.consignee.email ?? '',
       s.sender.name, s.sender.taxId ?? '', s.sender.address ?? '', s.sender.phone ?? '', s.sender.email ?? '',
-      s.platform.commercialName, s.platform.countryOfOrigin ?? '', s.platform.legalName ?? '', s.platform.email ?? '',
+      s.platform.commercialName, s.platform.countryOfOrigin ?? '', s.platform.legalName ?? '', s.platform.email ?? '', s.platform.url ?? '',
     ];
     return Object.fromEntries(LAYOUT_HEADERS.map((h, i) => [h, v[i]]));
   });

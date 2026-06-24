@@ -78,6 +78,48 @@ describe('records — Consulta filters', () => {
     expect(res.body[0].mawbReference).toBe('600-1');
   });
 
+});
+
+describe('records — Seguimiento status', () => {
+  const auth = () => ({ Authorization: `Bearer ${token}` });
+
+  it('reports pendiente/locked=false for a bare manifest', async () => {
+    const res = await request(app).get('/api/records?q=369-1').set(auth());
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ status: 'pendiente', locked: false, scanVerdict: null });
+  });
+
+  it('reports capturado once import data is present (still editable)', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by, import_data) VALUES ('700-1','Cliente D',$1,$2::jsonb) RETURNING id`,
+      [userId, JSON.stringify({ patente: '3250' })]);
+    const res = await request(app).get(`/api/records?q=700-1`).set(auth());
+    expect(res.body[0].id).toBe(m.rows[0].id);
+    expect(res.body[0]).toMatchObject({ status: 'capturado', locked: false });
+  });
+
+  it('reports prevalidado/locked=true when prevalidation is APPROVED', async () => {
+    await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by, prevalidation) VALUES ('701-1','Cliente E',$1,$2::jsonb)`,
+      [userId, JSON.stringify({ status: 'APPROVED', errors: [], warnings: [] })]);
+    const res = await request(app).get(`/api/records?q=701-1`).set(auth());
+    expect(res.body[0]).toMatchObject({ status: 'prevalidado', locked: true });
+  });
+
+  it('reports cargado/locked=true with the scan verdict when a PDF is attached', async () => {
+    const f = await query(`INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('pedimento_pdf','p.pdf','/p.pdf',1,$1) RETURNING id`, [userId]);
+    const fileId = f.rows[0].id;
+    await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by, file_id, pedimento_scan) VALUES ('702-1','Cliente F',$1,$2,$3::jsonb)`,
+      [userId, fileId, JSON.stringify({ verdict: 'clean', findings: [] })]);
+    const res = await request(app).get(`/api/records?q=702-1`).set(auth());
+    expect(res.body[0]).toMatchObject({ status: 'cargado', locked: true, scanVerdict: 'clean' });
+  });
+});
+
+describe('records — Consulta filters (cont.)', () => {
+  const auth = () => ({ Authorization: `Bearer ${token}` });
+
   it('ignores malformed filter values and a future dateFrom returns nothing', async () => {
     // Non-uuid platformId is ignored (no SQL error); future dateFrom excludes today's records.
     const ignored = await request(app).get('/api/records?platformId=not-a-uuid').set(auth());

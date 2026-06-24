@@ -14,7 +14,7 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   reporte:      { title: 'Reporte General', subtitle: 'Datos de remitente y plataforma, y generación del reporte.' },
   consulta:     { title: 'Consulta', subtitle: 'Busca registros previos y descarga sus artefactos.' },
   cfg_motor:    { title: 'Motor de riesgo', subtitle: 'Parámetros de validación y listas de exclusión (V1–V8).' },
-  cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes de remitente y plataforma para el reporte.' },
+  cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
   cfg_empresa:  { title: 'Empresa', subtitle: 'Identidad y branding en pantallas y reportes generados.' },
   cfg_tasa:     { title: 'Tasa global', subtitle: 'Vigencias de tasa global · sólo Super Admin.' },

@@ -32,12 +32,12 @@ export interface SenderData {            // cols 26–30 (NEW)
   countryName?: string;
 }
 
-export interface PlatformData {          // cols 31–34 (NEW)
+export interface PlatformData {          // cols 31–35 (NEW)
   commercialName: string;
   countryOfOrigin?: string;
   legalName?: string;
   email?: string;
-  url?: string;
+  url?: string;                          // col 35 — storefront URL (operator extra, not ANAM-required)
 }
 
 export interface ShipmentCore {          // cols 1–16

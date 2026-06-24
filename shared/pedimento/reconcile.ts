@@ -1,4 +1,4 @@
-import type { ExpectedPedimento } from '../types/reports';
+import type { ExpectedPedimento, ExtractedPedimento, ReconciliationReport, LineResult, FieldDiff } from '../types/reports';
 
 export interface ExpectedShipment {
   guideId: string;
@@ -26,4 +26,63 @@ export function buildExpectedFromManifest(shipments: ExpectedShipment[]): { expe
     return { guia, valueUsd: Math.round(e.valueUsd * 100) / 100, consigneeName: e.consigneeName, id: e.id };
   });
   return { expected: { header: {}, lines }, warnings };
+}
+
+const norm = (s: string | null | undefined) => (s ?? '').trim().toUpperCase();
+
+function numDiff(field: string, expected: number | null, actual: number | null): FieldDiff {
+  const ok = expected != null && actual != null && Math.abs(expected - actual) < 0.01;
+  return { field, expected, actual, ok };
+}
+function strDiff(field: string, expected: string | null, actual: string | null): FieldDiff {
+  return { field, expected, actual, ok: norm(expected) === norm(actual) };
+}
+
+export function reconcile(
+  expected: ExpectedPedimento,
+  extracted: ExtractedPedimento,
+  opts: { notes?: string[]; generatedAt?: string } = {},
+): ReconciliationReport {
+  const actualByGuia = new Map(extracted.lines.map((l) => [l.guia, l]));
+  const expectedGuias = new Set(expected.lines.map((l) => l.guia));
+  const lines: LineResult[] = [];
+
+  for (const exp of expected.lines) {
+    const act = actualByGuia.get(exp.guia);
+    if (!act) { lines.push({ guia: exp.guia, status: 'missing_in_pedimento', diffs: [] }); continue; }
+    const diffs: FieldDiff[] = [
+      numDiff('valorUsd', exp.valueUsd, act.valueUsd),
+      strDiff('nombre', exp.consigneeName, act.consigneeName),
+      strDiff('rfcCurp', exp.id, act.id),
+    ];
+    lines.push({ guia: exp.guia, status: diffs.every((d) => d.ok) ? 'matched' : 'mismatch', diffs });
+  }
+  for (const act of extracted.lines) {
+    if (!expectedGuias.has(act.guia)) lines.push({ guia: act.guia, status: 'extra_in_pedimento', diffs: [] });
+  }
+
+  const summary = {
+    matched: lines.filter((l) => l.status === 'matched').length,
+    mismatched: lines.filter((l) => l.status === 'mismatch').length,
+    missingInPedimento: lines.filter((l) => l.status === 'missing_in_pedimento').length,
+    extraInPedimento: lines.filter((l) => l.status === 'extra_in_pedimento').length,
+    color: 'verde' as ReconciliationReport['summary']['color'],
+  };
+  if (extracted.lines.length === 0) summary.color = 'gris';
+  else if (summary.mismatched || summary.missingInPedimento || summary.extraInPedimento) summary.color = 'amarillo';
+
+  const expTotal = Math.round(expected.lines.reduce((a, l) => a + l.valueUsd, 0) * 100) / 100;
+  const actTotal = Math.round(extracted.lines.reduce((a, l) => a + (l.valueUsd ?? 0), 0) * 100) / 100;
+
+  return {
+    generatedAt: opts.generatedAt ?? '',
+    extractionMethod: extracted.extractionMethod,
+    usedPositional: extracted.usedPositional,
+    confidence: extracted.confidence,
+    header: [],
+    totals: [numDiff('totalValorUsd', expTotal, actTotal)],
+    lines,
+    summary,
+    notes: opts.notes ?? [],
+  };
 }

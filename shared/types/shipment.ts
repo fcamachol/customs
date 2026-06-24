@@ -14,6 +14,10 @@ export interface ConsigneeData {        // cols 17–25
   postalCode?: string;
   countryCode?: string;
   countryName?: string;
+  // F20a: blind-index sidecars (HMAC tokens) computed from plaintext before encryption.
+  // These allow cross-manifest dedup without storing PII in the clear.
+  nameBidx?: string;
+  addressBidx?: string;
 }
 
 export interface SenderData {            // cols 26–30 (NEW)

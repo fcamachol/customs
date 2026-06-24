@@ -3,7 +3,7 @@ import multer from 'multer';
 import { query } from '../db/pool';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
-import { encryptConsignee } from '../crypto/fieldCrypto';
+import { encryptShipmentPii } from '../crypto/fieldCrypto';
 import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
 import { computeLock } from '../services/manifestLock';
@@ -40,7 +40,7 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
     );
     const id = m.rows[0].id;
     for (const row of result.rows) {
-      const encrypted = { ...row.shipment, consignee: encryptConsignee(row.shipment.consignee) };
+      const encrypted = encryptShipmentPii(row.shipment);
       await q(
         `INSERT INTO manifest_staging_rows (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,

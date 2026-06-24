@@ -14,7 +14,8 @@
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import type { ConsigneeData, Shipment } from '../../../shared/types/shipment';
+import type { ConsigneeData, SenderData, PlatformData, Shipment } from '../../../shared/types/shipment';
+import { nameBlindIndex, addressBlindIndex } from './blindIndex';
 
 const KEY_ENV = 'FIELD_ENCRYPTION_KEY';
 const IV_LENGTH = 12; // 96-bit IV recommended for AES-GCM
@@ -79,38 +80,115 @@ export function decryptField(enc: string): string {
 
 /**
  * The five consignee identity fields that are encrypted at rest.
- * Do NOT include name/address/email/phone – those must stay plaintext for
- * the risk engine's dedup checks (V4/V5/V8).
+ * Contact fields (name/address/email/phone/city/postalCode) are ALSO encrypted now
+ * (F20a) – blind-index sidecars preserve dedup capability without plaintext at rest.
  */
-const PII_FIELDS: ReadonlyArray<keyof ConsigneeData> = [
+const CONSIGNEE_IDENTITY_FIELDS: ReadonlyArray<keyof ConsigneeData> = [
   'rfc', 'curp', 'passport', 'foreignTaxId', 'socialSecurity',
 ];
 
-/** Encrypt PII fields on a consignee object (returns shallow copy). */
-export function encryptConsignee(consignee: ConsigneeData): ConsigneeData {
-  const out: ConsigneeData = { ...consignee };
-  for (const field of PII_FIELDS) {
-    const val = out[field];
+/** Contact fields on ConsigneeData that are encrypted (F20a). */
+const CONSIGNEE_CONTACT_FIELDS: ReadonlyArray<keyof ConsigneeData> = [
+  'name', 'address', 'email', 'phone', 'city', 'postalCode',
+];
+
+/** All ConsigneeData fields that are encrypted. */
+const CONSIGNEE_PII_FIELDS: ReadonlyArray<keyof ConsigneeData> = [
+  ...CONSIGNEE_IDENTITY_FIELDS,
+  ...CONSIGNEE_CONTACT_FIELDS,
+];
+
+/** SenderData fields that are encrypted (F20a). */
+const SENDER_PII_FIELDS: ReadonlyArray<keyof SenderData> = [
+  'name', 'address', 'email', 'phone', 'city',
+];
+
+/** PlatformData fields that are encrypted (F20a). */
+const PLATFORM_PII_FIELDS: ReadonlyArray<keyof PlatformData> = [
+  'email',
+];
+
+/** Encrypt a subset of fields on an object (returns shallow copy). Idempotent: v1: values are skipped. */
+function encryptFields<T extends object>(obj: T, fields: ReadonlyArray<keyof T>): T {
+  const out = { ...obj };
+  for (const field of fields) {
+    const val = (out as Record<keyof T, unknown>)[field];
     if (typeof val === 'string' && val.length > 0 && !val.startsWith('v1:')) {
-      (out as Record<keyof ConsigneeData, unknown>)[field] = encryptField(val);
+      (out as Record<keyof T, unknown>)[field] = encryptField(val);
     }
   }
   return out;
 }
 
-/** Decrypt PII fields on a consignee object (returns shallow copy). */
-export function decryptConsignee(consignee: ConsigneeData): ConsigneeData {
-  const out: ConsigneeData = { ...consignee };
-  for (const field of PII_FIELDS) {
-    const val = out[field];
+/** Decrypt a subset of fields on an object (returns shallow copy). Passthrough for non-v1: values. */
+function decryptFields<T extends object>(obj: T, fields: ReadonlyArray<keyof T>): T {
+  const out = { ...obj };
+  for (const field of fields) {
+    const val = (out as Record<keyof T, unknown>)[field];
     if (typeof val === 'string' && val.startsWith('v1:')) {
-      (out as Record<keyof ConsigneeData, unknown>)[field] = decryptField(val);
+      (out as Record<keyof T, unknown>)[field] = decryptField(val);
     }
   }
   return out;
 }
 
-/** Return a new Shipment with decrypted consignee PII (safe to pass to scoring / export). */
+/** Encrypt ALL PII fields on a consignee object + attach blind-index sidecars (returns shallow copy). */
+export function encryptConsignee(consignee: ConsigneeData): ConsigneeData {
+  // Compute blind-index sidecars from PLAINTEXT before encryption.
+  const nameBidx = consignee.name ? nameBlindIndex(consignee.name) : undefined;
+  const addressBidx = consignee.address ? addressBlindIndex(consignee.address) : undefined;
+  const encrypted = encryptFields(consignee, CONSIGNEE_PII_FIELDS);
+  return { ...encrypted, ...(nameBidx !== undefined ? { nameBidx } : {}), ...(addressBidx !== undefined ? { addressBidx } : {}) };
+}
+
+/** Decrypt ALL PII fields on a consignee object (returns shallow copy). */
+export function decryptConsignee(consignee: ConsigneeData): ConsigneeData {
+  return decryptFields(consignee, CONSIGNEE_PII_FIELDS);
+}
+
+/** Encrypt PII fields on a sender object (returns shallow copy). Idempotent. */
+export function encryptSender(sender: SenderData): SenderData {
+  return encryptFields(sender, SENDER_PII_FIELDS);
+}
+
+/** Decrypt PII fields on a sender object (returns shallow copy). Passthrough for plaintext. */
+export function decryptSender(sender: SenderData): SenderData {
+  return decryptFields(sender, SENDER_PII_FIELDS);
+}
+
+/** Encrypt PII fields on a platform object (returns shallow copy). Idempotent. */
+export function encryptPlatform(platform: PlatformData): PlatformData {
+  return encryptFields(platform, PLATFORM_PII_FIELDS);
+}
+
+/** Decrypt PII fields on a platform object (returns shallow copy). Passthrough for plaintext. */
+export function decryptPlatform(platform: PlatformData): PlatformData {
+  return decryptFields(platform, PLATFORM_PII_FIELDS);
+}
+
+/**
+ * Encrypt all PII fields on a shipment (consignee + sender + platform).
+ * Attaches blind-index sidecars on consignee from plaintext before encryption.
+ * Returns a new Shipment – the original is not mutated.
+ */
+export function encryptShipmentPii(s: Shipment): Shipment {
+  return {
+    ...s,
+    consignee: encryptConsignee(s.consignee),
+    sender: encryptSender(s.sender),
+    platform: encryptPlatform(s.platform),
+  };
+}
+
+/**
+ * Return a new Shipment with ALL encrypted PII decrypted (consignee + sender + platform).
+ * Safe to pass to scoring / export / display paths.
+ */
 export function decryptShipment(s: Shipment): Shipment {
-  return { ...s, consignee: decryptConsignee(s.consignee) };
+  return {
+    ...s,
+    consignee: decryptConsignee(s.consignee),
+    sender: decryptSender(s.sender),
+    platform: decryptPlatform(s.platform),
+  };
 }

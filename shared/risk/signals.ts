@@ -115,7 +115,7 @@ export interface EntityContext {
    * F20b: Optional name-dedup tokenizer. Receives `norm(name)` (already normalized)
    * and returns a dedup token (e.g. HMAC blind index). Defaults to identity when absent.
    *
-   * The server injects `nameBlindIndex` here (server/src/crypto/blindIndex.ts) so
+   * The server injects `rawBlindIndex` here (server/src/crypto/blindIndex.ts) so
    * that PII (normalized names) is never written in the clear to dedup key-spaces.
    * Behavior is IDENTICAL to identity since both tokenize the same normalized form —
    * collision structure is fully preserved.

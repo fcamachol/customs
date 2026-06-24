@@ -47,13 +47,10 @@ export async function deleteManifestHistory(manifestId: string): Promise<void> {
  * (so it is counted once via `nameCounts`, during scoring).
  */
 export async function loadHistoryCounts(period: string, excludeManifestId?: string): Promise<Record<string, number>> {
-  // COALESCE: use bidx if populated (F20c rows), otherwise derive from norm (legacy rows)
-  const tokenExpr = `COALESCE(consignee_name_bidx, 'raw:' || consignee_name_norm)`;
-  // We use rawBlindIndex-equivalent: since SQL cannot call the Node HMAC function,
-  // legacy rows use a PLACEHOLDER key until backfill. The loadHistoryCounts JS layer
-  // post-processes placeholder keys through rawBlindIndex so they match engine tokens.
-  // SIMPLER approach: do the COALESCE in JS, not SQL — query both columns and resolve.
-
+  // Resolve the dedup token in JS (SQL cannot call the Node HMAC): query both columns
+  // and use consignee_name_bidx when populated (F20c rows), otherwise derive the token
+  // from consignee_name_norm via rawBlindIndex (legacy/not-yet-backfilled rows). Both
+  // paths yield rawBlindIndex(norm(name)), so counts merge cleanly across the cutover.
   const { rows } = excludeManifestId
     ? await query<{ bidx: string | null; norm_key: string; total: string }>(
         `SELECT consignee_name_bidx AS bidx, consignee_name_norm AS norm_key, SUM(seen_count) AS total

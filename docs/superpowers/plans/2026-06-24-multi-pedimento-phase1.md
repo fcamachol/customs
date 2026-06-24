@@ -465,11 +465,12 @@ git commit -m "feat(db): pedimentos table (1:N) + backfill from manifest columns
 - Test: `server/test/services/pdfExtract.test.ts` (uses a text fixture, not a PDF)
 
 **Interfaces:**
-- Consumes: `parsePedimentoTextA` (Task 1), `parseObservation` (Task 1), `parseSubdivision` (Task 2).
+- Consumes: `parsePedimentoText` (Task 1, from `shared/pedimento/parsePedimentoText.ts` — **confirmed exact name/path** from the 2026-06-22 plan Task 3), `parseSubdivision` (Task 2).
 - Produces:
-  - Extend `ExtractedPedimento` (from Task 1) with: `subdivision: import('../pedimento/subdivision').SubdivisionInfo` and `coveredGuias: string[]` (= `lines.map(l => l.guia)`, de-duped).
-  - `export async function extractPedimento(buffer: Buffer): Promise<ExtractedPedimento>` — loads the PDF text (reuse the `pdf-parse` loader from the 2026-06-22 plan's Task 6), runs Approach A over the whole text for `lines`, and `parseSubdivision` over the page-2 text region; sets `coveredGuias`.
-  - `export function extractFromText(fullText: string): ExtractedPedimento` — pure, testable seam used by the test (the PDF loader just feeds this).
+  - Extend `ExtractedPedimento` (from Task 1) with: `subdivision: SubdivisionInfo` (import the type from `shared/pedimento/subdivision`) and `coveredGuias: string[]` (= `lines.map(l => l.guia)`, de-duped).
+  - `export function extractFromText(fullText: string): ExtractedPedimento` — pure, testable seam (the PDF loader feeds this).
+  - `export async function getPdfText(buffer: Buffer): Promise<string>` — `pdf-parse` v2 loader: `const r = await new PDFParse({ data: new Uint8Array(buffer) }).getText(); return r.text;` (import `{ PDFParse } from 'pdf-parse'`).
+  - `export async function extractPedimento(buffer: Buffer): Promise<ExtractedPedimento>` — `extractFromText(await getPdfText(buffer))`.
 
 - [ ] **Step 1: Write the failing test** (pure `extractFromText` over a fixture)
 
@@ -501,22 +502,25 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement `extractFromText` + `extractPedimento`**
 
 ```ts
-import { parsePedimentoTextA } from '../../../../shared/pedimento/extractTextA'; // path per 2026-06-22 Task 3
+import { PDFParse } from 'pdf-parse';
+import { parsePedimentoText } from '../../../../shared/pedimento/parsePedimentoText';
 import { parseSubdivision } from '../../../../shared/pedimento/subdivision';
 import type { ExtractedPedimento } from '../../../../shared/types/reports';
-// PDF loader: reuse the pdf-parse loader from 2026-06-22 Task 6.
 
 export function extractFromText(fullText: string): ExtractedPedimento {
-  const base = parsePedimentoTextA(fullText);           // populates header + lines[]
+  const base = parsePedimentoText(fullText);            // populates header + lines[]
   const subdivision = parseSubdivision(fullText);
   const coveredGuias = [...new Set(base.lines.map((l) => l.guia).filter(Boolean))];
   return { ...base, subdivision, coveredGuias };
 }
 
-export async function extractPedimento(buffer: Buffer): Promise<ExtractedPedimento> {
-  const { PDFParse } = await import('pdf-parse');
+export async function getPdfText(buffer: Buffer): Promise<string> {
   const r = await new PDFParse({ data: new Uint8Array(buffer) }).getText();
-  return extractFromText(r.text);
+  return r.text;
+}
+
+export async function extractPedimento(buffer: Buffer): Promise<ExtractedPedimento> {
+  return extractFromText(await getPdfText(buffer));
 }
 ```
 

@@ -92,22 +92,35 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
      FROM manifests m WHERE ${clauses.join(' AND ')} ORDER BY m.created_at DESC`, params);
 
   // Coverage replaces the old manifest-column status. Pull every matching manifest's pedimentos
-  // rows in one query, group them, and derive coverage per manifest (no N+1 per-row queries).
+  // rows and guías in one query each, group them, and derive coverage per manifest (no N+1).
+  // guideId is a top-level plaintext field on shipments.data — no decryption needed.
   const ids = rows.map((r) => r.id);
   const pedByManifest = new Map<string, PedimentoRow[]>();
+  const guiasByManifest = new Map<string, string[]>();
   if (ids.length) {
-    const peds = await query<PedimentoRow>(
-      `SELECT ${PEDIMENTO_COLS} FROM pedimentos WHERE manifest_id = ANY($1)`, [ids]);
+    const [peds, guias] = await Promise.all([
+      query<PedimentoRow>(
+        `SELECT ${PEDIMENTO_COLS} FROM pedimentos WHERE manifest_id = ANY($1)`, [ids]),
+      query<{ manifest_id: string; guia: string }>(
+        `SELECT manifest_id, data->>'guideId' AS guia FROM shipments WHERE manifest_id = ANY($1)`,
+        [ids]),
+    ]);
     for (const p of peds.rows) {
       const list = pedByManifest.get(p.manifest_id) ?? [];
       list.push(p);
       pedByManifest.set(p.manifest_id, list);
     }
+    for (const g of guias.rows) {
+      if (!g.guia) continue; // skip null/empty guía values
+      const list = guiasByManifest.get(g.manifest_id) ?? [];
+      list.push(g.guia);
+      guiasByManifest.set(g.manifest_id, list);
+    }
   }
 
-  const summaries = await Promise.all(rows.map(async (r) => {
+  const summaries = rows.map((r) => {
     const peds = pedByManifest.get(r.id) ?? [];
-    const manifestGuias = (await loadShipments(r.id)).map((s) => s.data.guideId);
+    const manifestGuias = guiasByManifest.get(r.id) ?? [];
     const coverage = computeCoverage(manifestGuias, peds.map(coverageInput));
     return {
       id: r.id,
@@ -118,7 +131,7 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
       expectedCount: coverage.expectedCount,
       uploadedCount: peds.length,
     };
-  }));
+  });
   res.json(summaries);
 });
 

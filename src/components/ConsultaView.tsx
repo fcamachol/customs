@@ -31,7 +31,6 @@ interface RecordDetail {
   artifacts: {
     riskAnalysis: string;
     pedimentoPdf: string | null;
-    report: string;
   };
 }
 

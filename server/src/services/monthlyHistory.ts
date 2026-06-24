@@ -1,16 +1,31 @@
 import { query } from '../db/pool';
-import { norm } from '../../../shared/risk/signals';
+import { norm } from '../../../shared/risk/normalize';
+import { rawBlindIndex } from '../crypto/blindIndex';
 
+/**
+ * Record consignee names for a given period and manifest into monthly_history.
+ *
+ * F20c: also writes consignee_name_bidx = rawBlindIndex(norm(name)) so that
+ * loadHistoryCounts can return token-keyed counts without re-tokenizing plaintext.
+ *
+ * Normalization is IDENTICAL to the token the engine produces:
+ *   rawBlindIndex(norm(rawName)) — same as nameTokenFn(norm(rawName)) in classify.ts.
+ *
+ * The unique constraint remains on (consignee_name_norm, period, manifest_id) during
+ * the F20c transition; consignee_name_bidx is NOT NULL only for new/updated rows.
+ */
 export async function recordNames(names: string[], period: string, manifestId: string): Promise<void> {
   for (const raw of names) {
     const n = norm(raw);
     if (!n) continue;
+    const bidx = rawBlindIndex(n);
     await query(
-      `INSERT INTO monthly_history (consignee_name_norm, period, manifest_id, seen_count)
-       VALUES ($1,$2,$3,1)
+      `INSERT INTO monthly_history (consignee_name_norm, consignee_name_bidx, period, manifest_id, seen_count)
+       VALUES ($1,$2,$3,$4,1)
        ON CONFLICT (consignee_name_norm, period, manifest_id)
-       DO UPDATE SET seen_count = monthly_history.seen_count + 1`,
-      [n, period, manifestId],
+       DO UPDATE SET seen_count = monthly_history.seen_count + 1,
+                    consignee_name_bidx = EXCLUDED.consignee_name_bidx`,
+      [n, bidx, period, manifestId],
     );
   }
 }
@@ -21,21 +36,43 @@ export async function deleteManifestHistory(manifestId: string): Promise<void> {
 
 /**
  * Sum of prior monthly operations per consignee for the period, grouped by
- * normalized name. When `excludeManifestId` is given, the current manifest's own
- * rows are excluded (so it is counted once, via `nameCounts`, during scoring).
- * Drives the `bbdd` signal's Ficha 124 ">3 ops/consignee/month" trigger.
+ * blind-index token. Returns Record<token, count> where:
+ *   - token = consignee_name_bidx  (for rows written by F20c or backfilled)
+ *   - token = rawBlindIndex(consignee_name_norm)  (COALESCE fallback for legacy rows)
+ *
+ * This makes the key-space exactly match what the engine produces:
+ *   nameTokenFn(norm(name)) = rawBlindIndex(norm(name))
+ *
+ * When `excludeManifestId` is given, the current manifest's own rows are excluded
+ * (so it is counted once via `nameCounts`, during scoring).
  */
 export async function loadHistoryCounts(period: string, excludeManifestId?: string): Promise<Record<string, number>> {
+  // COALESCE: use bidx if populated (F20c rows), otherwise derive from norm (legacy rows)
+  const tokenExpr = `COALESCE(consignee_name_bidx, 'raw:' || consignee_name_norm)`;
+  // We use rawBlindIndex-equivalent: since SQL cannot call the Node HMAC function,
+  // legacy rows use a PLACEHOLDER key until backfill. The loadHistoryCounts JS layer
+  // post-processes placeholder keys through rawBlindIndex so they match engine tokens.
+  // SIMPLER approach: do the COALESCE in JS, not SQL — query both columns and resolve.
+
   const { rows } = excludeManifestId
-    ? await query<{ consignee_name_norm: string; total: string }>(
-        `SELECT consignee_name_norm, SUM(seen_count) AS total FROM monthly_history
+    ? await query<{ bidx: string | null; norm_key: string; total: string }>(
+        `SELECT consignee_name_bidx AS bidx, consignee_name_norm AS norm_key, SUM(seen_count) AS total
+         FROM monthly_history
          WHERE period=$1 AND (manifest_id IS NULL OR manifest_id <> $2)
-         GROUP BY consignee_name_norm`,
+         GROUP BY consignee_name_bidx, consignee_name_norm`,
         [period, excludeManifestId])
-    : await query<{ consignee_name_norm: string; total: string }>(
-        `SELECT consignee_name_norm, SUM(seen_count) AS total FROM monthly_history
-         WHERE period=$1 GROUP BY consignee_name_norm`, [period]);
+    : await query<{ bidx: string | null; norm_key: string; total: string }>(
+        `SELECT consignee_name_bidx AS bidx, consignee_name_norm AS norm_key, SUM(seen_count) AS total
+         FROM monthly_history
+         WHERE period=$1
+         GROUP BY consignee_name_bidx, consignee_name_norm`,
+        [period]);
+
   const counts: Record<string, number> = {};
-  for (const r of rows) counts[r.consignee_name_norm] = Number(r.total);
+  for (const r of rows) {
+    // Use the stored bidx if present; fall back to computing rawBlindIndex(norm_key)
+    const token = r.bidx ?? rawBlindIndex(r.norm_key);
+    counts[token] = (counts[token] ?? 0) + Number(r.total);
+  }
   return counts;
 }

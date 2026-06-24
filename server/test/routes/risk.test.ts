@@ -5,6 +5,9 @@ import { hashPassword } from '../../src/auth/password';
 import { signToken } from '../../src/auth/token';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
+import { encryptShipmentPii } from '../../src/crypto/fieldCrypto';
+import { rawBlindIndex } from '../../src/crypto/blindIndex';
+import { norm } from '../../../shared/risk/normalize';
 
 const app = createApp();
 let token: string; let manifestId: string;
@@ -175,5 +178,78 @@ describe('POST /api/manifests/:id/risk', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].risk_color).not.toBeNull();
     expect(['verde', 'amarillo', 'rojo', 'gris']).toContain(rows[0].risk_color);
+  });
+
+  // F20c: Encrypted round-trip test
+  it('F20c encrypted round-trip: scoring works when consignee PII is stored as v1: ciphertext', async () => {
+    // Build a plain shipment then encrypt its PII before storing, simulating post-F20a state
+    const pkId = crypto.randomUUID();
+    const plain = {
+      id: crypto.randomUUID(),
+      mawbReference: '369-1',
+      description: 'camisa',
+      hsCode: '9901000100',
+      quantity: 1,
+      unit: 'PCE',
+      customsValueUsd: 150,
+      currency: 'USD',
+      originCountry: 'MX',
+      guideId: 'enc-test-guide',
+      consignee: { name: 'Juan Enc Test', rfc: 'ENCJ800101XX8', address: 'Calle Enc 1' },
+      sender: { name: 'EncSender', address: 'Sender Addr', email: 'enc@example.com', phone: '1234567890', city: 'CDMX' },
+      platform: { commercialName: 'EncPlatform', email: 'platform@enc.mx' },
+    };
+    const encrypted = encryptShipmentPii(plain as Parameters<typeof encryptShipmentPii>[0]);
+    // Verify PII is actually encrypted before inserting
+    expect(encrypted.consignee.name).toMatch(/^v1:/);
+    expect(encrypted.sender.name).toMatch(/^v1:/);
+    expect(encrypted.platform.email).toMatch(/^v1:/);
+
+    await query('INSERT INTO shipments (id, manifest_id, data) VALUES ($1,$2,$3)', [pkId, manifestId, JSON.stringify(encrypted)]);
+
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/risk`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ period: '2025-07' });
+
+    expect(res.status).toBe(200);
+    // The response must expose the decrypted (plaintext) consignee name, not ciphertext
+    const row = res.body.rows.find((r: { consignee: string }) => r.consignee === 'Juan Enc Test');
+    expect(row).toBeDefined();
+    // An RFC-valid, low-value, single-consignee shipment should NOT be rojo
+    expect(row.resultado).not.toBe('rojo');
+  });
+
+  // F20c: cross-cutover recurrence test using bidx tokens
+  it('F20c recurrence: prior-period rows stored via recordNames (bidx tokens) fire bbdd across cutover', async () => {
+    // recordNames (F20c) stores consignee_name_bidx = rawBlindIndex(norm(name))
+    // Seed a PREVIOUS manifest via recordNames so bidx is populated
+    const priorManifest = await query(`INSERT INTO manifests (mawb_reference) VALUES ('369-prior2') RETURNING id`);
+    const priorId = priorManifest.rows[0].id as string;
+    // Insert 3 prior-period rows for 'token-recurrente' via the service (which will write bidx)
+    const { recordNames: rec } = await import('../../src/services/monthlyHistory');
+    await rec(['Token Recurrente', 'Token Recurrente', 'Token Recurrente'], '2025-08', priorId);
+
+    // Verify that bidx was populated (not null) — this is the F20c key assertion
+    const { rows: histRows } = await query<{ consignee_name_bidx: string | null }>(
+      `SELECT consignee_name_bidx FROM monthly_history WHERE manifest_id=$1`, [priorId]);
+    expect(histRows.length).toBeGreaterThan(0);
+    expect(histRows[0].consignee_name_bidx).not.toBeNull();
+    expect(histRows[0].consignee_name_bidx).toBe(rawBlindIndex(norm('Token Recurrente')));
+
+    // Current manifest has 1 shipment from the same consignee
+    await addShipment('Token Recurrente', 100, 'g-token-bbdd');
+
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/risk`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ period: '2025-08' });
+
+    expect(res.status).toBe(200);
+    const row = res.body.rows.find((r: { consignee: string }) => r.consignee === 'Token Recurrente');
+    expect(row).toBeDefined();
+    // 3 prior + 1 current = 4 → must exceed Ficha-124 threshold → bbdd fires
+    const hasRecurrence = (row.motivo as string).includes('Varias importaciones en el mes');
+    expect(hasRecurrence).toBe(true);
   });
 });

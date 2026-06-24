@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Migration timestamp prefix must sort **after** `1700002300000` (the latest). Use `1700002400000`.
+- Migration timestamp prefix must sort **after** all existing migrations (latest tracked is `1700002300000`; untracked WIP includes `1700002400000`). Use `1700002500000`.
 - All platform-mutating routes use `validate({...})` with zod schemas and call `recordAudit(...)`, matching `server/src/routes/catalogs.ts`.
 - Role gating mirrors existing client routes: create/edit = `requireRole('admin', 'capturista')`; delete = `requireRole('admin')`.
 - Platform field names in JSON/API are camelCase (`commercialName`, `countryOfOrigin`, `legalName`, `email`); DB columns are snake_case (`commercial_name`, `country_of_origin`, `legal_name`, `email`). Always alias in SQL.
@@ -24,7 +24,7 @@
 ## File Structure
 
 **Server**
-- Create: `server/migrations/1700002400000_client_platforms.ts` — table, FK, backfill.
+- Create: `server/migrations/1700002500000_client_platforms.ts` — table, FK, backfill.
 - Modify: `server/src/validation/schemas.ts` — `clientPlatformBody`, extend `manifestClientBody`.
 - Modify: `server/src/routes/catalogs.ts` — `GET /clients` returns `platforms[]`; platform CRUD; `POST /clients` creates initial platform; `PUT /clients` stops writing platform.
 - Modify: `server/src/routes/manifests.ts` — bind accepts `{ clientId, platformId? }` with ownership check.
@@ -43,7 +43,7 @@
 ## Task 1: Migration — `client_platforms` table, `manifests.platform_id`, backfill
 
 **Files:**
-- Create: `server/migrations/1700002400000_client_platforms.ts`
+- Create: `server/migrations/1700002500000_client_platforms.ts`
 - Modify: `server/test/helpers/db.ts`
 - Test: `server/test/migrations/clientPlatforms.test.ts`
 
@@ -139,7 +139,7 @@ Expected: FAIL — `relation "client_platforms" does not exist` / `column "platf
 
 - [ ] **Step 4: Write the migration**
 
-Create `server/migrations/1700002400000_client_platforms.ts`:
+Create `server/migrations/1700002500000_client_platforms.ts`:
 
 ```ts
 import type { MigrationBuilder } from 'node-pg-migrate';
@@ -197,7 +197,7 @@ Expected: PASS (3 tests). (The Vitest global setup applies migrations to the tes
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/migrations/1700002400000_client_platforms.ts server/test/helpers/db.ts server/test/migrations/clientPlatforms.test.ts
+git add server/migrations/1700002500000_client_platforms.ts server/test/helpers/db.ts server/test/migrations/clientPlatforms.test.ts
 git commit -m "feat(db): client_platforms table + manifests.platform_id + backfill"
 ```
 

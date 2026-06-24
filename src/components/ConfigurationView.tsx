@@ -61,6 +61,7 @@ interface Client {
   address?: string;
   phone?: string;
   email?: string;
+  website?: string;
   platform?: ClientPlatform;
 }
 
@@ -395,7 +396,7 @@ interface ClientesProps {
 
 function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesProps) {
   const empty: ClientForm = {
-    name: '', tax_id: '', address: '', phone: '', email: '',
+    name: '', tax_id: '', address: '', phone: '', email: '', website: '',
     commercialName: '', countryOfOrigin: '', legalName: '', platformEmail: '',
   };
   const [form, setForm] = useState<ClientForm>(empty);
@@ -411,6 +412,7 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
         address: form.address.trim(),
         phone: form.phone.trim(),
         email: form.email.trim(),
+        website: form.website.trim(),
         platform: {
           commercialName: form.commercialName.trim(),
           countryOfOrigin: form.countryOfOrigin.trim(),
@@ -506,6 +508,9 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
               <Field label="Email" htmlFor="cl-email">
                 <Input id="cl-email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </Field>
+              <Field label="Sitio web" htmlFor="cl-website">
+                <Input id="cl-website" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+              </Field>
               <Field label="Plataforma (nombre comercial)" htmlFor="cl-pcom">
                 <Input id="cl-pcom" value={form.commercialName} onChange={(e) => setForm({ ...form, commercialName: e.target.value })} />
               </Field>
@@ -535,6 +540,7 @@ interface ClientForm {
   address: string;
   phone: string;
   email: string;
+  website: string;
   commercialName: string;
   countryOfOrigin: string;
   legalName: string;

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Search, FileText } from 'lucide-react';
-import { apiGet, apiDownload } from '../api';
-import { Card, Input, Button, FileCard } from './ui';
+import { Search } from 'lucide-react';
+import { apiGet } from '../api';
+import { Card, Input, Button } from './ui';
 import { ReportTabs } from './ReportTabs';
 
 interface RecordSummary {
@@ -68,17 +68,6 @@ export default function ConsultaView() {
     }
   }
 
-  async function handleDownload(path: string, filename: string) {
-    setError(null);
-    try {
-      await apiDownload(path, filename);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al descargar el archivo.');
-    }
-  }
-
-  const hasPedimento = detail && detail.pedimentoFileId && detail.artifacts.pedimentoPdf;
-
   return (
     <div className="space-y-6">
       {/* Search card */}
@@ -111,7 +100,9 @@ export default function ConsultaView() {
               <button
                 type="button"
                 onClick={() => handleSelect(r.id)}
-                className="flex w-full items-center justify-between px-4 py-3 text-left text-sm transition-colors hover:bg-slate-50"
+                className={`flex w-full items-center justify-between border-l-2 px-4 py-3 text-left text-sm transition-colors hover:bg-slate-50 ${
+                  detail?.id === r.id ? 'border-navy-600 bg-navy-50/40' : 'border-transparent'
+                }`}
               >
                 <span>
                   <span className="font-semibold text-slate-800">{r.mawbReference}</span>
@@ -124,48 +115,7 @@ export default function ConsultaView() {
         </ul>
       )}
 
-      {detail && <ReportTabs recordId={detail.id} />}
-
-      {detail && (
-        <Card className="p-5 shadow-sm">
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-bold text-slate-800">
-            <FileText className="h-4 w-4 text-navy-700" />
-            {detail.mawbReference} — {detail.clientName}
-          </h3>
-          <div className="space-y-2">
-            <div>
-              <FileCard
-                kind="xls"
-                name="Análisis de Riesgo"
-                onDownload={() => handleDownload(`/api/records/${detail.id}/risk.xlsx`, 'Analisis_de_Riesgo.xlsx')}
-              />
-            </div>
-            <div>
-              <FileCard
-                kind="xls"
-                name="Reporte General"
-                onDownload={() => handleDownload(`/api/records/${detail.id}/report.xlsx`, 'Reporte_General.xlsx')}
-              />
-            </div>
-            <div>
-              <FileCard
-                kind="xls"
-                name="LayOut"
-                onDownload={() => handleDownload(`/api/records/${detail.id}/layout.xlsx`, 'LayOut_sistema.xlsx')}
-              />
-            </div>
-            {hasPedimento && (
-              <div>
-                <FileCard
-                  kind="pdf"
-                  name="Pedimento"
-                  onDownload={() => handleDownload(detail.artifacts.pedimentoPdf as string, 'Pedimento.pdf')}
-                />
-              </div>
-            )}
-          </div>
-        </Card>
-      )}
+      {detail && <ReportTabs recordId={detail.id} pedimentoPdf={detail.artifacts.pedimentoPdf} />}
     </div>
   );
 }

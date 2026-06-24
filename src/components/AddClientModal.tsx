@@ -16,11 +16,12 @@ export interface Client {
   address?: string;
   phone?: string;
   email?: string;
+  website?: string;
   platform?: ClientPlatform;
 }
 
 const EMPTY = {
-  name: '', tax_id: '', address: '', phone: '', email: '',
+  name: '', tax_id: '', address: '', phone: '', email: '', website: '',
   commercialName: '', countryOfOrigin: '', legalName: '', platformEmail: '',
 };
 
@@ -54,6 +55,7 @@ export function AddClientModal({ open, onClose, onCreated }: {
         address: form.address.trim(),
         phone: form.phone.trim(),
         email: form.email.trim(),
+        website: form.website.trim(),
         platform: {
           commercialName: form.commercialName.trim(),
           countryOfOrigin: form.countryOfOrigin.trim(),
@@ -93,6 +95,9 @@ export function AddClientModal({ open, onClose, onCreated }: {
         </Field>
         <Field label="Correo" htmlFor="c-email">
           <Input id="c-email" type="email" value={form.email} onChange={(e) => set('email', e.target.value)} />
+        </Field>
+        <Field label="Sitio web" htmlFor="c-website">
+          <Input id="c-website" value={form.website} onChange={(e) => set('website', e.target.value)} />
         </Field>
         <Field label="Plataforma — Nombre comercial" htmlFor="c-pcomm">
           <Input id="c-pcomm" value={form.commercialName} onChange={(e) => set('commercialName', e.target.value)} />

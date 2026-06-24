@@ -11,3 +11,6 @@ server/.env
 
 # Browser QA session captures (not source)
 .playwright-mcp/
+
+# Local dev credentials (never commit)
+DEV_CREDENTIALS.md

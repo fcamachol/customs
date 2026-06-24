@@ -13,7 +13,7 @@ import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
 import type { DeniedPartyEntry } from '../../../shared/risk/lists';
 import { validate } from '../validation/middleware';
 import { riskBody } from '../validation/schemas';
-// F20b: name-dedup tokenizer. rawBlindIndex receives an already-normalized value
+// F20b/F20c: name-dedup tokenizer. rawBlindIndex receives an already-normalized value
 // (nameTokenFn is called with norm(name), not raw name) and returns an HMAC token.
 // This keeps shared/risk crypto-free while replacing plaintext keys with opaque tokens.
 import { rawBlindIndex } from '../crypto/blindIndex';
@@ -39,26 +39,19 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), va
   const thresholds = await loadConfig<Partial<Record<keyof Thresholds, unknown>>>('validation_params');
   // F18: OFAC/BIS/EU/UN sanctions screening list. Loaded from config key `denied_parties`.
   // Shipments are decrypted above before scoreManifest so IDs are available in plaintext here.
-  // F18 matches on DECRYPTED names/ids in-memory — UNAFFECTED by F20b tokenization.
+  // F18 matches on DECRYPTED names/ids in-memory — UNAFFECTED by F20b/F20c tokenization.
   const deniedParties = await loadConfig<DeniedPartyEntry[]>('denied_parties');
 
   await deleteManifestHistory(req.params.id);
+
+  // F20c: loadHistoryCounts now returns token-keyed counts (rawBlindIndex(norm(name))).
+  // The engine receives these directly via scoreManifest — no re-keying bridge needed.
   const history = await loadHistoryCounts(period, req.params.id);
-  // F20b: inject rawBlindIndex as nameTokenFn so dedup keys are HMAC tokens over
-  // norm(name), not plaintext. Shipments are decrypted above, so norm(name) is
-  // computed on plaintext → tokenized → collision-preserving (same norm → same token).
-  //
-  // Bridge for F20b→F20c transition: the monthly_history DB still stores plaintext
-  // consignee_name_norm keys (the column migration happens in F20c). Re-key the
-  // history through rawBlindIndex so the keys match the per-shipment token space.
-  // After F20c lands (consignee_name_bidx column + backfill), loadHistoryCounts will
-  // return pre-tokenized keys and this re-keying step will be removed.
-  const tokenizedHistory: Record<string, number> = {};
-  for (const [normKey, count] of Object.entries(history)) {
-    tokenizedHistory[rawBlindIndex(normKey)] = count;
-  }
+
+  // F20b/F20c: inject rawBlindIndex as nameTokenFn so dedup keys are HMAC tokens over
+  // norm(name), not plaintext. loadHistoryCounts returns the same token space so lookups match.
   const scoreOptions = { prohibitedKeywords, piracyBrands, thresholds, deniedParties, nameTokenFn: rawBlindIndex };
-  const scored = scoreManifest(shipments, tokenizedHistory, scoreOptions);
+  const scored = scoreManifest(shipments, history, scoreOptions);
 
   // FIX: use rows[i].id (table PK) not sc.shipment.id (data JSON field) — they can differ.
   for (const [i, sc] of scored.entries()) {
@@ -100,9 +93,14 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), va
 
   await recordAudit({ userId: req.user!.userId, action: 'RUN_RISK', entity: 'manifest', entityId: req.params.id, after: summary, ip: req.ip });
 
-  // Legacy parity: build the set of normalized consignee names from the monthly history keys
-  // (history is Record<normalizedName, count> — the keys are already normalized)
-  const monthlyDbNames = new Set(Object.keys(history));
+  // Legacy parity: scoreLegacyParity expects a Set of pre-normalized plaintext names (norm(name)).
+  // F20c: history now returns token keys, NOT norm keys. Query consignee_name_norm separately
+  // for legacyParity so that monthlyDbNames.has(norm(name)) lookups continue to work correctly.
+  const { rows: normRows } = await query<{ consignee_name_norm: string }>(
+    `SELECT DISTINCT consignee_name_norm FROM monthly_history WHERE period=$1 AND (manifest_id IS NULL OR manifest_id <> $2)`,
+    [period, req.params.id],
+  );
+  const monthlyDbNames = new Set(normRows.map((r) => r.consignee_name_norm));
   const legacyRows = scoreLegacyParity(shipments, monthlyDbNames);
 
   res.json({

@@ -4,7 +4,6 @@ import { Search, Upload, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } fro
 import { apiGet, apiPost } from '../api';
 import { Card, Field, Input, Button, StatusPill } from './ui';
 import type { Resultado } from './ui';
-import { ReportTabs } from './ReportTabs';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
@@ -71,7 +70,6 @@ export default function SeguimientoView() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [lock, setLock] = useState<{ editable: boolean; reason: string | null }>({ editable: true, reason: null });
   const [version, setVersion] = useState<number>(0);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   // Block 3 — PDF upload
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -115,7 +113,6 @@ export default function SeguimientoView() {
     setPdfFile(null);
     setLock({ editable: true, reason: null });
     setVersion(0);
-    setRefreshKey((k) => k + 1);
     // Pre-load any previously-captured import data + lock state (edit-before-lock).
     try {
       const detail = await apiGet<{
@@ -166,7 +163,6 @@ export default function SeguimientoView() {
       });
       setVersion(resp.version);
       setSaveSuccess(true);
-      setRefreshKey((k) => k + 1); // refresh the on-screen Reporte General + risk-stale banner
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Error al guardar.');
     }
@@ -275,9 +271,6 @@ export default function SeguimientoView() {
           <p className="mt-3 text-xs text-navy-700 font-medium">Registro seleccionado: {selectedLabel}</p>
         )}
       </Card>
-
-      {/* On-screen reports — review the data while capturing/correcting the pedimento */}
-      {selectedId && <ReportTabs recordId={selectedId} refreshKey={refreshKey} />}
 
       {/* Block 2 — Pedimento capture */}
       <Card className={`p-6 shadow-sm transition-opacity ${!selectedId ? 'opacity-50 pointer-events-none' : ''}`}>

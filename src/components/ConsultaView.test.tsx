@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import ConsultaView from './ConsultaView';
+import { apiDownload } from '../api';
 
 const recordsList = [
   { id: 'rec-1', mawbReference: 'MAWB-123', clientName: 'Acme Corp', createdAt: '2026-01-01' },
@@ -51,7 +52,7 @@ describe('ConsultaView', () => {
     expect(screen.getByText(/Acme Corp/)).toBeTruthy();
   });
 
-  it('shows artifact FileCards after selecting a record', async () => {
+  it('renders report tabs (incl. Pedimento) and downloads the active tab', async () => {
     render(<ConsultaView />);
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Acme' } });
@@ -60,13 +61,19 @@ describe('ConsultaView', () => {
     const recordButton = await screen.findByText(/MAWB-123/);
     fireEvent.click(recordButton);
 
-    // 'Análisis de Riesgo' / 'Reporte General' now also appear as on-screen tab labels, so use
-    // getAllByText for those; 'LayOut' and 'Pedimento' remain unique to the download FileCards.
+    // Reports now drive both the table view and the downloads via tabs.
     await waitFor(() => {
-      expect(screen.getAllByText('Análisis de Riesgo').length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: 'Análisis de Riesgo' })).toBeTruthy();
     });
-    expect(screen.getAllByText('Reporte General').length).toBeGreaterThan(0);
-    expect(screen.getByText('LayOut')).toBeTruthy();
-    expect(screen.getByText('Pedimento')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reporte General' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Layout' })).toBeTruthy();
+    // Pedimento tab only appears because this record has a pedimento PDF.
+    expect(screen.getByRole('button', { name: 'Pedimento' })).toBeTruthy();
+
+    // The top-right "Descargar" downloads the file for the active tab (default: risk).
+    fireEvent.click(screen.getByRole('button', { name: 'Descargar' }));
+    await waitFor(() => {
+      expect(apiDownload).toHaveBeenCalledWith('/api/records/rec-1/risk.xlsx', 'Analisis_de_Riesgo.xlsx');
+    });
   });
 });

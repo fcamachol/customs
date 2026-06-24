@@ -51,7 +51,7 @@ export interface ScoreOptions {
    * and returns an opaque dedup token (e.g. HMAC blind index from blindIndex.ts).
    *
    * When absent, defaults to identity — all existing behavior is EXACTLY preserved.
-   * The server injects `nameBlindIndex` so PII normalized names are never stored
+   * The server injects `rawBlindIndex` so PII normalized names are never stored
    * as plain keys; shared/risk code stays crypto-free (Node `crypto` not imported here).
    *
    * Collision structure is preserved: norm(a) === norm(b) → tokenFn(norm(a)) === tokenFn(norm(b)).
@@ -77,8 +77,8 @@ export function scoreManifest(
   const weights = resolveWeights(options?.weights);
   const bands = resolveBands(options?.bands);
 
-  // F20b: name-dedup tokenizer (injected; defaults to identity when absent).
-  // The server passes nameBlindIndex here so dedup keys are HMAC tokens, not plaintext.
+  // F20b/F20c: name-dedup tokenizer (injected; defaults to identity when absent).
+  // The server passes rawBlindIndex here so dedup keys are HMAC tokens, not plaintext.
   // shared/risk stays crypto-free: we receive the fn, never import Node crypto.
   const nameTokenFn = options?.nameTokenFn;
 

@@ -32,6 +32,7 @@ export const createClientBody = z.object({
   address: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
+  website: z.string().optional(),
   platform: z.unknown().optional(),
 });
 
@@ -41,6 +42,7 @@ export const updateClientBody = z.object({
   address: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().optional(),
+  website: z.string().optional(),
   platform: z.unknown().optional(),
 });
 

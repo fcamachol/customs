@@ -10,7 +10,7 @@ export const catalogsRouter = Router();
 // GET /api/catalogs/clients — any authenticated role
 catalogsRouter.get('/clients', requireAuth, async (req, res) => {
   const { rows } = await query(
-    `SELECT id, name, tax_id, address, phone, email, platform, created_by, created_at
+    `SELECT id, name, tax_id, address, phone, email, website, platform, created_by, created_at
      FROM clients ORDER BY name`,
   );
   res.json(rows);
@@ -23,12 +23,12 @@ catalogsRouter.post(
   requireRole('admin', 'capturista'),
   validate({ body: createClientBody }),
   async (req, res) => {
-    const { name, tax_id, address, phone, email, platform } = req.body;
+    const { name, tax_id, address, phone, email, website, platform } = req.body;
     const { rows } = await query(
-      `INSERT INTO clients (name, tax_id, address, phone, email, platform, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, tax_id, address, phone, email, platform, created_by, created_at`,
-      [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null,
+      `INSERT INTO clients (name, tax_id, address, phone, email, website, platform, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, tax_id, address, phone, email, website, platform, created_by, created_at`,
+      [name, tax_id ?? null, address ?? null, phone ?? null, email ?? null, website ?? null,
        platform != null ? JSON.stringify(platform) : null,
        req.user!.userId],
     );
@@ -51,7 +51,7 @@ catalogsRouter.put(
   requireRole('admin', 'capturista'),
   async (req, res) => {
     const { id } = req.params;
-    const { name, tax_id, address, phone, email, platform } = req.body ?? {};
+    const { name, tax_id, address, phone, email, website, platform } = req.body ?? {};
 
     // Fetch before state for audit
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
@@ -67,15 +67,17 @@ catalogsRouter.put(
            address  = COALESCE($4, address),
            phone    = COALESCE($5, phone),
            email    = COALESCE($6, email),
-           platform = COALESCE($7, platform)
+           website  = COALESCE($7, website),
+           platform = COALESCE($8, platform)
        WHERE id = $1
-       RETURNING id, name, tax_id, address, phone, email, platform, created_by, created_at`,
+       RETURNING id, name, tax_id, address, phone, email, website, platform, created_by, created_at`,
       [id,
        name ?? null,
        tax_id ?? null,
        address ?? null,
        phone ?? null,
        email ?? null,
+       website ?? null,
        platform != null ? JSON.stringify(platform) : null],
     );
     await recordAudit({

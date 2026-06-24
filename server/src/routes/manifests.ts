@@ -105,10 +105,10 @@ manifestsRouter.post('/:id/promote', requireAuth, requireRole('admin', 'capturis
   res.json({ promoted: promotable.length });
 });
 
-// POST /api/manifests/:id/client — associate a client to a manifest
+// POST /api/manifests/:id/client — associate a client (and optionally one of its platforms)
 manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturista'), validate({ body: manifestClientBody }), async (req, res) => {
   const { id } = req.params;
-  const { clientId } = req.body;
+  const { clientId, platformId } = req.body;
 
   const existing = await query('SELECT id FROM manifests WHERE id=$1', [id]);
   if (existing.rows.length === 0) { res.status(404).json({ error: 'Manifest not found' }); return; }
@@ -116,14 +116,20 @@ manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturist
   const clientCheck = await query('SELECT id FROM clients WHERE id=$1', [clientId]);
   if (clientCheck.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
 
-  // Bust the cached Reporte General: the client overlay (Remitente/Plataforma) feeds the report.
-  await query('UPDATE manifests SET client_id=$1, report_file_id=NULL WHERE id=$2', [clientId, id]);
+  if (platformId) {
+    const pc = await query('SELECT id FROM client_platforms WHERE id=$1 AND client_id=$2', [platformId, clientId]);
+    if (pc.rows.length === 0) { res.status(400).json({ error: 'Platform does not belong to client' }); return; }
+  }
+
+  // Bust the cached Reporte General: the client + platform overlay feeds the report.
+  await query('UPDATE manifests SET client_id=$1, platform_id=$2, report_file_id=NULL WHERE id=$3',
+    [clientId, platformId ?? null, id]);
   await recordAudit({
     userId: req.user!.userId,
     action: 'LINK_CLIENT',
     entity: 'manifest',
     entityId: id,
-    after: { clientId },
+    after: { clientId, platformId: platformId ?? null },
     ip: req.ip,
   });
   res.json({ ok: true });

@@ -120,11 +120,12 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
     expect(res.body.locked).toBe(true);
   });
 
-  it('busts the cached report on the affected manifest but leaves risk_stale untouched', async () => {
+  it("busts THIS pedimento's cached report but leaves risk_stale untouched", async () => {
     const f = await query(
-      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('risk_analysis','r.xlsx','/x',1,$1) RETURNING id`,
+      `INSERT INTO files (kind, original_name, storage_path, size_bytes, uploaded_by) VALUES ('report','r.xlsx','/x',1,$1) RETURNING id`,
       [capId]);
-    await query(`UPDATE manifests SET risk_file_id=$1, report_file_id=$1, risk_stale=false WHERE id=$2`, [f.rows[0].id, manifestId]);
+    await query(`UPDATE pedimentos SET report_file_id=$1 WHERE id=$2`, [f.rows[0].id, pedimentoId]);
+    await query(`UPDATE manifests SET risk_stale=false WHERE id=$1`, [manifestId]);
 
     const res = await request(app)
       .post(`/api/pedimentos/${pedimentoId}/import-data`)
@@ -132,10 +133,11 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
       .send({ ...IMPORT_DATA, version: 0 });
     expect(res.status).toBe(200);
 
-    const m = await query(`SELECT report_file_id, risk_stale FROM manifests WHERE id=$1`, [manifestId]);
-    // Report cache busted (regenerates from the new import-data)…
-    expect(m.rows[0].report_file_id).toBeNull();
+    // The pedimento's own report cache is busted (regenerates from the new import-data)…
+    const p = await query(`SELECT report_file_id FROM pedimentos WHERE id=$1`, [pedimentoId]);
+    expect(p.rows[0].report_file_id).toBeNull();
     // …but risk is per-manifest and no longer keyed on import_data: not flagged stale here.
+    const m = await query(`SELECT risk_stale FROM manifests WHERE id=$1`, [manifestId]);
     expect(m.rows[0].risk_stale).toBe(false);
   });
 

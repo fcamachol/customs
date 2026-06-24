@@ -156,6 +156,13 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     importDataVersion: p.import_data_version,
     coveredGuias: p.covered_guias ?? [],
     pedimentoPdf: p.file_id ? `/api/files/${p.file_id}` : null,
+    // Per-pedimento report artifacts (Task 10): Reporte General + Layout built over this
+    // subdivisión's covered-guía subset + its own import_data.
+    artifacts: {
+      reports: `/api/pedimentos/${p.id}/reports.json`,
+      report: `/api/pedimentos/${p.id}/report.xlsx`,
+      layout: `/api/pedimentos/${p.id}/layout.xlsx`,
+    },
   }));
 
   const manifestGuias = (await loadShipments(req.params.id)).map((s) => s.data.guideId);
@@ -180,9 +187,9 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     pedimentos,
     coverage,
     artifacts: {
+      // Risk stays manifest-level. Reporte General + Layout are now per-pedimento (see pedimentos[].artifacts).
       riskAnalysis: `/api/records/${r.id}/risk.xlsx`,
       pedimentoPdf: topPedimentoFileId ? `/api/files/${topPedimentoFileId}` : null,
-      report: `/api/records/${r.id}/report.xlsx`,
     },
   });
 });

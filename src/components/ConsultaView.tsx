@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Search, X, Download } from 'lucide-react';
-import { apiGet, apiDownload } from '../api';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Search, X } from 'lucide-react';
+import { apiGet } from '../api';
 import { Card, Input, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
-import { ReportTabs } from './ReportTabs';
+import { RiskPanel, PedimentoReportTabs } from './ReportTabs';
 
 interface RecordSummary {
   id: string;
@@ -347,41 +347,37 @@ export default function ConsultaView() {
       )}
 
       {detail && (
-        <>
-          <PedimentosList pedimentos={detail.pedimentos ?? []} />
-          <ReportTabs recordId={detail.id} pedimentoPdf={detail.artifacts.pedimentoPdf} />
-        </>
+        <div className="space-y-6">
+          {/* Risk is manifest-level (shipment-scoped); shown once. */}
+          <RiskPanel recordId={detail.id} />
+
+          {/* Report + Layout + Pedimento PDF are per-pedimento (each subdivisión is its own submission). */}
+          {(detail.pedimentos ?? []).length === 0 ? (
+            <Card className="p-5 shadow-sm">
+              <p className="text-sm text-slate-500">Aún no hay pedimentos (subdivisiones) para este registro.</p>
+            </Card>
+          ) : (
+            (detail.pedimentos ?? []).map((p: PedimentoItem) => (
+              // Fragment carries the list key (the codebase types components with inline prop
+              // objects, which don't surface React's `key` attribute on the component itself).
+              <Fragment key={p.id}>
+                <PedimentoReportTabs
+                  pedimentoId={p.id}
+                  title={pedimentoTitle(p)}
+                  pedimentoPdf={p.pedimentoPdf}
+                />
+              </Fragment>
+            ))
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-// Lists every pedimento (subdivisión) PDF attached to the selected manifest.
-function PedimentosList({ pedimentos }: { pedimentos: PedimentoItem[] }) {
-  const withPdf = pedimentos.filter((p) => p.pedimentoPdf);
-  if (withPdf.length === 0) return null;
-  return (
-    <Card className="p-5 shadow-sm">
-      <h2 className="mb-3 text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h2>
-      <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        {withPdf.map((p) => (
-          <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-            <span className="min-w-0">
-              <span className="font-semibold text-slate-800">{p.numeroPedimento ?? 'Sin número'}</span>
-              {p.subdivisionOrdinal != null && (
-                <span className="text-slate-500"> — subdivisión {p.subdivisionOrdinal}{p.isLast ? ' (última)' : ''}</span>
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={() => apiDownload(p.pedimentoPdf!, `Pedimento_${p.numeroPedimento ?? p.id}.pdf`)}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-            >
-              <Download className="h-3.5 w-3.5" /> Descargar PDF
-            </button>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
+// Heading for a per-pedimento report panel, e.g. "Pedimento 258… — subdivisión 2 (última)".
+function pedimentoTitle(p: PedimentoItem): string {
+  const numero = p.numeroPedimento ?? 'Sin número';
+  if (p.subdivisionOrdinal == null) return `Pedimento ${numero}`;
+  return `Pedimento ${numero} — subdivisión ${p.subdivisionOrdinal}${p.isLast ? ' (última)' : ''}`;
 }

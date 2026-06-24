@@ -128,9 +128,12 @@ manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturist
     if (pc.rows.length === 0) { res.status(400).json({ error: 'Platform does not belong to client' }); return; }
   }
 
-  // Bust the cached Reporte General: the client + platform overlay feeds the report.
-  await query('UPDATE manifests SET client_id=$1, platform_id=$2, report_file_id=NULL WHERE id=$3',
+  // Bind the client/platform overlay (feeds every pedimento's Reporte General).
+  await query('UPDATE manifests SET client_id=$1, platform_id=$2 WHERE id=$3',
     [clientId, platformId ?? null, id]);
+  // Bust the cached Reporte General for ALL of this manifest's pedimentos — the overlay changed, so
+  // each subdivisión's report must regenerate. (The report cache is per-pedimento as of Task 10.)
+  await query('UPDATE pedimentos SET report_file_id=NULL WHERE manifest_id=$1', [id]);
   await recordAudit({
     userId: req.user!.userId,
     action: 'LINK_CLIENT',

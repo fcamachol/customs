@@ -98,12 +98,15 @@ importDataRouter.post(
     const params: unknown[] = [JSON.stringify(data), req.params.pedimentoId];
     if (typeof expected === 'number') params.push(expected);
 
-    // Single atomic statement on the pedimentos row: write data + bump version. Risk is no longer
-    // keyed on import_data (risk is per-manifest), so we do NOT touch risk_stale here.
+    // Single atomic statement on the pedimentos row: write data + bump version + bust this
+    // pedimento's own cached Reporte General (report_file_id) so the next download regenerates from
+    // the new import-data. Risk is no longer keyed on import_data (risk is per-manifest), so we do
+    // NOT touch risk_stale here. The report cache is per-pedimento (Task 10), so only THIS row busts.
     const upd = await query<{ import_data_version: number }>(
       `UPDATE pedimentos
          SET import_data=$1,
-             import_data_version=import_data_version+1
+             import_data_version=import_data_version+1,
+             report_file_id=NULL
        WHERE id=$2${versionGuard}
        RETURNING import_data_version`,
       params,
@@ -112,10 +115,6 @@ importDataRouter.post(
       res.status(409).json({ error: 'El registro fue modificado por otro usuario. Recargue e intente de nuevo.', conflict: true });
       return;
     }
-
-    // Cache invalidation only: the Reporte General cache still lives on manifests until Task 10.
-    // Bust it for the affected manifest so the next download regenerates from the new import-data.
-    await query('UPDATE manifests SET report_file_id=NULL WHERE id=$1', [before.rows[0].manifest_id]);
 
     await recordAudit({
       userId: req.user!.userId,

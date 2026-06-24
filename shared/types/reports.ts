@@ -22,17 +22,32 @@ export interface ReportLockState {
   reason: string | null;
 }
 
-export interface ReportsBundle {
+/**
+ * Per-MANIFEST risk bundle (Análisis de Riesgo). Risk is shipment-scoped and pedimento-independent,
+ * so it stays at manifest level even though report+layout are now per-pedimento.
+ */
+export interface RiskBundle {
   /** Risk view (exception-first). */
   risk: RiskScreenRow[];
+  /** True when import-data changed after the last risk run (score no longer matches data). */
+  riskStale: boolean;
+  /** ISO timestamp the bundle was built. */
+  generatedAt: string;
+  /** sha256 of the canonical bundle content — recorded in the audit row for dispute reproducibility. */
+  contentHash: string;
+}
+
+/**
+ * Per-PEDIMENTO report bundle (Reporte General + Layout for one subdivisión), built over that
+ * pedimento's covered-guía subset + its own import_data. Carries consignee identity PII.
+ */
+export interface PedimentoReportsBundle {
   /** Reporte General — 36 columns keyed by header. */
   report: Record<string, string>[];
   /** Layout — 34 columns keyed by header. */
   layout: Record<string, string>[];
-  /** Edit lock derived from pedimento finalization state. */
+  /** Edit lock derived from this pedimento's finalization state. */
   lock: ReportLockState;
-  /** True when import-data changed after the last risk run (score no longer matches data). */
-  riskStale: boolean;
   /** True when identity PII was masked for this viewer (autoridad, no reveal). */
   masked: boolean;
   /** ISO timestamp the bundle was built. */

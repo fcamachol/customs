@@ -50,15 +50,16 @@ describe('records', () => {
     expect(res.body[0].clientName).toBe('Cliente A');
   });
 
-  it('returns a single record with its 3 artifacts in Consulta', async () => {
+  it('returns a single record with manifest-level artifacts + pedimentos in Consulta', async () => {
     const list = await request(app).get('/api/records?q=369-1').set('Authorization', `Bearer ${token}`);
     const id = list.body[0].id;
     const res = await request(app).get(`/api/records/${id}`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('artifacts');
+    // Risk stays manifest-level; Reporte General + Layout moved to pedimentos[].artifacts (Task 10).
     expect(res.body.artifacts).toHaveProperty('riskAnalysis');
     expect(res.body.artifacts).toHaveProperty('pedimentoPdf');
-    expect(res.body.artifacts).toHaveProperty('report');
+    expect(res.body.artifacts).not.toHaveProperty('report');
     expect(res.body).toHaveProperty('pedimentos');
     expect(res.body).toHaveProperty('coverage');
   });
@@ -166,6 +167,12 @@ describe('records — detail pedimentos[]', () => {
     // A pedimento with an attached file is locked (computeLock on the row).
     expect(p.lock).toMatchObject({ editable: false });
     expect(p.coveredGuias).toEqual(['GUIA-A']);
+    // Per-pedimento report artifacts (Task 10): each subdivisión carries its own report/layout URLs.
+    expect(p.artifacts).toMatchObject({
+      reports: `/api/pedimentos/${p.id}/reports.json`,
+      report: `/api/pedimentos/${p.id}/report.xlsx`,
+      layout: `/api/pedimentos/${p.id}/layout.xlsx`,
+    });
     // Coverage is complete (single guía covered).
     expect(res.body.coverage.status).toBe('completo');
     // Top-level pedimentoPdf is sourced from the pedimento's file.

@@ -46,6 +46,14 @@ export const updateClientBody = z.object({
   platform: z.unknown().optional(),
 });
 
+// catalogs — client platforms (one client → many)
+export const clientPlatformBody = z.object({
+  commercialName: z.string().optional(),
+  countryOfOrigin: z.string().optional(),
+  legalName: z.string().optional(),
+  email: z.string().email().optional().or(z.literal('')),
+});
+
 // catalogs — config
 const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy'] as const;
 export const configKeyParam = z.object({
@@ -72,6 +80,7 @@ export const manifestCreateBody = z.object({
 
 export const manifestClientBody = z.object({
   clientId: z.string().min(1),
+  platformId: z.string().min(1).optional(),
 });
 
 // importData

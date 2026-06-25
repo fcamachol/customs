@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Search, Download, Plus } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
-import { Card, Button } from './ui';
+import { Card, Button, Modal } from './ui';
 import { CaptureWizard } from './CaptureWizard';
 import type { PedimentoItem } from './CaptureWizard';
 import type { ManifestCoverageStatus } from '../../shared/pedimento/coverage';
@@ -140,6 +140,15 @@ export default function SeguimientoView() {
     }
   }
 
+  // Closing the manifest modal clears the selection (drops the queue highlight + empties the panel).
+  function handleCloseManifest() {
+    setSelectedId(null);
+    setSelectedLabel('');
+    setPedimentos([]);
+    setRowError(null);
+    setLock({ editable: true, reason: null });
+  }
+
   async function handleDownloadPdf(p: PedimentoItem) {
     if (!p.pedimentoPdf) return;
     try {
@@ -227,14 +236,18 @@ export default function SeguimientoView() {
         )}
       </Card>
 
-      {/* Pedimentos (subdivisiones) — summary rows; capture happens in the wizard (one entry point). */}
+      {/* Pedimentos (subdivisiones) — opened in a modal when a manifest is selected from the queue.
+          Capture still happens in the CaptureWizard (one entry point). While the wizard is open we
+          hide this modal (so the two overlays don't stack) and reopen it on wizard close. */}
       {selectedId && (
-        <Card className="p-6 shadow-sm">
+        <Modal
+          open={!wizardPedimento && !wizardNew}
+          onClose={handleCloseManifest}
+          title={selectedLabel || 'Pedimentos (subdivisiones)'}
+          size="xl"
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 flex-col">
-              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h2>
-              <span className="text-xs font-medium text-navy-700">{selectedLabel}</span>
-            </div>
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h3>
             {/* Single entry point to add a pedimento: opens the wizard on its "Subir pedimento" step.
                 Hidden once the manifest is locked (prevalidado / PDF adjunto seals attachment). */}
             {lock.editable && (
@@ -275,7 +288,7 @@ export default function SeguimientoView() {
               Registro bloqueado: no se pueden agregar más pedimentos.
             </p>
           )}
-        </Card>
+        </Modal>
       )}
 
       {wizardPedimento && (

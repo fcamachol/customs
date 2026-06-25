@@ -76,11 +76,20 @@ describe('SeguimientoView', () => {
     expect(screen.queryByText('MAWB-PEND')).toBeNull();
   });
 
-  it('shows the pedimentos sub-list with a status chip + entry button (no inline form) + download named by numero', async () => {
+  it('opens a modal (not an inline panel) with the pedimentos sub-list + entry button + download named by numero', async () => {
     render(<SeguimientoView />);
-    fireEvent.click(await screen.findByText('MAWB-PEND'));
+    // Nothing renders before a manifest is selected — the panel is not inline at the bottom.
+    expect(await screen.findByText('MAWB-PEND')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText('258516535001684')).toBeNull();
+
+    // Selecting a manifest opens the Pedimentos (subdivisiones) panel inside a modal dialog.
+    fireEvent.click(screen.getByText('MAWB-PEND'));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeTruthy();
     // The selected manifest's pedimentos[] renders each row with its numero + a lifecycle status chip.
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
+    expect(screen.getByText('Pedimentos (subdivisiones)')).toBeTruthy();
     expect(screen.getByText(/subdivisión 2/)).toBeTruthy();
     expect(screen.getByText('Pendiente')).toBeTruthy();
     // The PDF upload is no longer an inline dropzone — it moved into the wizard, reached via a button.
@@ -104,8 +113,8 @@ describe('SeguimientoView', () => {
     fireEvent.click(await screen.findByText('MAWB-PEND'));
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
 
-    // No wizard yet.
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // The manifest modal is open, but the capture wizard ("Captura de pedimento") is not yet.
+    expect(screen.queryByText('Captura de pedimento')).toBeNull();
 
     // A pendiente row's entry button is labelled "Capturar"; clicking it opens the wizard directly on
     // its Capturar step (the PDF is already attached, so the upload step is skipped).
@@ -142,8 +151,8 @@ describe('SeguimientoView', () => {
     fireEvent.click(await screen.findByText('MAWB-PEND'));
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
 
-    // No wizard yet.
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // The manifest modal is open, but the capture wizard ("Captura de pedimento") is not yet.
+    expect(screen.queryByText('Captura de pedimento')).toBeNull();
 
     // Clicking "Agregar pedimento" opens the wizard modal on its first step: the PDF dropzone.
     fireEvent.click(screen.getByRole('button', { name: /Agregar pedimento/i }));

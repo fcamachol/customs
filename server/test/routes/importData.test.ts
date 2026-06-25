@@ -184,4 +184,13 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
 
     expect(res.status).toBe(404);
   });
+
+  it('capture persists tipoCambio and paymentDate (header fields ride along)', async () => {
+    const pid = await addPedimento(manifestId, {});
+    await request(app).post(`/api/pedimentos/${pid}/import-data`)
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send({ patente: '1653', tipoCambio: 20.4568, paymentDate: '2025-04-05', version: 0 });
+    const row = await query(`SELECT import_data FROM pedimentos WHERE id=$1`, [pid]);
+    expect(row.rows[0].import_data).toMatchObject({ tipoCambio: 20.4568, paymentDate: '2025-04-05' });
+  });
 });

@@ -18,6 +18,8 @@ const FIELDS = [
   'fechaEntrada',
   'claveAduanaEntrada',
   'claveAduanaDespacho',
+  'tipoCambio',
+  'paymentDate',
 ] as const;
 
 interface TasaVigencia { startDate?: string; originType?: string; rate?: number }

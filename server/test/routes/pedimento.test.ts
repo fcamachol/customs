@@ -49,15 +49,25 @@ function makeExpensiveShipment(guideId: string) {
   };
 }
 
-const PEDIMENTO_BODY = {
-  numeroPedimento: '258516535001684',
+// Seeds config entities required for prevalidation.
+async function setEntities() {
+  await query(
+    `INSERT INTO config (key,value) VALUES ('importer_of_record',$1) ON CONFLICT (key) DO UPDATE SET value=$1`,
+    [JSON.stringify({ rfc: 'ADM130509UQ0', name: 'ADMERCE SA DE CV', fiscalAddress: 'CDMX' })],
+  );
+  await query(
+    `INSERT INTO config (key,value) VALUES ('customs_agent',$1) ON CONFLICT (key) DO UPDATE SET value=$1`,
+    [JSON.stringify({ patente: '1653', name: 'GUZMOR', agentRfc: 'GUMM710831UYA', agencyRfc: 'GLG1502247K9' })],
+  );
+}
+
+// Required import_data fields for prevalidation.
+const IMPORT_DATA = {
   tipoCambio: 20.45,
-  customsEntryCode: '4',
-  customsClearanceCode: '850',
-  entryDate: '2025-04-04',
+  claveAduanaEntrada: '850',
+  claveAduanaDespacho: '850',
+  fechaEntrada: '2025-04-04',
   paymentDate: '2025-04-05',
-  importer: { rfc: 'ADM130509UQ0', name: 'ADMERCE SA DE CV', fiscalAddress: 'CDMX' },
-  agent: { patente: '1653', name: 'GUZMOR', agentRfc: 'GUMM710831UYA', agencyRfc: 'GLG1502247K9' },
 };
 
 beforeEach(async () => {
@@ -72,6 +82,7 @@ beforeEach(async () => {
 
 describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
   it('builds over covered_guias subset, persists on pedimento row, returns prevalidation', async () => {
+    await setEntities();
     // Two shipments — guia g1 and g2. The pedimento covers only g1.
     const s1 = makeShipment('g1');
     const s2 = makeShipment('g2');
@@ -80,15 +91,15 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
 
     // Insert a pedimento row covering only g1 — seeded as 'capturado' to pass the lifecycle guard.
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
-      [manifestId, ['g1'], userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)],
     );
     const pedimentoId = ped.rows[0].id;
 
     const res = await request(app)
       .post(`/api/pedimentos/${pedimentoId}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
 
     expect(res.status).toBe(201);
     expect(res.body.prevalidation.status).toBe('APPROVED');
@@ -105,6 +116,7 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
   });
 
   it('leaves sibling pedimento rows untouched when one pedimento is built', async () => {
+    await setEntities();
     const s1 = makeShipment('g1');
     const s2 = makeShipment('g2');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s1.id, manifestId, JSON.stringify(s1)]);
@@ -112,8 +124,8 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
 
     // Seed ped1 as 'capturado' so it can be built; ped2 can remain default 'pendiente'.
     const ped1 = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
-      [manifestId, ['g1'], userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)],
     );
     const ped2 = await query(
       `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
@@ -124,7 +136,7 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     const res = await request(app)
       .post(`/api/pedimentos/${ped1.rows[0].id}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
     expect(res.status).toBe(201);
 
     // ped2 must remain untouched (prevalidation still null).
@@ -134,37 +146,39 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
   });
 
   it('returns 400 when covered_guias is empty (no shipments in subset)', async () => {
+    await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 
     // Pedimento with no covered guías → empty subset.
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
-      [manifestId, [], userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, [], userId, JSON.stringify(IMPORT_DATA)],
     );
 
     const res = await request(app)
       .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/No shipments/);
   });
 
   it('returns 400 when covered_guias is null (no shipments in subset)', async () => {
+    await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 
     // Pedimento with null covered_guias → empty subset (coveredSet is empty).
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1, NULL, $2) RETURNING id`,
-      [manifestId, userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684', NULL, $2,'capturado',$3) RETURNING id`,
+      [manifestId, userId, JSON.stringify(IMPORT_DATA)],
     );
 
     const res = await request(app)
       .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/No shipments/);
   });
@@ -174,91 +188,73 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     const res = await request(app)
       .post(`/api/pedimentos/${fakeId}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
   });
 
-  it('returns 400 (not 500) when importer and agent are missing', async () => {
-    const s = makeShipment('g1');
+  it('returns 422 when entities are not configured', async () => {
+    // No setEntities() call — config rows absent.
+    const s = makeShipment('G1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
-    const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
-      [manifestId, ['g1'], userId],
-    );
-
-    const res = await request(app)
-      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        numeroPedimento: '258516535001684', tipoCambio: 20.45,
-        customsEntryCode: '4', customsClearanceCode: '850',
-        entryDate: '2025-04-04', paymentDate: '2025-04-05',
-      });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-    expect(JSON.stringify(res.body.details)).toMatch(/importer/);
+    const pid = (await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
+       VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, [s.guideId], userId, JSON.stringify(IMPORT_DATA)])).rows[0].id;
+    const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(422);
   });
 
   it('returns 409 when pedimento sub_status is pendiente (lifecycle guard)', async () => {
+    await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 
     // Insert row with default sub_status='pendiente' — not yet captured.
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by) VALUES ($1,$2,$3) RETURNING id`,
-      [manifestId, ['g1'], userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, import_data) VALUES ($1,'258516535001684',$2,$3,$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)],
     );
 
     const res = await request(app)
       .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toBeTruthy();
   });
 
-  it('prevalidación APPROVED sets sub_status=prevalidado', async () => {
-    const s = makeShipment('g1');
-    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
-
-    // Seed as capturado so it can be prevalidated.
-    const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
-      [manifestId, ['g1'], userId],
-    );
-    const pedimentoId = ped.rows[0].id;
-
-    const res = await request(app)
-      .post(`/api/pedimentos/${pedimentoId}/pedimento`)
-      .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
-
+  it('prevalidación APPROVED assembles the body from import_data + config entities', async () => {
+    await setEntities();
+    const s1 = makeShipment('G1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s1.id, manifestId, JSON.stringify(s1)]);
+    const pid = (await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
+       VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, [s1.guideId], userId, JSON.stringify(IMPORT_DATA)])).rows[0].id;
+    const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
     expect(res.status).toBe(201);
     expect(res.body.prevalidation.status).toBe('APPROVED');
-
-    // sub_status must be updated to 'prevalidado'.
-    const row = await query<{ sub_status: string }>(
-      'SELECT sub_status FROM pedimentos WHERE id=$1', [pedimentoId]);
-    expect(row.rows[0].sub_status).toBe('prevalidado');
+    expect((await query(`SELECT sub_status FROM pedimentos WHERE id=$1`, [pid])).rows[0].sub_status).toBe('prevalidado');
   });
 
   it('prevalidación REJECTED sets sub_status=rechazado', async () => {
+    await setEntities();
     // Use a shipment with customsValueUsd > $2500 to trigger REJECTED prevalidation.
     const s = makeExpensiveShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 
     // Seed as capturado so it can be prevalidated.
     const ped = await query(
-      `INSERT INTO pedimentos (manifest_id, covered_guias, created_by, sub_status) VALUES ($1,$2,$3,'capturado') RETURNING id`,
-      [manifestId, ['g1'], userId],
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)],
     );
     const pedimentoId = ped.rows[0].id;
 
     const res = await request(app)
       .post(`/api/pedimentos/${pedimentoId}/pedimento`)
       .set('Authorization', `Bearer ${token}`)
-      .send(PEDIMENTO_BODY);
+      .send({});
 
     expect(res.status).toBe(201);
     expect(res.body.prevalidation.status).toBe('REJECTED');

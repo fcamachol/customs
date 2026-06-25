@@ -17,10 +17,10 @@ until node_modules/.bin/node-pg-migrate up --tsx -m migrations; do
   sleep 3
 done
 
-# Optional one-shot user seed. Runs only when SEED_USERS is set (JSON array of
-# [username, password_hash, role]); idempotent upsert. Unset it after seeding.
-if [ -n "$SEED_USERS" ]; then
-  echo "[entrypoint] SEED_USERS present — seeding users..."
+# Optional one-shot user seed. Runs only when SEED_USERS_B64 is set (base64 of a
+# JSON array of [username, password, role]); idempotent upsert. Unset after seeding.
+if [ -n "$SEED_USERS_B64" ]; then
+  echo "[entrypoint] SEED_USERS_B64 present — seeding users..."
   node_modules/.bin/tsx scripts/seedUsers.ts
 fi
 

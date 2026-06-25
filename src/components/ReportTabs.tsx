@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Download, Eye, FileText, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Download, Eye, FileText, ShieldAlert } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
 import { Card } from './ui';
 import { RiskResultTable, RiskSummary } from './RiskResultTable';
@@ -90,6 +90,7 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
   const [bundle, setBundle] = useState<RiskBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -113,8 +114,16 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
 
   return (
     <Card className="p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
-        <h2 className="text-sm font-semibold text-navy-700">Análisis de Riesgo</h2>
+      <div className={`flex items-center justify-between gap-2 border-b border-slate-200 pb-2 ${open ? 'mb-4' : ''}`}>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="-ml-1 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm font-semibold text-navy-700 transition-colors hover:text-navy-900"
+        >
+          {open ? <ChevronDown className="h-4 w-4 text-slate-500" /> : <ChevronRight className="h-4 w-4 text-slate-500" />}
+          Análisis de Riesgo
+        </button>
         <button
           type="button"
           onClick={handleDownload}
@@ -124,10 +133,10 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
         </button>
       </div>
 
-      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
-      {loading && !bundle && <p className="px-1 py-6 text-sm text-slate-500">Cargando…</p>}
+      {open && error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+      {open && loading && !bundle && <p className="px-1 py-6 text-sm text-slate-500">Cargando…</p>}
 
-      {bundle && (
+      {open && bundle && (
         <div className="space-y-4">
           {bundle.riskStale && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

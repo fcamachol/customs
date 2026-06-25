@@ -188,6 +188,8 @@ export default function ConsultaView() {
     try {
       const rec = await apiGet<RecordDetail>(`/api/records/${id}`);
       setDetail(rec);
+      // Collapse the list to just this selection; the MAWB in the search bar is the active state.
+      setQuery(rec.mawbReference);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar el registro.');
     }
@@ -229,10 +231,20 @@ export default function ConsultaView() {
             <Input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => { setQuery(e.target.value); if (detail) setDetail(null); }}
               placeholder="Buscar por MAWB o cliente"
-              className="pl-10"
+              className={query ? 'px-10' : 'pl-10'}
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => { setQuery(''); setDetail(null); }}
+                aria-label="Limpiar búsqueda"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <SearchSelect
             value={clientName}
@@ -308,7 +320,7 @@ export default function ConsultaView() {
             </button>
           )}
           <span className="ml-auto text-xs text-slate-400">
-            {loading ? 'Buscando…' : `${records.length} registro(s)`}
+            {loading ? 'Buscando…' : detail ? '' : `${records.length} registro(s)`}
           </span>
         </div>
       )}
@@ -317,13 +329,13 @@ export default function ConsultaView() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>
       )}
 
-      {!loading && !error && records.length === 0 && (
+      {!loading && !error && records.length === 0 && !detail && (
         <p className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
           Sin resultados para estos filtros.
         </p>
       )}
 
-      {records.length > 0 && (
+      {records.length > 0 && !detail && (
         <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           {records.map((r) => (
             <li key={r.id}>

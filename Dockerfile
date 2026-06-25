@@ -34,11 +34,17 @@ RUN npm ci --include=dev
 # ─────────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
+# curl is needed for Coolify's in-container healthcheck against /api/health.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     PORT=4000 \
     SERVE_STATIC_DIR=/app/dist \
     FILE_STORAGE_DIR=/app/storage
+# The server imports monorepo code from ../../../shared (resolves to /app/shared).
 COPY server/ ./server/
+COPY shared/ ./shared/
 COPY --from=server-deps /app/server/node_modules ./server/node_modules
 COPY --from=frontend /app/dist ./dist
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

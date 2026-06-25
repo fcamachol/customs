@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, ChangeEvent, DragEvent } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import type { ChangeEvent, DragEvent } from 'react';
 import { Search, Upload, Download, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } from 'lucide-react';
-import { apiGet, apiPost, apiDownload } from '../api';
-import { Card, Field, Input, Button, StatusPill } from './ui';
+import { apiGet, apiDownload } from '../api';
+import { Card, Button, StatusPill } from './ui';
 import type { Resultado } from './ui';
+import { CaptureWizard } from './CaptureWizard';
+import type { PedimentoItem } from './CaptureWizard';
 import type { ManifestCoverageStatus } from '../../shared/pedimento/coverage';
 import type { SeguimientoScanVerdict } from '../../shared/pedimento/seguimientoStatus';
 
@@ -24,47 +26,15 @@ interface RecordRow {
   uploadedCount: number;
 }
 
-// Captured import-data, now stored per pedimento (Task 8).
-interface ImportData {
-  cveT1?: string | null;
-  patente?: string | null;
-  agenteAduanal?: string | null;
-  tasaImportacion?: string | null;
-  fechaEntrada?: string | null;
-  claveAduanaEntrada?: string | null;
-  claveAduanaDespacho?: string | null;
-  tasaWarning?: string | null;
-}
-
 interface LockState {
   editable: boolean;
   reason: string | null;
 }
 
-// A subdivisión (pedimento) attached to the selected manifest. Capture (import-data) lives here now.
-interface PedimentoItem {
-  id: string;
-  numeroPedimento: string | null;
-  subdivisionOrdinal: number | null;
-  isLast: boolean;
-  fileId: string | null;
-  scanVerdict: SeguimientoScanVerdict | null;
-  pedimentoPdf: string | null;
-  coveredGuias: string[];
-  importData: ImportData | null;
-  importDataVersion: number;
-  lock: LockState;
-}
-
-interface PedimentoForm {
-  tasaImportacion: string;
-  fechaEntrada: string;
-  claveT1: string;
-  agenteAduanal: string;
-  patente: string;
-  claveAduanaEntrada: string;
-  claveAduanaDespacho: string;
-}
+// A subdivisión (pedimento) attached to the selected manifest. The wizard owns the shape now (it
+// carries subStatus / prevalidation / reconciliation alongside import-data); we re-export it so the
+// records-detail rows and the wizard prop line up exactly.
+type SubStatus = PedimentoItem['subStatus'];
 
 // RF-08/RF-10 — pedimento scan verdict returned by the upload endpoint.
 type ScanVerdict = SeguimientoScanVerdict;
@@ -106,28 +76,14 @@ function CoverageBadge({ status, uploadedCount, expectedCount }: { status: Manif
   );
 }
 
-const EMPTY_FORM: PedimentoForm = {
-  tasaImportacion: '',
-  fechaEntrada: '',
-  claveT1: '',
-  agenteAduanal: '',
-  patente: '',
-  claveAduanaEntrada: '',
-  claveAduanaDespacho: '',
+// Per-subdivisión lifecycle chip + the entry-button label, both keyed by subStatus. Clean colors.
+const SUB_STATUS_BADGE: Record<SubStatus, { label: string; cls: string; action: string }> = {
+  pendiente:   { label: 'Pendiente',  cls: 'bg-slate-100 text-slate-600 ring-slate-500/20',     action: 'Capturar' },
+  capturado:   { label: 'Capturado',  cls: 'bg-navy-50 text-navy-700 ring-navy-600/20',         action: 'Capturar' },
+  prevalidado: { label: 'Prevalidado', cls: 'bg-amber-50 text-amber-700 ring-amber-600/20',     action: 'Continuar' },
+  cargado:     { label: 'Cargado',    cls: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', action: 'Ver' },
+  rechazado:   { label: 'Rechazado',  cls: 'bg-red-50 text-red-700 ring-red-600/20',            action: 'Revisar' },
 };
-
-function formFromImportData(d: ImportData | null): PedimentoForm {
-  if (!d) return EMPTY_FORM;
-  return {
-    tasaImportacion: d.tasaImportacion ?? '',
-    fechaEntrada: d.fechaEntrada ?? '',
-    claveT1: d.cveT1 ?? '',
-    agenteAduanal: d.agenteAduanal ?? '',
-    patente: d.patente ?? '',
-    claveAduanaEntrada: d.claveAduanaEntrada ?? '',
-    claveAduanaDespacho: d.claveAduanaDespacho ?? '',
-  };
-}
 
 type TabKey = 'pending' | 'done';
 
@@ -146,6 +102,9 @@ export default function SeguimientoView() {
   // Manifest-level lock: once the manifest is structurally finalized or any PDF is attached, no more
   // pedimentos may be added. (Per-pedimento capture has its own lock, surfaced on each row.)
   const [lock, setLock] = useState<LockState>({ editable: true, reason: null });
+
+  // Capture wizard — opened for a single subdivisión row at a time (replaces the inline capture form).
+  const [wizardPedimento, setWizardPedimento] = useState<PedimentoItem | null>(null);
 
   // PDF upload
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -179,13 +138,15 @@ export default function SeguimientoView() {
     !term || r.mawbReference.toLowerCase().includes(term) || (r.clientName ?? '').toLowerCase().includes(term);
   const visible = (tab === 'pending' ? pending : done).filter(matches);
 
-  async function loadDetail(id: string) {
+  async function loadDetail(id: string): Promise<PedimentoItem[]> {
     const detail = await apiGet<{
       lock: LockState;
       pedimentos: PedimentoItem[];
     }>(`/api/records/${id}`);
     setLock(detail.lock ?? { editable: true, reason: null });
-    setPedimentos(detail.pedimentos ?? []);
+    const list = detail.pedimentos ?? [];
+    setPedimentos(list);
+    return list;
   }
 
   async function handleSelect(r: RecordRow) {
@@ -253,8 +214,12 @@ export default function SeguimientoView() {
       if (data?.warning) setUploadWarning(data.warning as string);
       setPdfFile(null);
       // Refresh the pedimentos sub-list + the work-queue coverage chip.
-      await loadDetail(selectedId);
+      const list = await loadDetail(selectedId);
       void loadList();
+      // Auto-open the wizard for the freshly created subdivisión so capture flows straight from upload.
+      const newId = (data as { pedimentoId?: string })?.pedimentoId;
+      const created = newId ? list.find((p) => p.id === newId) : undefined;
+      if (created) setWizardPedimento(created);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Error al subir el archivo.');
     } finally {
@@ -349,7 +314,7 @@ export default function SeguimientoView() {
         )}
       </Card>
 
-      {/* Pedimentos (subdivisiones) — per-pedimento capture forms + add another */}
+      {/* Pedimentos (subdivisiones) — summary rows; capture happens in the wizard (one entry point). */}
       {selectedId && (
         <Card className="p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-2">
@@ -362,11 +327,17 @@ export default function SeguimientoView() {
               Aún no se ha adjuntado ningún pedimento para este manifiesto.
             </p>
           ) : (
-            <div className="mb-4 space-y-4">
+            <div className="mb-4 space-y-3">
               {pedimentos.map((p) => (
-                <div key={p.id}>
-                  <PedimentoCard pedimento={p} onDownload={handleDownloadPdf} onSaved={refreshAfterCapture} />
-                </div>
+                // Fragment carries the list key (the codebase types components with inline prop
+                // objects, which don't surface React's `key` attribute on the component itself).
+                <Fragment key={p.id}>
+                  <PedimentoRow
+                    pedimento={p}
+                    onDownload={handleDownloadPdf}
+                    onOpen={() => setWizardPedimento(p)}
+                  />
+                </Fragment>
               ))}
             </div>
           )}
@@ -426,129 +397,55 @@ export default function SeguimientoView() {
           )}
         </Card>
       )}
+
+      {wizardPedimento && (
+        <CaptureWizard
+          pedimento={wizardPedimento}
+          onClose={() => setWizardPedimento(null)}
+          onChanged={refreshAfterCapture}
+        />
+      )}
     </div>
   );
 }
 
-// Per-pedimento capture form (Task 8). Each subdivisión owns its import-data, version + lock and
-// posts to POST /api/pedimentos/:id/import-data. Optimistic version handling + lock-disabled state
-// preserved from the former manifest-level form.
-interface PedimentoCardProps {
+// Per-subdivisión summary row (Task 4). Capture no longer happens inline — the row shows número /
+// subdivisión, the lifecycle status chip, the PDF download, and a single entry button that opens the
+// CaptureWizard for that pedimento. The wizard handles read-only (cargado) by subStatus.
+interface PedimentoRowProps {
   pedimento: PedimentoItem;
   onDownload: (p: PedimentoItem) => void;
-  onSaved: () => void;
+  onOpen: () => void;
 }
 
-function PedimentoCard({ pedimento, onDownload, onSaved }: PedimentoCardProps) {
-  const [form, setForm] = useState<PedimentoForm>(() => formFromImportData(pedimento.importData));
-  const [version, setVersion] = useState<number>(pedimento.importDataVersion ?? 0);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-  const [tasaWarning, setTasaWarning] = useState<string | null>(pedimento.importData?.tasaWarning ?? null);
-
-  const { lock } = pedimento;
-  const disabled = !lock.editable;
-
-  function handleFormChange(e: ChangeEvent<HTMLInputElement>) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  async function handleSave(e: FormEvent) {
-    e.preventDefault();
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      const resp = await apiPost<{ version: number; importData: ImportData }>(
-        `/api/pedimentos/${pedimento.id}/import-data`,
-        {
-          cveT1: form.claveT1,
-          patente: form.patente,
-          agenteAduanal: form.agenteAduanal,
-          tasaImportacion: form.tasaImportacion,
-          fechaEntrada: form.fechaEntrada,
-          claveAduanaEntrada: form.claveAduanaEntrada,
-          claveAduanaDespacho: form.claveAduanaDespacho,
-          version,
-        },
-      );
-      setVersion(resp.version);
-      setTasaWarning(resp.importData?.tasaWarning ?? null);
-      setSaveSuccess(true);
-      onSaved();
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Error al guardar.');
-    }
-  }
+function PedimentoRow({ pedimento, onDownload, onOpen }: PedimentoRowProps) {
+  const badge = SUB_STATUS_BADGE[pedimento.subStatus];
+  const scan = pedimento.scanVerdict && Object.prototype.hasOwnProperty.call(SCAN_BADGE, pedimento.scanVerdict)
+    ? SCAN_BADGE[pedimento.scanVerdict as ScanVerdict]
+    : null;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <span className="min-w-0 text-sm">
-          <span className="font-semibold text-slate-800">{pedimento.numeroPedimento ?? 'Sin número'}</span>
-          {pedimento.subdivisionOrdinal != null && (
-            <span className="text-slate-500"> — subdivisión {pedimento.subdivisionOrdinal}{pedimento.isLast ? ' (última)' : ''}</span>
-          )}
-        </span>
-        <span className="flex shrink-0 items-center gap-3">
-          {pedimento.scanVerdict && <Pill label={SCAN_BADGE[pedimento.scanVerdict].label} cls={SCAN_BADGE[pedimento.scanVerdict].cls} />}
-          {pedimento.pedimentoPdf && (
-            <button
-              type="button"
-              onClick={() => onDownload(pedimento)}
-              className="inline-flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-navy-700"
-            >
-              <Download className="h-3.5 w-3.5" /> PDF
-            </button>
-          )}
-        </span>
-      </div>
-
-      {!lock.editable && (
-        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
-          {lock.reason ?? 'Este pedimento está bloqueado para edición.'}
-        </p>
-      )}
-
-      <form onSubmit={handleSave} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Tasa de importación" htmlFor={`tasaImportacion-${pedimento.id}`}>
-            <Input id={`tasaImportacion-${pedimento.id}`} name="tasaImportacion" type="text" value={form.tasaImportacion} onChange={handleFormChange} placeholder="Ej. 17.50" disabled={disabled} />
-          </Field>
-          <Field label="Fecha de entrada" htmlFor={`fechaEntrada-${pedimento.id}`}>
-            <Input id={`fechaEntrada-${pedimento.id}`} name="fechaEntrada" type="date" value={form.fechaEntrada} onChange={handleFormChange} disabled={disabled} />
-          </Field>
-          <Field label="Clave T1" htmlFor={`claveT1-${pedimento.id}`}>
-            <Input id={`claveT1-${pedimento.id}`} name="claveT1" type="text" value={form.claveT1} onChange={handleFormChange} placeholder="Ej. A1" disabled={disabled} />
-          </Field>
-          <Field label="Agente Aduanal" htmlFor={`agenteAduanal-${pedimento.id}`}>
-            <Input id={`agenteAduanal-${pedimento.id}`} name="agenteAduanal" type="text" value={form.agenteAduanal} onChange={handleFormChange} placeholder="Nombre del agente" disabled={disabled} />
-          </Field>
-          <Field label="Patente" htmlFor={`patente-${pedimento.id}`}>
-            <Input id={`patente-${pedimento.id}`} name="patente" type="text" value={form.patente} onChange={handleFormChange} placeholder="Ej. 3250" disabled={disabled} />
-          </Field>
-          <Field label="Clave de aduana de entrada" htmlFor={`claveAduanaEntrada-${pedimento.id}`}>
-            <Input id={`claveAduanaEntrada-${pedimento.id}`} name="claveAduanaEntrada" type="text" value={form.claveAduanaEntrada} onChange={handleFormChange} placeholder="Ej. 460" disabled={disabled} />
-          </Field>
-          <Field label="Clave de aduana de despacho" htmlFor={`claveAduanaDespacho-${pedimento.id}`}>
-            <Input id={`claveAduanaDespacho-${pedimento.id}`} name="claveAduanaDespacho" type="text" value={form.claveAduanaDespacho} onChange={handleFormChange} placeholder="Ej. 460" disabled={disabled} />
-          </Field>
-        </div>
-
-        {tasaWarning && (
-          <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">{tasaWarning}</p>
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+      <span className="min-w-0 text-sm">
+        <span className="font-semibold text-slate-800">{pedimento.numeroPedimento ?? 'Sin número'}</span>
+        {pedimento.subdivisionOrdinal != null && (
+          <span className="text-slate-500"> — subdivisión {pedimento.subdivisionOrdinal}{pedimento.isLast ? ' (última)' : ''}</span>
         )}
-        {saveError && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{saveError}</p>
+      </span>
+      <span className="flex shrink-0 items-center gap-3">
+        <Pill label={badge.label} cls={badge.cls} />
+        {scan && <Pill label={scan.label} cls={scan.cls} />}
+        {pedimento.pedimentoPdf && (
+          <button
+            type="button"
+            onClick={() => onDownload(pedimento)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-navy-700"
+          >
+            <Download className="h-3.5 w-3.5" /> PDF
+          </button>
         )}
-        {saveSuccess && (
-          <p className="rounded-lg border border-navy-200 bg-navy-50 px-4 py-2 text-sm font-medium text-navy-700">Datos de importación guardados correctamente.</p>
-        )}
-
-        {lock.editable && (
-          <Button type="submit" disabled={disabled}>Guardar datos</Button>
-        )}
-      </form>
+        <Button type="button" onClick={onOpen}>{badge.action}</Button>
+      </span>
     </div>
   );
 }

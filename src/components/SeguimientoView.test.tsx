@@ -8,18 +8,21 @@ const records = [
   { id: 'r-done', mawbReference: 'MAWB-DONE', clientName: 'Cliente Completo', createdAt: '2026-01-02', coverageStatus: 'completo', expectedCount: 1, uploadedCount: 1 },
 ];
 
-// Detail now carries a manifest-level lock (gates adding pedimentos) and a pedimentos[] whose rows
-// each carry their own importData / importDataVersion / lock (capture is per-pedimento now).
+// Detail carries a manifest-level lock (gates adding pedimentos) and a pedimentos[] whose rows each
+// carry their own lifecycle (subStatus), capture data (importData), prevalidation, reconciliation and
+// lock. Capture is now a single entry point: a wizard opened from each row (no inline form).
 function makeDetail({
   manifestLock = { editable: true, reason: null },
   pedimentoLock = { editable: true, reason: null },
   importData = null as Record<string, string> | null,
   importDataVersion = 0,
+  subStatus = 'pendiente' as string,
 }: {
   manifestLock?: { editable: boolean; reason: string | null };
   pedimentoLock?: { editable: boolean; reason: string | null };
   importData?: Record<string, string> | null;
   importDataVersion?: number;
+  subStatus?: string;
 } = {}) {
   return {
     lock: manifestLock,
@@ -27,16 +30,18 @@ function makeDetail({
       {
         id: 'p1', numeroPedimento: '258516535001684', subdivisionOrdinal: 2, isLast: false,
         fileId: 'f1', scanVerdict: 'clean', pedimentoPdf: '/api/files/f1', coveredGuias: ['G1'],
-        importData, importDataVersion, lock: pedimentoLock,
+        importData, importDataVersion, subStatus, prevalidation: null, reconciliation: null,
+        lock: pedimentoLock,
       },
     ],
   };
 }
 
-// Per-test override of the record detail (defaults to editable, no captured data).
+// Per-test override of the record detail (defaults to editable, pendiente, no captured data).
 let detail = makeDetail();
 
 vi.mock('../api', () => ({
+  ApiError: class ApiError extends Error {},
   apiGet: vi.fn(),
   apiPost: vi.fn(() => Promise.resolve({ ok: true, version: 1, importData: {} })),
   apiDownload: vi.fn(() => Promise.resolve()),
@@ -71,14 +76,18 @@ describe('SeguimientoView', () => {
     expect(screen.queryByText('MAWB-PEND')).toBeNull();
   });
 
-  it('shows the pedimentos sub-list with a per-pedimento capture form + download named by numero', async () => {
+  it('shows the pedimentos sub-list with a status chip + entry button (no inline form) + download named by numero', async () => {
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
-    // The selected manifest's pedimentos[] is rendered with its numero + a per-row capture form.
+    // The selected manifest's pedimentos[] renders each row with its numero + a lifecycle status chip.
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
     expect(screen.getByText(/subdivisión 2/)).toBeTruthy();
-    expect(screen.getByText('Agente Aduanal')).toBeTruthy();
+    expect(screen.getByText('Pendiente')).toBeTruthy();
     expect(screen.getByText('Agregar pedimento PDF')).toBeTruthy();
+
+    // The inline 7-field capture form is gone — no inline Patente input, no "Guardar datos" on the row.
+    expect(screen.queryByLabelText('Patente')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Guardar datos' })).toBeNull();
 
     // Per-pedimento download names the file by numero (matches ConsultaView).
     fireEvent.click(screen.getByRole('button', { name: 'PDF' }));
@@ -87,48 +96,47 @@ describe('SeguimientoView', () => {
     });
   });
 
-  it('saves per-pedimento import-data to the pedimento-scoped endpoint with the row version', async () => {
-    detail = makeDetail({ importDataVersion: 4 });
+  it('opens the CaptureWizard modal when the row entry button (Capturar) is clicked', async () => {
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
 
-    const patente = screen.getByLabelText('Patente') as HTMLInputElement;
-    fireEvent.change(patente, { target: { value: '3250' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Guardar datos' }));
+    // No wizard yet.
+    expect(screen.queryByRole('dialog')).toBeNull();
 
-    await waitFor(() => {
-      expect(apiPost).toHaveBeenCalledWith(
-        '/api/pedimentos/p1/import-data',
-        expect.objectContaining({ patente: '3250', version: 4 }),
-      );
+    // A pendiente row's entry button is labelled "Capturar"; clicking it opens the wizard.
+    fireEvent.click(screen.getByRole('button', { name: 'Capturar' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeTruthy();
+    // The wizard's Revisar step (step 0) shows the pedimento detail + a Continuar button.
+    expect(screen.getByText('Captura de pedimento')).toBeTruthy();
+    expect(screen.getByText('Número de pedimento')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeTruthy();
+  });
+
+  it('labels the entry button by subStatus and opens the wizard read-only for cargado', async () => {
+    detail = makeDetail({
+      subStatus: 'cargado',
+      pedimentoLock: { editable: false, reason: 'Pedimento cargado. Resumen de solo lectura.' },
     });
-  });
-
-  it('pre-fills the per-pedimento form from the row importData', async () => {
-    detail = makeDetail({ importData: { patente: '9876', agenteAduanal: 'Ana López' } });
-    render(<SeguimientoView />);
-    fireEvent.click(await screen.findByText('MAWB-PEND'));
-    await waitFor(() => expect((screen.getByLabelText('Patente') as HTMLInputElement).value).toBe('9876'));
-    expect((screen.getByLabelText('Agente Aduanal') as HTMLInputElement).value).toBe('Ana López');
-  });
-
-  it('disables the per-pedimento form and hides Guardar when the row is locked', async () => {
-    detail = makeDetail({ pedimentoLock: { editable: false, reason: 'Ya se adjuntó el pedimento PDF; los datos están bloqueados.' } });
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
-    // The lock note shows and the inputs are disabled; the save button is gone.
-    expect(screen.getByText(/los datos están bloqueados/i)).toBeTruthy();
-    expect((screen.getByLabelText('Patente') as HTMLInputElement).disabled).toBe(true);
-    expect(screen.queryByRole('button', { name: 'Guardar datos' })).toBeNull();
+
+    // cargado → status chip "Cargado" + the entry button reads "Ver".
+    expect(screen.getByText('Cargado')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver' }));
+    // The wizard opens on its read-only Finalizar summary (no Finalizar action button).
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByText(/Resumen de solo lectura/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Finalizar' })).toBeNull();
   });
 
   it('hides the upload zone and shows a bloqueado note when the manifest is locked', async () => {
     detail = makeDetail({ manifestLock: { editable: false, reason: 'Ya se adjuntó el pedimento PDF; los datos están bloqueados.' } });
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
-    // The pedimentos list still renders (download + capture stay available)…
+    // The pedimentos list still renders (download + capture entry stay available)…
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
     // …but the add-pedimento upload control is gone, replaced by a bloqueado indication.
     expect(screen.queryByText('Agregar pedimento PDF')).toBeNull();

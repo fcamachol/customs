@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import path from 'node:path';
 import cors from 'cors';
 import { ZodError } from 'zod';
 import { authRouter } from './routes/auth';
@@ -63,6 +64,16 @@ export function createApp(): Express {
   app.use('/api/pedimentos', pedimentoLifecycleRouter);
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api', consolidatedRouter);
+  // Serve the built frontend when running as a combined single-container deploy.
+  // SERVE_STATIC_DIR points at the Vite `dist` output; static assets are served
+  // directly and any non-/api path falls back to index.html for client-side routing.
+  const staticDir = process.env.SERVE_STATIC_DIR;
+  if (staticDir) {
+    app.use(express.static(staticDir));
+    app.get(/^\/(?!api\/).*/, (_req: Request, res: Response) => {
+      res.sendFile(path.join(staticDir, 'index.html'));
+    });
+  }
   // Global error handler: log server-side, never leak stack traces to clients.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

@@ -1,20 +1,11 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent } from 'react';
-import { Search, Upload, Download, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } from 'lucide-react';
+import { Fragment, useEffect, useState } from 'react';
+import { Search, Download, Plus } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
-import { Card, Button, StatusPill } from './ui';
-import type { Resultado } from './ui';
+import { Card, Button } from './ui';
 import { CaptureWizard } from './CaptureWizard';
 import type { PedimentoItem } from './CaptureWizard';
 import type { ManifestCoverageStatus } from '../../shared/pedimento/coverage';
 import type { SeguimientoScanVerdict } from '../../shared/pedimento/seguimientoStatus';
-
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
-
-function authHeaders(): Record<string, string> {
-  const t = localStorage.getItem('token');
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
 
 interface RecordRow {
   id: string;
@@ -36,17 +27,8 @@ interface LockState {
 // records-detail rows and the wizard prop line up exactly.
 type SubStatus = PedimentoItem['subStatus'];
 
-// RF-08/RF-10 — pedimento scan verdict returned by the upload endpoint.
+// RF-08/RF-10 — pedimento scan verdict shown on each subdivisión row.
 type ScanVerdict = SeguimientoScanVerdict;
-interface ScanFinding { motor: string; code: string; severity: string; message: string }
-interface ScanResult { verdict: ScanVerdict; findings: ScanFinding[]; motors: { rf08: ScanVerdict; rf10: ScanVerdict } }
-
-const SCAN_META: Record<ScanVerdict, { resultado: Resultado; label: string; icon: typeof ShieldCheck; note: string }> = {
-  clean:       { resultado: 'verde',    label: 'Sin contenido activo', icon: ShieldCheck,    note: 'El PDF no contiene comandos ejecutables ni códigos QR sospechosos.' },
-  suspicious:  { resultado: 'amarillo', label: 'Revisar hallazgos',     icon: ShieldAlert,    note: 'Se detectó contenido potencialmente activo. Revisar antes de continuar.' },
-  blocked:     { resultado: 'rojo',     label: 'Bloqueado',             icon: ShieldX,        note: 'El PDF fue rechazado por contener contenido activo no permitido.' },
-  unscannable: { resultado: 'gris',     label: 'No analizable',         icon: ShieldQuestion, note: 'No fue posible analizar parte del documento (p. ej. códigos QR).' },
-};
 
 // Coverage chip styling for the Seguimiento work-queue rows.
 const COVERAGE_META: Record<ManifestCoverageStatus, { label: string; cls: string }> = {
@@ -105,16 +87,11 @@ export default function SeguimientoView() {
 
   // Capture wizard — opened for a single subdivisión row at a time (replaces the inline capture form).
   const [wizardPedimento, setWizardPedimento] = useState<PedimentoItem | null>(null);
-
-  // PDF upload
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
-  const [uploadWarning, setUploadWarning] = useState<string | null>(null);
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // New-pedimento mode: opens the wizard on its "Subir pedimento" step to upload + capture a new
+  // subdivisión for the selected manifest (replaces the old inline bottom dropzone).
+  const [wizardNew, setWizardNew] = useState(false);
+  // A row-level download error (PDF download failures surface here, mirroring the old upload area).
+  const [rowError, setRowError] = useState<string | null>(null);
 
   async function loadList() {
     setListLoading(true);
@@ -152,11 +129,7 @@ export default function SeguimientoView() {
   async function handleSelect(r: RecordRow) {
     setSelectedId(r.id);
     setSelectedLabel(`${r.mawbReference} — ${r.clientName ?? ''}`);
-    setUploadError(null);
-    setUploadSuccess(false);
-    setUploadWarning(null);
-    setScan(null);
-    setPdfFile(null);
+    setRowError(null);
     setPedimentos([]);
     setLock({ editable: true, reason: null });
     // Pre-load the manifest lock + the pedimentos sub-list (each row carries its own capture data).
@@ -167,73 +140,13 @@ export default function SeguimientoView() {
     }
   }
 
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-    setIsDragging(true);
-  }
-
-  function handleDragLeave() {
-    setIsDragging(false);
-  }
-
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped && dropped.type === 'application/pdf') {
-      setPdfFile(dropped);
-    }
-  }
-
-  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] ?? null;
-    if (f) setPdfFile(f);
-  }
-
-  async function handleUpload() {
-    if (!selectedId || !pdfFile) return;
-    setUploadLoading(true);
-    setUploadError(null);
-    setUploadSuccess(false);
-    setUploadWarning(null);
-    setScan(null);
-    try {
-      const fd = new FormData();
-      fd.append('file', pdfFile);
-      const res = await fetch(`${BASE}/api/manifests/${selectedId}/pedimento-pdf`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data?.scan) setScan(data.scan as ScanResult); // present on both success and 422 (blocked)
-      if (!res.ok) {
-        throw new Error(data.error ?? res.statusText);
-      }
-      setUploadSuccess(true);
-      if (data?.warning) setUploadWarning(data.warning as string);
-      setPdfFile(null);
-      // Refresh the pedimentos sub-list + the work-queue coverage chip.
-      const list = await loadDetail(selectedId);
-      void loadList();
-      // Auto-open the wizard for the freshly created subdivisión so capture flows straight from upload.
-      const newId = (data as { pedimentoId?: string })?.pedimentoId;
-      const created = newId ? list.find((p) => p.id === newId) : undefined;
-      if (created) setWizardPedimento(created);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Error al subir el archivo.');
-    } finally {
-      setUploadLoading(false);
-    }
-  }
-
   async function handleDownloadPdf(p: PedimentoItem) {
     if (!p.pedimentoPdf) return;
     try {
       // Match ConsultaView: name the file by pedimento number (falling back to its row id).
       await apiDownload(p.pedimentoPdf, `Pedimento_${p.numeroPedimento ?? p.id}.pdf`);
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Error al descargar el PDF.');
+      setRowError(err instanceof Error ? err.message : 'Error al descargar el PDF.');
     }
   }
 
@@ -317,9 +230,18 @@ export default function SeguimientoView() {
       {/* Pedimentos (subdivisiones) — summary rows; capture happens in the wizard (one entry point). */}
       {selectedId && (
         <Card className="p-6 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h2>
-            <span className="text-xs font-medium text-navy-700">{selectedLabel}</span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-col">
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h2>
+              <span className="text-xs font-medium text-navy-700">{selectedLabel}</span>
+            </div>
+            {/* Single entry point to add a pedimento: opens the wizard on its "Subir pedimento" step.
+                Hidden once the manifest is locked (prevalidado / PDF adjunto seals attachment). */}
+            {lock.editable && (
+              <Button type="button" onClick={() => setWizardNew(true)}>
+                <Plus className="h-4 w-4" /> Agregar pedimento
+              </Button>
+            )}
           </div>
 
           {pedimentos.length === 0 ? (
@@ -342,55 +264,13 @@ export default function SeguimientoView() {
             </div>
           )}
 
-          {/* Per-manifest upload control — adds a new subdivisión row each time. Hidden once the
-              record is locked (prevalidado / PDF adjunto): the import-data lock also seals attachment. */}
-          {lock.editable ? (
-            <>
-              <h3 className="mb-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Agregar pedimento PDF</h3>
-              <div
-                role="button"
-                tabIndex={0}
-                aria-label="Zona de carga de pedimento PDF"
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
-                className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
-                  isDragging ? 'border-navy-600 bg-navy-50' : 'border-slate-300 bg-slate-50 hover:border-navy-400 hover:bg-navy-50/30'
-                }`}
-              >
-                <Upload className="h-8 w-8 text-slate-400" />
-                {pdfFile ? (
-                  <p className="text-sm font-medium text-slate-800">{pdfFile.name}</p>
-                ) : (
-                  <p className="text-sm text-slate-500">Arrastra o haz clic para seleccionar el pedimento PDF</p>
-                )}
-                <p className="text-xs text-slate-400">Los pedimentos pesan entre 40 y 80 MB</p>
-              </div>
-              <input ref={fileInputRef} type="file" accept=".pdf" onChange={handleFileChange} className="sr-only" aria-hidden="true" />
+          {rowError && (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{rowError}</p>
+          )}
 
-              {uploadError && (
-                <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{uploadError}</p>
-              )}
-              {uploadSuccess && (
-                <p className="mt-3 rounded-lg border border-navy-200 bg-navy-50 px-4 py-2 text-sm font-medium text-navy-800">Pedimento PDF subido correctamente.</p>
-              )}
-              {uploadWarning && (
-                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">{uploadWarning}</p>
-              )}
-
-              {scan && <ScanResultCard scan={scan} />}
-
-              {pdfFile && (
-                <div className="mt-4">
-                  <Button type="button" disabled={uploadLoading} onClick={handleUpload}>
-                    {uploadLoading ? 'Subiendo…' : 'Subir PDF'}
-                  </Button>
-                </div>
-              )}
-            </>
-          ) : (
+          {/* Once the manifest is locked (prevalidado / PDF adjunto), no more pedimentos may be added:
+              the "Agregar pedimento" button is hidden above and a bloqueado note explains why. */}
+          {!lock.editable && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
               Registro bloqueado: no se pueden agregar más pedimentos.
             </p>
@@ -402,6 +282,14 @@ export default function SeguimientoView() {
         <CaptureWizard
           pedimento={wizardPedimento}
           onClose={() => setWizardPedimento(null)}
+          onChanged={refreshAfterCapture}
+        />
+      )}
+
+      {wizardNew && selectedId && (
+        <CaptureWizard
+          manifestId={selectedId}
+          onClose={() => setWizardNew(false)}
           onChanged={refreshAfterCapture}
         />
       )}
@@ -446,37 +334,6 @@ function PedimentoRow({ pedimento, onDownload, onOpen }: PedimentoRowProps) {
         )}
         <Button type="button" onClick={onOpen}>{badge.action}</Button>
       </span>
-    </div>
-  );
-}
-
-// RF-08/RF-10 — security scan verdict shown right after upload.
-function ScanResultCard({ scan }: { scan: ScanResult }) {
-  const meta = SCAN_META[scan.verdict] ?? SCAN_META.unscannable;
-  const Icon = meta.icon;
-  return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center gap-3">
-        <Icon className="h-5 w-5 text-slate-500" />
-        <span className="text-sm font-semibold text-slate-700">Análisis de seguridad del PDF</span>
-        <StatusPill resultado={meta.resultado} label={meta.label} />
-      </div>
-      <p className="mt-2 text-xs text-slate-500">{meta.note}</p>
-      {scan.findings.length > 0 && (
-        <ul className="mt-3 space-y-1.5">
-          {scan.findings.map((f, i) => (
-            <li key={i} className="flex items-start gap-2 text-xs">
-              <span className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                f.severity === 'critical' ? 'bg-red-500' : f.severity === 'warning' ? 'bg-amber-500' : 'bg-slate-400'
-              }`} />
-              <span className="text-slate-600">
-                <span className="font-mono text-[11px] text-slate-400">{f.motor === 'RF10_QR_TROJAN' ? 'QR' : 'PDF'}</span>{' '}
-                {f.message}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

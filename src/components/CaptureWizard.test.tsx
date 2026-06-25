@@ -1,12 +1,18 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CaptureWizard, type PedimentoItem } from './CaptureWizard';
-import { apiPost, apiDownload } from '../api';
+import { apiGet, apiPost, apiDownload } from '../api';
 import type { ReconciliationReport } from '../../shared/types/reports';
 
-vi.mock('../api', () => ({ apiPost: vi.fn(), apiDownload: vi.fn() }));
+vi.mock('../api', () => ({
+  ApiError: class ApiError extends Error {},
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
+  apiDownload: vi.fn(),
+}));
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 const reconciliation: ReconciliationReport = {
   generatedAt: '2026-06-24T10:00:00Z',
@@ -41,19 +47,18 @@ function basePedimento(overrides: Partial<PedimentoItem> = {}): PedimentoItem {
 }
 
 describe('CaptureWizard', () => {
-  // (a) pendiente → Revisar then Capturar; saving calls /import-data + onChanged
-  it('a pendiente pedimento renders Revisar then Capturar and saving calls /import-data + onChanged', async () => {
+  // (a) existing pendiente → opens straight on Capturar (PDF already attached); saving calls
+  // /import-data + onChanged. The pedimento identity summary stays visible.
+  it('an existing pendiente pedimento opens on Capturar and saving calls /import-data + onChanged', async () => {
     (apiPost as ReturnType<typeof vi.fn>).mockResolvedValue({ version: 1, importData: {} });
     const onChanged = vi.fn();
     render(<CaptureWizard pedimento={basePedimento()} onClose={() => {}} onChanged={onChanged} />);
 
-    // Revisar step shows read-only summary
+    // The pedimento identity summary (folded into Capturar) shows the número.
     expect(screen.getByText('24 47 3250 0000123')).toBeTruthy();
 
-    // Advance to Capturar
-    fireEvent.click(screen.getByRole('button', { name: /Continuar/i }));
-
-    // The 7-field form is present
+    // The 7-field form is present immediately (no separate Revisar step / Continuar gate).
+    expect(screen.queryByRole('button', { name: /^Continuar$/i })).toBeNull();
     expect(screen.getByLabelText(/Tasa de importación/i)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/Patente/i), { target: { value: '3250' } });
 
@@ -64,6 +69,67 @@ describe('CaptureWizard', () => {
       '/api/pedimentos/ped-1/import-data',
       expect.objectContaining({ patente: '3250', version: 0 }),
     );
+  });
+
+  // (a2) new-upload mode → "Subir pedimento" step uploads via POST, then re-fetches the manifest
+  // detail, finds the created subdivisión and advances into Capturar.
+  it('new-upload mode uploads the PDF and advances into Capturar with the created pedimento', async () => {
+    const created = basePedimento({ id: 'ped-new', numeroPedimento: '99 99 9999 0000999' });
+    (apiGet as ReturnType<typeof vi.fn>).mockResolvedValue({ pedimentos: [created] });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ pedimentoId: 'ped-new', fileId: 'f-new', scan: { verdict: 'clean', findings: [], motors: { rf08: 'clean', rf10: 'clean' } } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onChanged = vi.fn();
+
+    render(<CaptureWizard manifestId="m-1" onClose={() => {}} onChanged={onChanged} />);
+
+    // Starts on the upload step: dropzone present, no capture form yet.
+    expect(screen.getByLabelText('Zona de carga de pedimento PDF')).toBeTruthy();
+    expect(screen.queryByLabelText(/Tasa de importación/i)).toBeNull();
+
+    // Select a PDF via the hidden file input, then click "Subir PDF".
+    const file = new File(['%PDF-1.4'], 'pedimento.pdf', { type: 'application/pdf' });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /Subir PDF/i }));
+
+    // Uploaded to the manifest endpoint, then re-fetched detail + advanced into Capturar.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/manifests/m-1/pedimento-pdf'),
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/records/m-1'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(await screen.findByLabelText(/Tasa de importación/i)).toBeTruthy();
+    expect(screen.getByText('99 99 9999 0000999')).toBeTruthy();
+  });
+
+  // (a3) a blocked (422) upload shows the scan result and does NOT advance.
+  it('a blocked upload shows the scan verdict and stays on the upload step', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      statusText: 'Unprocessable Entity',
+      json: async () => ({ error: 'PDF bloqueado', scan: { verdict: 'blocked', findings: [], motors: { rf08: 'blocked', rf10: 'clean' } } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onChanged = vi.fn();
+
+    render(<CaptureWizard manifestId="m-1" onClose={() => {}} onChanged={onChanged} />);
+
+    const file = new File(['%PDF-1.4'], 'malo.pdf', { type: 'application/pdf' });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /Subir PDF/i }));
+
+    // The scan card + error surface, and the flow stays on the upload step (no capture form, no onChanged).
+    expect(await screen.findByText(/Análisis de seguridad/i)).toBeTruthy();
+    expect(screen.getAllByText(/Bloqueado/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('PDF bloqueado')).toBeTruthy();
+    expect(screen.queryByLabelText(/Tasa de importación/i)).toBeNull();
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(apiGet).not.toHaveBeenCalled();
   });
 
   // (b) capturado → Prevalidar calls /pedimentos/:id/pedimento; APPROVED advances to Finalizar + renders panel

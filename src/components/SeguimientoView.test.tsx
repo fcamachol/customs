@@ -83,7 +83,10 @@ describe('SeguimientoView', () => {
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
     expect(screen.getByText(/subdivisión 2/)).toBeTruthy();
     expect(screen.getByText('Pendiente')).toBeTruthy();
-    expect(screen.getByText('Agregar pedimento PDF')).toBeTruthy();
+    // The PDF upload is no longer an inline dropzone — it moved into the wizard, reached via a button.
+    expect(screen.getByRole('button', { name: /Agregar pedimento/i })).toBeTruthy();
+    expect(screen.queryByText('Agregar pedimento PDF')).toBeNull();
+    expect(screen.queryByLabelText('Zona de carga de pedimento PDF')).toBeNull();
 
     // The inline 7-field capture form is gone — no inline Patente input, no "Guardar datos" on the row.
     expect(screen.queryByLabelText('Patente')).toBeNull();
@@ -104,14 +107,16 @@ describe('SeguimientoView', () => {
     // No wizard yet.
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    // A pendiente row's entry button is labelled "Capturar"; clicking it opens the wizard.
+    // A pendiente row's entry button is labelled "Capturar"; clicking it opens the wizard directly on
+    // its Capturar step (the PDF is already attached, so the upload step is skipped).
     fireEvent.click(screen.getByRole('button', { name: 'Capturar' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeTruthy();
-    // The wizard's Revisar step (step 0) shows the pedimento detail + a Continuar button.
     expect(screen.getByText('Captura de pedimento')).toBeTruthy();
+    // The pedimento identity summary + the capture form are shown (no dropzone for an existing row).
     expect(screen.getByText('Número de pedimento')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Continuar' })).toBeTruthy();
+    expect(screen.getByLabelText(/Tasa de importación/i)).toBeTruthy();
+    expect(screen.queryByLabelText('Zona de carga de pedimento PDF')).toBeNull();
   });
 
   it('labels the entry button by subStatus and opens the wizard read-only for cargado', async () => {
@@ -132,14 +137,30 @@ describe('SeguimientoView', () => {
     expect(screen.queryByRole('button', { name: 'Finalizar' })).toBeNull();
   });
 
-  it('hides the upload zone and shows a bloqueado note when the manifest is locked', async () => {
+  it('the Agregar pedimento button opens the wizard on its Subir pedimento (upload) step', async () => {
+    render(<SeguimientoView />);
+    fireEvent.click(await screen.findByText('MAWB-PEND'));
+    await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
+
+    // No wizard yet.
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Clicking "Agregar pedimento" opens the wizard modal on its first step: the PDF dropzone.
+    fireEvent.click(screen.getByRole('button', { name: /Agregar pedimento/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeTruthy();
+    expect(screen.getByText('Captura de pedimento')).toBeTruthy();
+    expect(screen.getByLabelText('Zona de carga de pedimento PDF')).toBeTruthy();
+  });
+
+  it('hides the Agregar pedimento button and shows a bloqueado note when the manifest is locked', async () => {
     detail = makeDetail({ manifestLock: { editable: false, reason: 'Ya se adjuntó el pedimento PDF; los datos están bloqueados.' } });
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
     // The pedimentos list still renders (download + capture entry stay available)…
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
-    // …but the add-pedimento upload control is gone, replaced by a bloqueado indication.
-    expect(screen.queryByText('Agregar pedimento PDF')).toBeNull();
+    // …but the add-pedimento control is gone, replaced by a bloqueado indication.
+    expect(screen.queryByRole('button', { name: /Agregar pedimento/i })).toBeNull();
     expect(screen.queryByLabelText('Zona de carga de pedimento PDF')).toBeNull();
     expect(screen.getByText(/no se pueden agregar más pedimentos/i)).toBeTruthy();
   });

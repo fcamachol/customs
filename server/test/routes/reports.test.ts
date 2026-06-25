@@ -36,13 +36,16 @@ async function addPedimento(
   coveredGuias: string[] = ['g1'],
   fields: { fileId?: string | null; prevalidation?: object | null; subStatus?: string } = {},
 ): Promise<string> {
+  const numero = `1110000000000${(pedimentoSeq += 1)}`;
   const r = await query<{ id: string }>(
     `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, file_id, prevalidation, sub_status, created_by)
-     VALUES ($1,'111',$2,$3,$4,$5,$6) RETURNING id`,
-    [manifestId, coveredGuias, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [manifestId, numero, coveredGuias, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
   );
   return r.rows[0].id;
 }
+// numero_pedimento is globally unique — give each fixture row a distinct number.
+let pedimentoSeq = 0;
 
 function getRisk(token: string) {
   return request(app).get(`/api/records/${manifestId}/reports.json`).set('Authorization', `Bearer ${token}`);

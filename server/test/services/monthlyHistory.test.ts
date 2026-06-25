@@ -8,8 +8,10 @@ import { truncateAll } from '../helpers/db';
 /** Compute the expected token the same way recordNames does: rawBlindIndex(norm(name)) */
 const tok = (name: string) => rawBlindIndex(norm(name));
 
+// mawb_reference is globally unique — give each fixture manifest a distinct guía.
+let manifestSeq = 0;
 async function newManifest(): Promise<string> {
-  const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ('369-1') RETURNING id`);
+  const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ($1) RETURNING id`, [`369-${(manifestSeq += 1)}`]);
   return m.rows[0].id as string;
 }
 

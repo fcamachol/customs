@@ -13,11 +13,14 @@ let capId: string;
 let manifestId: string;
 let pedimentoId: string;
 
+// numero_pedimento is globally unique — give each fixture row a distinct number.
+let pedimentoSeq = 0;
 async function addPedimento(mId: string, fields: { fileId?: string | null; prevalidation?: object | null; subStatus?: string } = {}) {
+  const numero = `1110000000000${(pedimentoSeq += 1)}`;
   const r = await query<{ id: string }>(
     `INSERT INTO pedimentos (manifest_id, numero_pedimento, file_id, prevalidation, sub_status, created_by)
-     VALUES ($1,'111',$2,$3,$4,$5) RETURNING id`,
-    [mId, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [mId, numero, fields.fileId ?? null, fields.prevalidation ? JSON.stringify(fields.prevalidation) : null, fields.subStatus ?? 'pendiente', capId],
   );
   return r.rows[0].id;
 }

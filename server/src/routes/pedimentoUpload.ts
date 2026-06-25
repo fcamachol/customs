@@ -3,6 +3,7 @@ import multer from 'multer';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { saveFile } from '../storage/files';
 import { query } from '../db/pool';
+import { isUniqueViolation } from '../db/errors';
 import { recordAudit } from '../services/audit';
 import { loadScanPolicy, scanPedimentoPdf } from '../services/pdfScan';
 import { extractPedimento } from '../services/pdfExtract';
@@ -112,17 +113,30 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
     return;
   }
 
-  // Duplicate gate (409): reject if a pedimento with the same normalized numero already exists
-  // for this manifest. normPedimentoNumero strips non-digits so formatting never masks a dup.
+  // Duplicate gate (409): a SAT pedimento number belongs to exactly one manifest, so reject if the
+  // same normalized numero exists ANYWHERE (this manifest or another). normPedimentoNumero strips
+  // non-digits so formatting never masks a dup. Backed by the pedimentos_numero_global_uq index.
   if (numeroPedimento) {
     const norm = normPedimentoNumero(numeroPedimento);
     if (norm) {
-      const dup = await query<{ numero_pedimento: string | null }>(
-        'SELECT numero_pedimento FROM pedimentos WHERE manifest_id=$1', [req.params.id]);
+      const dup = await query<{ numero_pedimento: string | null }>('SELECT numero_pedimento FROM pedimentos');
       if (dup.rows.some((r) => normPedimentoNumero(r.numero_pedimento ?? '') === norm)) {
-        res.status(409).json({ error: 'Ya existe un pedimento con este número en el manifiesto', numeroPedimento });
+        res.status(409).json({ error: 'Ya existe un pedimento con este número', numeroPedimento });
         return;
       }
+    }
+  }
+
+  // Overlap gate (409, Poka-Yoke): within a manifest each guía is covered by at most one pedimento.
+  // Two subdivisiones may not declare the same shipment. Only enforced when guías were extracted.
+  if (extracted.coveredGuias.length > 0) {
+    const others = await query<{ covered_guias: string[] | null }>(
+      'SELECT covered_guias FROM pedimentos WHERE manifest_id=$1', [req.params.id]);
+    const alreadyCovered = new Set(others.rows.flatMap((r) => r.covered_guias ?? []));
+    const overlap = extracted.coveredGuias.filter((g) => alreadyCovered.has(g));
+    if (overlap.length > 0) {
+      res.status(409).json({ error: `El pedimento cubre guías ya cubiertas por otro pedimento: ${overlap.join(', ')}`, overlap });
+      return;
     }
   }
 
@@ -178,29 +192,40 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   }
 
   // INSERT the pedimentos row (decision #1). file_id/pedimento_scan now live here, not on manifests.
-  const ins = await query<{ id: string }>(
-    `INSERT INTO pedimentos
-       (manifest_id, numero_pedimento, master_guide, subdivision_ordinal, is_last_subdivision,
-        sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by,
-        import_data, pedimento_reconciliation)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-    [
-      req.params.id,
-      numeroPedimento,
-      subdivision.masterGuide,
-      subdivision.ordinal,
-      subdivision.isLast,
-      subdivision.siblings,
-      subdivision.bultos,
-      subdivision.pesoBrutoKg,
-      extracted.coveredGuias,
-      meta.id,
-      JSON.stringify(scan),
-      req.user!.userId,
-      importPrefill ? JSON.stringify(importPrefill) : null,
-      reconciliation ? JSON.stringify(reconciliation) : null,
-    ],
-  );
+  // try/catch backstops the app-level dup check against a concurrent insert hitting
+  // pedimentos_numero_global_uq.
+  let ins: { rows: { id: string }[] };
+  try {
+    ins = await query<{ id: string }>(
+      `INSERT INTO pedimentos
+         (manifest_id, numero_pedimento, master_guide, subdivision_ordinal, is_last_subdivision,
+          sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by,
+          import_data, pedimento_reconciliation)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+      [
+        req.params.id,
+        numeroPedimento,
+        subdivision.masterGuide,
+        subdivision.ordinal,
+        subdivision.isLast,
+        subdivision.siblings,
+        subdivision.bultos,
+        subdivision.pesoBrutoKg,
+        extracted.coveredGuias,
+        meta.id,
+        JSON.stringify(scan),
+        req.user!.userId,
+        importPrefill ? JSON.stringify(importPrefill) : null,
+        reconciliation ? JSON.stringify(reconciliation) : null,
+      ],
+    );
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      res.status(409).json({ error: 'Ya existe un pedimento con este número', numeroPedimento });
+      return;
+    }
+    throw err;
+  }
 
   await query(
     'INSERT INTO pedimento_scans (manifest_id, file_id, verdict, result, created_by) VALUES ($1,$2,$3,$4,$5)',

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
+import { createHash } from 'node:crypto';
 import { query } from '../db/pool';
+import { isUniqueViolation } from '../db/errors';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { encryptShipmentPii } from '../crypto/fieldCrypto';
@@ -31,25 +33,54 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
     return;
   }
 
-  const file = await saveFile({ kind: 'manifest', originalName: req.file.originalname, bytes: req.file.buffer, uploadedBy: req.user!.userId });
+  // Duplicate gates (409) — reject before persisting any file/manifest so a dup never leaves orphans.
+  // Tier (a): exact same file already uploaded (most specific message). Hash the buffer the same way
+  // storage/files.ts does.
+  const contentHash = createHash('sha256').update(req.file.buffer).digest('hex');
+  const hashDup = await query<{ id: string }>(
+    'SELECT id FROM manifests WHERE file_content_hash=$1 LIMIT 1', [contentHash]);
+  if (hashDup.rows.length) {
+    res.status(409).json({ error: 'Este archivo ya fue cargado previamente (manifiesto duplicado).', manifestId: hashDup.rows[0].id });
+    return;
+  }
+  // Tier (b): same MAWB already exists (different file content). MAWB is globally unique.
+  const mawbDup = await query<{ id: string }>(
+    'SELECT id FROM manifests WHERE mawb_reference=$1 LIMIT 1', [mawbReference]);
+  if (mawbDup.rows.length) {
+    res.status(409).json({ error: 'Ya existe un manifiesto para esta guía MAWB.', manifestId: mawbDup.rows[0].id });
+    return;
+  }
 
-  const manifestId = await withTransaction(async (q) => {
-    const m = await q(
-      `INSERT INTO manifests (mawb_reference, client_name, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
-       VALUES ($1,$2,$3,'staged',$4,$5,$6) RETURNING id`,
-      [mawbReference, clientName ?? null, req.user!.userId, file.id, JSON.stringify(result.headerRow), file.contentHash],
-    );
-    const id = m.rows[0].id;
-    for (const row of result.rows) {
-      const encrypted = encryptShipmentPii(row.shipment);
-      await q(
-        `INSERT INTO manifest_staging_rows (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, row.rowIndex, row.idempotencyKey, JSON.stringify(encrypted), row.status, JSON.stringify(row.errors), JSON.stringify(row.warnings)],
+  let file: Awaited<ReturnType<typeof saveFile>>;
+  let manifestId: string;
+  try {
+    file = await saveFile({ kind: 'manifest', originalName: req.file.originalname, bytes: req.file.buffer, uploadedBy: req.user!.userId });
+
+    manifestId = await withTransaction(async (q) => {
+      const m = await q(
+        `INSERT INTO manifests (mawb_reference, client_name, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
+         VALUES ($1,$2,$3,'staged',$4,$5,$6) RETURNING id`,
+        [mawbReference, clientName ?? null, req.user!.userId, file.id, JSON.stringify(result.headerRow), file.contentHash],
       );
+      const id = m.rows[0].id;
+      for (const row of result.rows) {
+        const encrypted = encryptShipmentPii(row.shipment);
+        await q(
+          `INSERT INTO manifest_staging_rows (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [id, row.rowIndex, row.idempotencyKey, JSON.stringify(encrypted), row.status, JSON.stringify(row.errors), JSON.stringify(row.warnings)],
+        );
+      }
+      return id;
+    });
+  } catch (err) {
+    // Backstop the app-level checks against a concurrent insert hitting manifests_mawb_reference_uq.
+    if (isUniqueViolation(err)) {
+      res.status(409).json({ error: 'Ya existe un manifiesto para esta guía MAWB.' });
+      return;
     }
-    return id;
-  });
+    throw err;
+  }
 
   await recordAudit({ userId: req.user!.userId, action: 'INGEST_MANIFEST', entity: 'manifest', entityId: manifestId,
     after: { fileContentHash: file.contentHash, counts: result.counts }, ip: req.ip });

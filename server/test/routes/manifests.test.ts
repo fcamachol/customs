@@ -161,3 +161,44 @@ describe('POST /api/manifests/:id/promote', () => {
     expect(prom.body.promoted).toBe(1);
   });
 });
+
+describe('manifest duplicate prevention (Poka-Yoke)', () => {
+  const GOOD2 = ['G9', 'Pantalón', '6109100022', '1', '7.50', 'Dólar estadounidense', 'CN', 'AERA790828HBSRBR04'];
+
+  it('rejects re-uploading the identical file with 409 and keeps one manifest', async () => {
+    const buf = xlsxBuffer([HEADER, GOOD]);
+    const first = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-dup-file').attach('file', buf, 'm.xlsx');
+    expect(first.status).toBe(201);
+
+    const again = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-dup-file').attach('file', buf, 'm.xlsx');
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/archivo ya fue cargado/i);
+
+    const man = await query('SELECT count(*)::int AS n FROM manifests WHERE mawb_reference=$1', ['369-dup-file']);
+    expect(man.rows[0].n).toBe(1);
+  });
+
+  it('rejects the same MAWB with a different file with 409', async () => {
+    const first = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-dup-mawb').attach('file', xlsxBuffer([HEADER, GOOD]), 'm.xlsx');
+    expect(first.status).toBe(201);
+
+    // Different file content (distinct hash) but same MAWB → blocked by the MAWB gate.
+    const again = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-dup-mawb').attach('file', xlsxBuffer([HEADER, GOOD2]), 'm.xlsx');
+    expect(again.status).toBe(409);
+    expect(again.body.error).toMatch(/guía MAWB/i);
+
+    const man = await query('SELECT count(*)::int AS n FROM manifests WHERE mawb_reference=$1', ['369-dup-mawb']);
+    expect(man.rows[0].n).toBe(1);
+  });
+
+  it('enforces mawb_reference uniqueness at the DB level (23505)', async () => {
+    await query(`INSERT INTO manifests (mawb_reference) VALUES ('369-db-uq')`);
+    await expect(
+      query(`INSERT INTO manifests (mawb_reference) VALUES ('369-db-uq')`),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+});

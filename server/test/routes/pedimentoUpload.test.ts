@@ -253,6 +253,74 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     expect(row.rows[0].sub_status).toBe('pendiente'); // pre-fill does not advance the lifecycle
   });
 
+  it('rejects the same numero_pedimento across DIFFERENT manifests with 409 (global uniqueness)', async () => {
+    const first = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001684'), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(first.status).toBe(201);
+
+    // A second manifest (distinct MAWB) and a pedimento PDF whose master guide matches it, but with
+    // the SAME numero already used above → rejected globally.
+    const m2 = await query(`INSERT INTO manifests (mawb_reference) VALUES ('370-94268462') RETURNING id`);
+    const otherPdf = makeTextPdf([
+      'NUM. PEDIMENTO: 25 85 1653 5001684',
+      'SEGUNDA SUBDIVISION DE LA GUIA MASTER NO. 370-94268462',
+      '34 BULTOS CON UN PESO DE 808 KG.',
+    ]);
+    const dup = await request(app)
+      .post(`/api/manifests/${m2.rows[0].id}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', otherPdf, { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error).toMatch(/ya existe un pedimento/i);
+    const peds = await query('SELECT id FROM pedimentos');
+    expect(peds.rows).toHaveLength(1);
+  });
+
+  it('allows two unparseable PDFs (NULL numero) to coexist on a manifest', async () => {
+    const a = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', DIRTY_PDF, { filename: 'a.pdf', contentType: 'application/pdf' });
+    expect(a.status).toBe(201);
+    const b = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', DIRTY_PDF, { filename: 'b.pdf', contentType: 'application/pdf' });
+    expect(b.status).toBe(201);
+    const peds = await query<{ numero_pedimento: string | null }>('SELECT numero_pedimento FROM pedimentos WHERE manifest_id=$1', [manifestId]);
+    expect(peds.rows).toHaveLength(2);
+    expect(peds.rows.every((r) => r.numero_pedimento === null)).toBe(true);
+  });
+
+  it('rejects a second pedimento covering a guía already covered in the manifest with 409', async () => {
+    const obsLine = 'GUIA JMX999000111 VALOR 120.00 USD NOMBRE JUAN RFC-CURP TOMM020922D40';
+    const first = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001001', [obsLine]), { filename: 'a.pdf', contentType: 'application/pdf' });
+    expect(first.status).toBe(201);
+
+    // Different numero (so the numero gate doesn't fire first) but covers the same guía → overlap 409.
+    const overlap = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001002', [obsLine]), { filename: 'b.pdf', contentType: 'application/pdf' });
+    expect(overlap.status).toBe(409);
+    expect(overlap.body.error).toMatch(/ya cubiertas por otro pedimento/i);
+    expect(overlap.body.overlap).toContain('JMX999000111');
+    const peds = await query('SELECT id FROM pedimentos WHERE manifest_id=$1', [manifestId]);
+    expect(peds.rows).toHaveLength(1);
+  });
+
+  it('enforces global numero uniqueness at the DB level despite formatting differences (23505)', async () => {
+    await query(`INSERT INTO pedimentos (manifest_id, numero_pedimento) VALUES ($1,'258516535001684')`, [manifestId]);
+    await expect(
+      query(`INSERT INTO pedimentos (manifest_id, numero_pedimento) VALUES ($1,'25 85 1653 5001684')`, [manifestId]),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+
   it('persists a reconciliation report on upload when extraction yields data', async () => {
     // Seed a shipment whose guideId matches the OBSERVACIONES line in the PDF fixture.
     const shipment = {

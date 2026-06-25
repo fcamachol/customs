@@ -17,5 +17,12 @@ until node_modules/.bin/node-pg-migrate up --tsx -m migrations; do
   sleep 3
 done
 
+# Optional one-shot user seed. Runs only when SEED_USERS is set (JSON array of
+# [username, password_hash, role]); idempotent upsert. Unset it after seeding.
+if [ -n "$SEED_USERS" ]; then
+  echo "[entrypoint] SEED_USERS present — seeding users..."
+  node_modules/.bin/tsx scripts/seedUsers.ts
+fi
+
 echo "[entrypoint] Migrations complete. Starting API on :${PORT:-4000}..."
 exec node_modules/.bin/tsx src/index.ts

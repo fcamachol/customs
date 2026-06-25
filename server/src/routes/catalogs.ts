@@ -254,7 +254,7 @@ catalogsRouter.put(
     const { key } = req.params;
     // §10: tasa-global vigencias may only be edited by super_admin.
     if (SUPER_ADMIN_CONFIG_KEYS.has(key) && req.user!.role !== 'super_admin') {
-      res.status(403).json({ error: 'Solo el Super Admin puede modificar las vigencias de tasa global' });
+      res.status(403).json({ error: 'Solo el Super Admin puede modificar esta configuración.' });
       return;
     }
     const SHAPE_BY_KEY: Record<string, typeof importerSchema | typeof agentSchema> = {

@@ -238,6 +238,26 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     expect((await query(`SELECT sub_status FROM pedimentos WHERE id=$1`, [pid])).rows[0].sub_status).toBe('prevalidado');
   });
 
+  it('returns 422 when tipoCambio is 0 (zero exchange rate treated as missing)', async () => {
+    await setEntities();
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+
+    // Seed import_data with tipoCambio=0 — all other required fields are present.
+    const dataWithZeroTasa = { ...IMPORT_DATA, tipoCambio: 0 };
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(dataWithZeroTasa)],
+    );
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/tipoCambio/);
+  });
+
   it('prevalidación REJECTED sets sub_status=rechazado', async () => {
     await setEntities();
     // Use a shipment with customsValueUsd > $2500 to trigger REJECTED prevalidation.

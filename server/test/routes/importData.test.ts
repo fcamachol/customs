@@ -193,4 +193,38 @@ describe('POST /api/pedimentos/:pedimentoId/import-data', () => {
     const row = await query(`SELECT import_data FROM pedimentos WHERE id=$1`, [pid]);
     expect(row.rows[0].import_data).toMatchObject({ tipoCambio: 20.4568, paymentDate: '2025-04-05' });
   });
+
+  it('capture-form save (7 fields only) preserves upload-prefilled tipoCambio and paymentDate (merge, not overwrite)', async () => {
+    // Pre-seed the pedimento row with tipoCambio + paymentDate as the upload step would set them.
+    const pid = await addPedimento(manifestId, { subStatus: 'pendiente' });
+    await query(
+      `UPDATE pedimentos SET import_data=$1 WHERE id=$2`,
+      [JSON.stringify({ tipoCambio: 20.4568, paymentDate: '2025-04-05' }), pid],
+    );
+
+    // POST exactly the 7 fields that CapturarStep sends — NO tipoCambio, NO paymentDate.
+    const captureFormBody = {
+      cveT1: 'A1',
+      patente: '3250',
+      agenteAduanal: 'Juan Pérez',
+      tasaImportacion: '17.50',
+      fechaEntrada: '2024-01-15',
+      claveAduanaEntrada: '460',
+      claveAduanaDespacho: '461',
+      version: 0,
+    };
+    const res = await request(app)
+      .post(`/api/pedimentos/${pid}/import-data`)
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send(captureFormBody);
+    expect(res.status).toBe(200);
+
+    // The prefilled header fields must survive the save.
+    const row = await query(`SELECT import_data FROM pedimentos WHERE id=$1`, [pid]);
+    expect(row.rows[0].import_data.tipoCambio).toBe(20.4568);
+    expect(row.rows[0].import_data.paymentDate).toBe('2025-04-05');
+    // And the 7 controlled fields were still written correctly.
+    expect(row.rows[0].import_data.patente).toBe('3250');
+    expect(row.rows[0].import_data.cveT1).toBe('A1');
+  });
 });

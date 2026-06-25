@@ -66,6 +66,8 @@ pedimentoRouter.post(
       const d = (import_data ?? {}) as Record<string, unknown>;
       const missing = ['tipoCambio', 'claveAduanaEntrada', 'claveAduanaDespacho', 'fechaEntrada', 'paymentDate']
         .filter((k) => d[k] == null || d[k] === '');
+      // A zero (or negative) tipoCambio is never valid — treat it the same as missing.
+      if (!(Number(d.tipoCambio) > 0) && !missing.includes('tipoCambio')) missing.push('tipoCambio');
       if (!numero_pedimento || missing.length) {
         res.status(422).json({
           error: `Faltan datos para prevalidar: ${[...(numero_pedimento ? [] : ['número de pedimento']), ...missing].join(', ')}.`,

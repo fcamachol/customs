@@ -67,7 +67,6 @@ importDataRouter.post(
   validate({ body: importDataBody }),
   async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const data: Record<string, unknown> = Object.fromEntries(FIELDS.map((f) => [f, body[f] ?? null]));
     const before = await query<{
       manifest_id: string;
       import_data: Record<string, unknown> | null;
@@ -88,6 +87,15 @@ importDataRouter.post(
     if (!lock.editable) {
       res.status(409).json({ error: lock.reason, locked: true });
       return;
+    }
+
+    // Merge: seed from the existing persisted import_data, then only override the keys the client
+    // actually sent. This preserves upload-prefilled header fields (tipoCambio, paymentDate) that the
+    // capture form does not include, preventing a full overwrite from wiping them.
+    const existing = (before.rows[0].import_data ?? {}) as Record<string, unknown>;
+    const data: Record<string, unknown> = { ...existing };
+    for (const f of FIELDS) {
+      if (f in body) data[f] = body[f] ?? null; // override only fields the client sent
     }
 
     // §10: non-blocking tasa-global consistency warning against the parametrizable vigencias catalog.

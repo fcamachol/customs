@@ -83,7 +83,9 @@ export default function SeguimientoView() {
   const [pedimentos, setPedimentos] = useState<PedimentoItem[]>([]);
   // Manifest-level lock: once the manifest is structurally finalized or any PDF is attached, no more
   // pedimentos may be added. (Per-pedimento capture has its own lock, surfaced on each row.)
-  const [lock, setLock] = useState<LockState>({ editable: true, reason: null });
+  // Manifest detail still returns a lock, but adding subdivisiones is always allowed (multi-pedimento);
+  // per-pedimento locks live on each row. We keep the setter to absorb the detail field, value unused.
+  const [, setLock] = useState<LockState>({ editable: true, reason: null });
 
   // Capture wizard — opened for a single subdivisión row at a time (replaces the inline capture form).
   const [wizardPedimento, setWizardPedimento] = useState<PedimentoItem | null>(null);
@@ -248,13 +250,12 @@ export default function SeguimientoView() {
         >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Pedimentos (subdivisiones)</h3>
-            {/* Single entry point to add a pedimento: opens the wizard on its "Subir pedimento" step.
-                Hidden once the manifest is locked (prevalidado / PDF adjunto seals attachment). */}
-            {lock.editable && (
-              <Button type="button" onClick={() => setWizardNew(true)}>
-                <Plus className="h-4 w-4" /> Agregar pedimento
-              </Button>
-            )}
+            {/* Single entry point to add a subdivisión: opens the wizard on its "Subir pedimento"
+                step. A manifest holds MANY subdivisiones (pedimentos), so adding is always available —
+                the per-pedimento lock (cargado) seals each finalized subdivisión, not the manifest. */}
+            <Button type="button" onClick={() => setWizardNew(true)}>
+              <Plus className="h-4 w-4" /> Agregar pedimento
+            </Button>
           </div>
 
           {pedimentos.length === 0 ? (
@@ -279,14 +280,6 @@ export default function SeguimientoView() {
 
           {rowError && (
             <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{rowError}</p>
-          )}
-
-          {/* Once the manifest is locked (prevalidado / PDF adjunto), no more pedimentos may be added:
-              the "Agregar pedimento" button is hidden above and a bloqueado note explains why. */}
-          {!lock.editable && (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
-              Registro bloqueado: no se pueden agregar más pedimentos.
-            </p>
           )}
         </Modal>
       )}

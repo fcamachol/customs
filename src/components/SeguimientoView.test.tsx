@@ -162,15 +162,14 @@ describe('SeguimientoView', () => {
     expect(screen.getByLabelText('Zona de carga de pedimento PDF')).toBeTruthy();
   });
 
-  it('hides the Agregar pedimento button and shows a bloqueado note when the manifest is locked', async () => {
-    detail = makeDetail({ manifestLock: { editable: false, reason: 'Ya se adjuntó el pedimento PDF; los datos están bloqueados.' } });
+  it('keeps Agregar pedimento available even when the manifest lock is not editable (multi-pedimento: always add more)', async () => {
+    // A finalized pedimento makes the aggregate manifest lock non-editable, but a manifest holds
+    // MANY subdivisiones — adding another must stay available.
+    detail = makeDetail({ manifestLock: { editable: false, reason: 'Pedimento finalizado.' } });
     render(<SeguimientoView />);
     fireEvent.click(await screen.findByText('MAWB-PEND'));
-    // The pedimentos list still renders (download + capture entry stay available)…
     await waitFor(() => expect(screen.getByText('258516535001684')).toBeTruthy());
-    // …but the add-pedimento control is gone, replaced by a bloqueado indication.
-    expect(screen.queryByRole('button', { name: /Agregar pedimento/i })).toBeNull();
-    expect(screen.queryByLabelText('Zona de carga de pedimento PDF')).toBeNull();
-    expect(screen.getByText(/no se pueden agregar más pedimentos/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Agregar pedimento/i })).toBeTruthy();
+    expect(screen.queryByText(/no se pueden agregar más pedimentos/i)).toBeNull();
   });
 });

@@ -23,4 +23,14 @@ describe('Modal', () => {
     fireEvent.click(screen.getByLabelText('Cerrar'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('defaults to the standard (md) width', () => {
+    render(<Modal open onClose={() => {}} title="X">y</Modal>);
+    expect(screen.getByRole('dialog').className).toContain('max-w-lg');
+  });
+
+  it('widens for size="xl"', () => {
+    render(<Modal open onClose={() => {}} title="X" size="xl">y</Modal>);
+    expect(screen.getByRole('dialog').className).toContain('max-w-3xl');
+  });
 });

@@ -2,11 +2,18 @@ import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 
-export function Modal({ open, onClose, title, children }: {
+const SIZE_CLASS = {
+  md: 'max-w-lg',
+  lg: 'max-w-2xl',
+  xl: 'max-w-3xl',
+} as const;
+
+export function Modal({ open, onClose, title, children, size = 'md' }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  size?: 'md' | 'lg' | 'xl';
 }) {
   useEffect(() => {
     if (!open) return;
@@ -24,7 +31,7 @@ export function Modal({ open, onClose, title, children }: {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl"
+        className={`relative z-10 w-full ${SIZE_CLASS[size]} max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl`}
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold text-slate-800">{title}</h2>

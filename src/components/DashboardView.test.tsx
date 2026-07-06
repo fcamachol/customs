@@ -6,8 +6,8 @@ import DashboardView from './DashboardView';
 vi.mock('../api', () => ({
   apiGet: vi.fn((path: string) =>
     path.startsWith('/api/dashboard')
-      ? Promise.resolve({ manifests: 2, distribution: { verde: 9, amarillo: 1, rojo: 2 },
-          byUser: [{ userId: 'u1', username: 'Ana', manifests: 2, distribution: { verde: 9, amarillo: 1, rojo: 2 } }] })
+      ? Promise.resolve({ manifests: 2, distribution: { verde: 9, amarillo: 1, rojo: 2, gris: 0 },
+          byUser: [{ userId: 'u1', username: 'Ana', manifests: 2, distribution: { verde: 9, amarillo: 1, rojo: 2, gris: 0 } }] })
       : Promise.resolve([{ id: 'r1', mawbReference: '369-94705516', clientName: 'Cliente X', createdAt: '2026-06-19' }])),
 }));
 

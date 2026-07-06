@@ -6,6 +6,7 @@ const SIZE_CLASS = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-3xl',
+  '2xl': 'max-w-5xl',
 } as const;
 
 export function Modal({ open, onClose, title, children, size = 'md' }: {
@@ -13,7 +14,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }: {
   onClose: () => void;
   title: string;
   children: ReactNode;
-  size?: 'md' | 'lg' | 'xl';
+  size?: 'md' | 'lg' | 'xl' | '2xl';
 }) {
   useEffect(() => {
     if (!open) return;

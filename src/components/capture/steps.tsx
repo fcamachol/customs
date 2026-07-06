@@ -1,12 +1,12 @@
-import { useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent, FormEvent } from 'react';
-import { Download, Upload, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } from 'lucide-react';
-import { apiGet, apiPost, apiDownload, ApiError } from '../api';
-import { Modal, Stepper, Button, Field, Input, StatusPill } from './ui';
-import type { Resultado } from './ui';
-import { ReconciliationPanel } from './ReconciliationPanel';
-import type { ReconciliationReport } from '../../shared/types/reports';
-import type { SeguimientoScanVerdict } from '../../shared/pedimento/seguimientoStatus';
+import { useState } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
+import { Download, ShieldCheck, ShieldAlert, ShieldX, ShieldQuestion } from 'lucide-react';
+import { apiPost, apiDownload, ApiError } from '../../api';
+import { Button, Field, Input, StatusPill } from '../ui';
+import type { Resultado } from '../ui';
+import { ReconciliationPanel } from '../ReconciliationPanel';
+import type { ReconciliationReport } from '../../../shared/types/reports';
+import type { SeguimientoScanVerdict } from '../../../shared/pedimento/seguimientoStatus';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
@@ -16,7 +16,7 @@ function authHeaders(): Record<string, string> {
 }
 
 // Captured import-data, stored per pedimento (subdivisión).
-interface ImportData {
+export interface ImportData {
   cveT1?: string | null;
   patente?: string | null;
   agenteAduanal?: string | null;
@@ -27,25 +27,25 @@ interface ImportData {
   tasaWarning?: string | null;
 }
 
-interface LockState {
+export interface LockState {
   editable: boolean;
   reason: string | null;
 }
 
-type SubStatus = 'pendiente' | 'capturado' | 'prevalidado' | 'cargado' | 'rechazado';
+export type SubStatus = 'pendiente' | 'capturado' | 'prevalidado' | 'cargado' | 'rechazado';
 
-interface Prevalidation {
+export interface Prevalidation {
   status: string;
   errors: string[];
   warnings: string[];
 }
 
 // RF-08/RF-10 — pedimento scan verdict returned by the upload endpoint.
-type ScanVerdict = SeguimientoScanVerdict;
-interface ScanFinding { motor: string; code: string; severity: string; message: string }
-interface ScanResult { verdict: ScanVerdict; findings: ScanFinding[]; motors: { rf08: ScanVerdict; rf10: ScanVerdict } }
+export type ScanVerdict = SeguimientoScanVerdict;
+export interface ScanFinding { motor: string; code: string; severity: string; message: string }
+export interface ScanResult { verdict: ScanVerdict; findings: ScanFinding[]; motors: { rf08: ScanVerdict; rf10: ScanVerdict } }
 
-const SCAN_META: Record<ScanVerdict, { resultado: Resultado; label: string; icon: typeof ShieldCheck; note: string }> = {
+export const SCAN_META: Record<ScanVerdict, { resultado: Resultado; label: string; icon: typeof ShieldCheck; note: string }> = {
   clean:       { resultado: 'verde',    label: 'Sin contenido activo', icon: ShieldCheck,    note: 'El PDF no contiene comandos ejecutables ni códigos QR sospechosos.' },
   suspicious:  { resultado: 'amarillo', label: 'Revisar hallazgos',     icon: ShieldAlert,    note: 'Se detectó contenido potencialmente activo. Revisar antes de continuar.' },
   blocked:     { resultado: 'rojo',     label: 'Bloqueado',             icon: ShieldX,        note: 'El PDF fue rechazado por contener contenido activo no permitido.' },
@@ -102,202 +102,43 @@ function formFromImportData(d: ImportData | null): PedimentoForm {
   };
 }
 
-const STEPS = ['Subir pedimento', 'Capturar', 'Prevalidar', 'Finalizar'];
-
-// The starting step derives from the pedimento's lifecycle subStatus. Step 0 ("Subir pedimento") is
-// only ever the entry point in new-upload mode; an existing pedimento already has its PDF attached,
-// so it starts at Capturar (1) or later.
-function initialStep(subStatus: SubStatus): number {
-  switch (subStatus) {
-    case 'pendiente': return 1; // Capturar
-    case 'rechazado': return 2; // Prevalidar (rejected → show errors + Reabrir → Capturar)
-    case 'capturado': return 2; // Prevalidar
-    case 'prevalidado': return 3; // Finalizar
-    case 'cargado': return 3; // read-only summary
-    default: return 1;
-  }
+// Single-file pedimento PDF upload. Uses raw fetch (not apiUpload) so the RF-08/RF-10 `scan`
+// body is readable even on a 422 (blocked) — apiUpload throws and discards the body. The caller
+// maps the structured outcome onto its per-file queue row.
+export interface UploadOutcome {
+  ok: boolean;
+  status: number;
+  pedimentoId?: string;
+  numeroPedimento?: string;
+  scan?: ScanResult;
+  warning?: string;
+  error?: string;
+  overlap?: string[];
 }
 
-export function CaptureWizard({ pedimento, manifestId, onClose, onChanged }: {
-  // Existing-pedimento mode: open straight into capture (step derived from subStatus).
-  pedimento?: PedimentoItem | null;
-  // New-upload mode: no pedimento yet — start on the "Subir pedimento" step. The manifestId is the
-  // upload target. Always provide it so the upload step has somewhere to POST.
-  manifestId?: string;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  // The pedimento can be created mid-flow (after a successful upload), so track it in state.
-  const [active, setActive] = useState<PedimentoItem | null>(pedimento ?? null);
-  const [current, setCurrent] = useState(() => (pedimento ? initialStep(pedimento.subStatus) : 0));
-  const readOnly = active?.subStatus === 'cargado';
-
-  // After a successful upload the manifest detail is re-fetched and the freshly created subdivisión
-  // becomes the active pedimento; the flow then continues into Capturar.
-  function handleUploaded(created: PedimentoItem) {
-    setActive(created);
-    setCurrent(1);
-    onChanged();
-  }
-
-  return (
-    <Modal open onClose={onClose} title="Captura de pedimento" size="xl">
-      <div className="space-y-6">
-        <Stepper steps={STEPS} current={current} />
-
-        {current === 0 && (
-          <SubirPedimentoStep manifestId={manifestId} onUploaded={handleUploaded} />
-        )}
-        {current === 1 && active && (
-          <CapturarStep
-            pedimento={active}
-            readOnly={readOnly}
-            onSaved={() => { onChanged(); setCurrent(2); }}
-          />
-        )}
-        {current === 2 && active && (
-          <PrevalidarStep
-            pedimento={active}
-            readOnly={readOnly}
-            onApproved={() => { onChanged(); setCurrent(3); }}
-            onReopened={() => { onChanged(); setCurrent(1); }}
-          />
-        )}
-        {current === 3 && active && (
-          <FinalizarStep
-            pedimento={active}
-            readOnly={readOnly}
-            onFinalized={() => { onChanged(); onClose(); }}
-          />
-        )}
-      </div>
-    </Modal>
-  );
+export async function uploadPedimentoPdf(manifestId: string, file: File): Promise<UploadOutcome> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(`${BASE}/api/manifests/${manifestId}/pedimento-pdf`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: fd,
+  });
+  const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    status: res.status,
+    pedimentoId: data.pedimentoId as string | undefined,
+    numeroPedimento: data.numeroPedimento as string | undefined,
+    scan: data.scan as ScanResult | undefined,
+    warning: data.warning as string | undefined,
+    error: data.error as string | undefined,
+    overlap: data.overlap as string[] | undefined,
+  };
 }
 
-// ── Subir pedimento ──────────────────────────────────────────────────────────
-// First step in new-upload mode: dropzone + drag/drop + file-input + RF-08/RF-10 scan display +
-// the multipart POST. On a successful (non-blocked) upload it re-fetches the manifest detail, finds
-// the freshly created subdivisión and advances the wizard into Capturar.
-function SubirPedimentoStep({ manifestId, onUploaded }: {
-  manifestId?: string;
-  onUploaded: (created: PedimentoItem) => void;
-}) {
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadWarning, setUploadWarning] = useState<string | null>(null);
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-    setIsDragging(true);
-  }
-
-  function handleDragLeave() {
-    setIsDragging(false);
-  }
-
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped && dropped.type === 'application/pdf') {
-      setPdfFile(dropped);
-    }
-  }
-
-  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] ?? null;
-    if (f) setPdfFile(f);
-  }
-
-  async function handleUpload() {
-    if (!manifestId || !pdfFile) return;
-    setUploadLoading(true);
-    setUploadError(null);
-    setUploadWarning(null);
-    setScan(null);
-    try {
-      const fd = new FormData();
-      fd.append('file', pdfFile);
-      const res = await fetch(`${BASE}/api/manifests/${manifestId}/pedimento-pdf`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data?.scan) setScan(data.scan as ScanResult); // present on both success and 422 (blocked)
-      if (!res.ok) {
-        throw new Error(data.error ?? res.statusText);
-      }
-      if (data?.warning) setUploadWarning(data.warning as string);
-      // Re-fetch the manifest detail and find the freshly created subdivisión by id, then continue
-      // straight into Capturar with it.
-      const newId = (data as { pedimentoId?: string })?.pedimentoId;
-      const detail = await apiGet<{ pedimentos: PedimentoItem[] }>(`/api/records/${manifestId}`);
-      const created = newId ? (detail.pedimentos ?? []).find((p) => p.id === newId) : undefined;
-      if (created) {
-        onUploaded(created);
-      } else {
-        setUploadError('El pedimento se subió pero no se pudo abrir la captura. Recarga el manifiesto.');
-      }
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Error al subir el archivo.');
-    } finally {
-      setUploadLoading(false);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label="Zona de carga de pedimento PDF"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center transition ${
-          isDragging ? 'border-navy-600 bg-navy-50' : 'border-slate-300 bg-slate-50 hover:border-navy-400 hover:bg-navy-50/30'
-        }`}
-      >
-        <Upload className="h-8 w-8 text-slate-400" />
-        {pdfFile ? (
-          <p className="text-sm font-medium text-slate-800">{pdfFile.name}</p>
-        ) : (
-          <p className="text-sm text-slate-500">Arrastra o haz clic para seleccionar el pedimento PDF</p>
-        )}
-        <p className="text-xs text-slate-400">Los pedimentos pesan entre 40 y 80 MB</p>
-      </div>
-      <input ref={fileInputRef} type="file" accept=".pdf" onChange={handleFileChange} className="sr-only" aria-hidden="true" />
-
-      {uploadError && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{uploadError}</p>
-      )}
-      {uploadWarning && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">{uploadWarning}</p>
-      )}
-
-      {scan && <ScanResultCard scan={scan} />}
-
-      {pdfFile && (
-        <div>
-          <Button type="button" disabled={uploadLoading} onClick={handleUpload}>
-            {uploadLoading ? 'Subiendo…' : 'Subir PDF'}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// RF-08/RF-10 — security scan verdict shown right after upload.
-function ScanResultCard({ scan }: { scan: ScanResult }) {
+// RF-08/RF-10 — security scan verdict card, shown per uploaded file.
+export function ScanResultCard({ scan }: { scan: ScanResult }) {
   const meta = SCAN_META[scan.verdict] ?? SCAN_META.unscannable;
   const Icon = meta.icon;
   return (
@@ -327,7 +168,7 @@ function ScanResultCard({ scan }: { scan: ScanResult }) {
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
+export function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
@@ -336,9 +177,8 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
-// Pedimento identity header (número / subdivisión / guías cubiertas + PDF download). Folded into the
-// Capturar step so the old read-only "Revisar" info isn't lost now that step 0 is the uploader.
-function PedimentoSummary({ pedimento }: { pedimento: PedimentoItem }) {
+// Pedimento identity header (número / subdivisión / guías cubiertas + PDF download).
+export function PedimentoSummary({ pedimento }: { pedimento: PedimentoItem }) {
   const [error, setError] = useState<string | null>(null);
 
   async function handleDownload() {
@@ -383,7 +223,7 @@ function PedimentoSummary({ pedimento }: { pedimento: PedimentoItem }) {
 }
 
 // ── Capturar ─────────────────────────────────────────────────────────────────
-function CapturarStep({ pedimento, readOnly, onSaved }: {
+export function CapturarStep({ pedimento, readOnly, onSaved }: {
   pedimento: PedimentoItem;
   readOnly: boolean;
   onSaved: () => void;
@@ -429,26 +269,26 @@ function CapturarStep({ pedimento, readOnly, onSaved }: {
       <PedimentoSummary pedimento={pedimento} />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Tasa de importación" htmlFor="cw-tasaImportacion">
-          <Input id="cw-tasaImportacion" name="tasaImportacion" type="text" value={form.tasaImportacion} onChange={handleChange} placeholder="Ej. 17.50" disabled={disabled} />
+        <Field label="Tasa de importación" htmlFor={`cw-tasaImportacion-${pedimento.id}`}>
+          <Input id={`cw-tasaImportacion-${pedimento.id}`} name="tasaImportacion" type="text" value={form.tasaImportacion} onChange={handleChange} placeholder="Ej. 17.50" disabled={disabled} />
         </Field>
-        <Field label="Fecha de entrada" htmlFor="cw-fechaEntrada">
-          <Input id="cw-fechaEntrada" name="fechaEntrada" type="date" value={form.fechaEntrada} onChange={handleChange} disabled={disabled} />
+        <Field label="Fecha de entrada" htmlFor={`cw-fechaEntrada-${pedimento.id}`}>
+          <Input id={`cw-fechaEntrada-${pedimento.id}`} name="fechaEntrada" type="date" value={form.fechaEntrada} onChange={handleChange} disabled={disabled} />
         </Field>
-        <Field label="Clave T1" htmlFor="cw-claveT1">
-          <Input id="cw-claveT1" name="claveT1" type="text" value={form.claveT1} onChange={handleChange} placeholder="Ej. A1" disabled={disabled} />
+        <Field label="Clave T1" htmlFor={`cw-claveT1-${pedimento.id}`}>
+          <Input id={`cw-claveT1-${pedimento.id}`} name="claveT1" type="text" value={form.claveT1} onChange={handleChange} placeholder="Ej. A1" disabled={disabled} />
         </Field>
-        <Field label="Agente Aduanal" htmlFor="cw-agenteAduanal">
-          <Input id="cw-agenteAduanal" name="agenteAduanal" type="text" value={form.agenteAduanal} onChange={handleChange} placeholder="Nombre del agente" disabled={disabled} />
+        <Field label="Agente Aduanal" htmlFor={`cw-agenteAduanal-${pedimento.id}`}>
+          <Input id={`cw-agenteAduanal-${pedimento.id}`} name="agenteAduanal" type="text" value={form.agenteAduanal} onChange={handleChange} placeholder="Nombre del agente" disabled={disabled} />
         </Field>
-        <Field label="Patente" htmlFor="cw-patente">
-          <Input id="cw-patente" name="patente" type="text" value={form.patente} onChange={handleChange} placeholder="Ej. 3250" disabled={disabled} />
+        <Field label="Patente" htmlFor={`cw-patente-${pedimento.id}`}>
+          <Input id={`cw-patente-${pedimento.id}`} name="patente" type="text" value={form.patente} onChange={handleChange} placeholder="Ej. 3250" disabled={disabled} />
         </Field>
-        <Field label="Clave de aduana de entrada" htmlFor="cw-claveAduanaEntrada">
-          <Input id="cw-claveAduanaEntrada" name="claveAduanaEntrada" type="text" value={form.claveAduanaEntrada} onChange={handleChange} placeholder="Ej. 460" disabled={disabled} />
+        <Field label="Clave de aduana de entrada" htmlFor={`cw-claveAduanaEntrada-${pedimento.id}`}>
+          <Input id={`cw-claveAduanaEntrada-${pedimento.id}`} name="claveAduanaEntrada" type="text" value={form.claveAduanaEntrada} onChange={handleChange} placeholder="Ej. 460" disabled={disabled} />
         </Field>
-        <Field label="Clave de aduana de despacho" htmlFor="cw-claveAduanaDespacho">
-          <Input id="cw-claveAduanaDespacho" name="claveAduanaDespacho" type="text" value={form.claveAduanaDespacho} onChange={handleChange} placeholder="Ej. 460" disabled={disabled} />
+        <Field label="Clave de aduana de despacho" htmlFor={`cw-claveAduanaDespacho-${pedimento.id}`}>
+          <Input id={`cw-claveAduanaDespacho-${pedimento.id}`} name="claveAduanaDespacho" type="text" value={form.claveAduanaDespacho} onChange={handleChange} placeholder="Ej. 460" disabled={disabled} />
         </Field>
       </div>
 
@@ -465,7 +305,7 @@ function CapturarStep({ pedimento, readOnly, onSaved }: {
 }
 
 // ── Prevalidar ───────────────────────────────────────────────────────────────
-function PrevalidarStep({ pedimento, readOnly, onApproved, onReopened }: {
+export function PrevalidarStep({ pedimento, readOnly, onApproved, onReopened }: {
   pedimento: PedimentoItem;
   readOnly: boolean;
   onApproved: () => void;
@@ -567,7 +407,7 @@ function PrevalidationResult({ prevalidation }: { prevalidation: Prevalidation }
 }
 
 // ── Finalizar ────────────────────────────────────────────────────────────────
-function FinalizarStep({ pedimento, readOnly, onFinalized }: {
+export function FinalizarStep({ pedimento, readOnly, onFinalized }: {
   pedimento: PedimentoItem;
   readOnly: boolean;
   onFinalized: () => void;

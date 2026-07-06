@@ -190,4 +190,10 @@ describe('scoreManifest denied_party → rojo', () => {
     expect(signalIds).toContain('denied_party');
     expect(signalIds).toContain('prohibidos');
   });
+  it('sanctioned consignee WITHOUT RFC/CURP still forces rojo (not gris)', () => {
+    const s = ship({ consignee: { name: 'Ivan Petrov', address: 'Calle 1' } });
+    const out = scoreManifest([s], {}, { deniedParties: OFAC_LIST });
+    expect(out[0].band).toBe('rojo');
+    expect(out[0].color).toBe('rojo');
+  });
 });

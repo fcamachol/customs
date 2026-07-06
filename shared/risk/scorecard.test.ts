@@ -24,4 +24,10 @@ describe('scoreRow', () => {
     // points exceed maxPoints fraction -> high score -> rojo
     expect(scoreRow(big, opts()).band).toBe('rojo');
   });
+  it('forcesBand rojo overrides insufficient-data gris (sanctions hit must never hide as Sin evaluar)', () => {
+    const codes: ReasonCode[] = [{ signalId: 'denied_party', points: 100, weight: 100, detail: 'x', forcesBand: 'rojo' }];
+    const r = scoreRow(codes, opts(true));
+    expect(r.band).toBe('rojo');
+    expect(r.score).toBeGreaterThan(0);
+  });
 });

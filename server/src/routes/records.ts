@@ -142,6 +142,7 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
 recordsRouter.get('/:id', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT m.id, m.mawb_reference AS "mawbReference", m.client_name AS "clientName",
+            m.client_id AS "clientId", m.platform_id AS "platformId",
             m.created_by AS "createdBy",
             m.risk_stale AS "riskStale",
             (SELECT count(*)::int FROM shipments s WHERE s.manifest_id=m.id) AS "shipmentCount"

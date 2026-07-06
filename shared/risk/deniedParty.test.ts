@@ -117,6 +117,19 @@ describe('matchesDeniedParty', () => {
     expect(result).not.toBeNull();
     expect(result?.matched).toBe('Comercial Fantasma');
   });
+
+  it('matches homoglyph-obfuscated candidate (Cyrillic а) against a Latin entry', () => {
+    // 'Ivаn' = "Ivаn" with Cyrillic а (U+0430), visually identical to Latin a
+    const result = matchesDeniedParty({ names: ['Ivаn Petrov'], ids: [] }, OFAC_LIST);
+    expect(result).not.toBeNull();
+    expect(result?.matched).toBe('Ivan Petrov');
+  });
+
+  it('matches a Latin candidate against a homoglyph-obfuscated entry name', () => {
+    // Entry uses Cyrillic а (U+0430) and Cyrillic о (U+043E)
+    const list: DeniedPartyEntry[] = [{ name: 'Ivаn Petrоv', source: 'OFAC' }];
+    expect(matchesDeniedParty({ names: ['ivan petrov'], ids: [] }, list)).not.toBeNull();
+  });
 });
 
 // ─── gradeSignals — denied_party signal ──────────────────────────────────────

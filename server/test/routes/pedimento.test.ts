@@ -49,25 +49,32 @@ function makeExpensiveShipment(guideId: string) {
   };
 }
 
-// Seeds config entities required for prevalidation.
+// Seeds verified entity-catalog rows required for a warning-free APPROVED prevalidation. The
+// pedimento resolves its agente by patente (1653, derivable from the numero) and its importador by
+// import_data.importerRfc (ADM130509UQ0).
 async function setEntities() {
   await query(
-    `INSERT INTO config (key,value) VALUES ('importer_of_record',$1) ON CONFLICT (key) DO UPDATE SET value=$1`,
-    [JSON.stringify({ rfc: 'ADM130509UQ0', name: 'ADMERCE SA DE CV', fiscalAddress: 'CDMX' })],
+    `INSERT INTO importadores (rfc, name, fiscal_address, verified)
+     VALUES ('ADM130509UQ0','ADMERCE SA DE CV','CDMX', true)
+     ON CONFLICT (rfc) DO UPDATE SET verified=true, name=EXCLUDED.name, fiscal_address=EXCLUDED.fiscal_address`,
   );
   await query(
-    `INSERT INTO config (key,value) VALUES ('customs_agent',$1) ON CONFLICT (key) DO UPDATE SET value=$1`,
-    [JSON.stringify({ patente: '1653', name: 'GUZMOR', agentRfc: 'GUMM710831UYA', agencyRfc: 'GLG1502247K9' })],
+    `INSERT INTO agentes_aduanales (patente, name, agent_rfc, agency_rfc, verified)
+     VALUES ('1653','GUZMOR','GUMM710831UYA','GLG1502247K9', true)
+     ON CONFLICT (patente) DO UPDATE SET verified=true, name=EXCLUDED.name, agent_rfc=EXCLUDED.agent_rfc, agency_rfc=EXCLUDED.agency_rfc`,
   );
 }
 
-// Required import_data fields for prevalidation.
+// Required import_data fields for prevalidation. importerRfc drives importador resolution; patente
+// drives agente resolution (also re-derivable from the numero when absent).
 const IMPORT_DATA = {
   tipoCambio: 20.45,
   claveAduanaEntrada: '850',
   claveAduanaDespacho: '850',
   fechaEntrada: '2025-04-04',
   paymentDate: '2025-04-05',
+  importerRfc: 'ADM130509UQ0',
+  patente: '1653',
 };
 
 beforeEach(async () => {
@@ -193,16 +200,79 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     expect(res.body.error).toMatch(/not found/i);
   });
 
-  it('returns 422 when entities are not configured', async () => {
-    // No setEntities() call — config rows absent.
+  it('returns 422 naming the RFC when the importer RFC is unavailable to resolve with', async () => {
+    // No importerRfc in import_data → importador cannot be resolved. Patente is still derivable
+    // from the numero, so only the RFC is missing and the message says so.
     const s = makeShipment('G1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+    const { importerRfc: _drop, ...noRfc } = IMPORT_DATA;
+    const pid = (await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
+       VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, [s.guideId], userId, JSON.stringify(noRfc)])).rows[0].id;
+    const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/RFC del importador/i);
+  });
+
+  it('returns 422 naming the patente when no patente can be resolved (non-15-digit numero)', async () => {
+    // numero is not 15 digits so patente cannot be derived, and import_data omits patente.
+    const s = makeShipment('G1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+    const { patente: _dropP, ...noPatente } = IMPORT_DATA;
+    const pid = (await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
+       VALUES ($1,'123',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, [s.guideId], userId, JSON.stringify(noPatente)])).rows[0].id;
+    const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/patente/i);
+  });
+
+  it('auto-creates unresolved entities (unverified) and warns on them, still APPROVED', async () => {
+    // No setEntities() — the entity rows do not exist yet. The route auto-registers them (unverified)
+    // from import_data and adds a prevalidation warning naming each unverified entity.
+    const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
     const pid = (await query(
       `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
        VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
-      [manifestId, [s.guideId], userId, JSON.stringify(IMPORT_DATA)])).rows[0].id;
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)])).rows[0].id;
     const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(201);
+    expect(res.body.prevalidation.status).toBe('APPROVED');
+    const w = res.body.prevalidation.warnings.join(' ');
+    expect(w).toMatch(/agente aduanal.*sin verificar/i);
+    expect(w).toMatch(/importador.*sin verificar/i);
+
+    // The rows now exist, keyed by patente/rfc, unverified.
+    const ag = await query<{ verified: boolean }>(`SELECT verified FROM agentes_aduanales WHERE patente='1653'`);
+    expect(ag.rows[0].verified).toBe(false);
+    const im = await query<{ verified: boolean }>(`SELECT verified FROM importadores WHERE rfc='ADM130509UQ0'`);
+    expect(im.rows[0].verified).toBe(false);
+  });
+
+  it('warns (not errors) when the agente has no agencyRfc — APPROVED', async () => {
+    // Verified importador + agente, but the agente row has a NULL agency_rfc → build passes '' →
+    // prevalidatePedimento warns instead of erroring, so the pedimento is still APPROVED.
+    await query(
+      `INSERT INTO importadores (rfc, name, fiscal_address, verified) VALUES ('ADM130509UQ0','ADMERCE','CDMX', true)`,
+    );
+    await query(
+      `INSERT INTO agentes_aduanales (patente, name, agent_rfc, agency_rfc, verified)
+       VALUES ('1653','GUZMOR','GUMM710831UYA', NULL, true)`,
+    );
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+    const pid = (await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data)
+       VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)])).rows[0].id;
+    const res = await request(app).post(`/api/pedimentos/${pid}/pedimento`).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(201);
+    expect(res.body.prevalidation.status).toBe('APPROVED');
+    expect(res.body.prevalidation.warnings.join(' ')).toMatch(/agencia.*no disponible/i);
+    expect(res.body.prevalidation.errors.join(' ')).not.toMatch(/agencia/i);
   });
 
   it('returns 409 when pedimento sub_status is pendiente (lifecycle guard)', async () => {

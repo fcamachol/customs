@@ -87,6 +87,37 @@ describe('prevalidatePedimento', () => {
     expect(r.errors.join(' ')).toMatch(/importador/i);
     expect(r.errors.join(' ')).toMatch(/dígito verificador|inválido/i);
   });
+  it('warns (not errors) when the importer RFC is empty — entity unverified', () => {
+    const p = basePedimento(); p.header.importer.rfc = '';
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('APPROVED');
+    expect(r.errors.join(' ')).not.toMatch(/importador/i);
+    expect(r.warnings.join(' ')).toMatch(/importador.*no disponible/i);
+  });
+  it('warns (not errors) when the agent RFC is empty — entity unverified', () => {
+    const p = basePedimento(); p.header.agent.agentRfc = '';
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('APPROVED');
+    expect(r.warnings.join(' ')).toMatch(/agente.*no disponible/i);
+  });
+  it('warns (not errors) when the agency RFC is empty — entity unverified', () => {
+    const p = basePedimento(); p.header.agent.agencyRfc = '';
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('APPROVED');
+    expect(r.warnings.join(' ')).toMatch(/agencia.*no disponible/i);
+  });
+  it('still errors on a present-but-invalid agent RFC (check digit)', () => {
+    const p = basePedimento(); p.header.agent.agentRfc = 'PERJ800101AAA'; // shape ok, checksum wrong
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('REJECTED');
+    expect(r.errors.join(' ')).toMatch(/agente/i);
+  });
+  it('still errors on a present-but-invalid agency RFC (check digit)', () => {
+    const p = basePedimento(); p.header.agent.agencyRfc = 'PERJ800101AAA';
+    const r = prevalidatePedimento(p);
+    expect(r.status).toBe('REJECTED');
+    expect(r.errors.join(' ')).toMatch(/agencia/i);
+  });
   it('rejects a T1 partida carrying contributions', () => {
     const p = basePedimento();
     p.partidas[0].contribuciones = [{ concepto: 'IVA', tasa: 19, importe: 22 }];

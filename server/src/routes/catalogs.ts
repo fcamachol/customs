@@ -1,10 +1,13 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { query } from '../db/pool';
+import { isUniqueViolation } from '../db/errors';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
 import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema } from '../validation/schemas';
+import { listAgentes, listImportadores, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
 
 export const catalogsRouter = Router();
 
@@ -339,3 +342,103 @@ catalogsRouter.delete('/validated-rfcs/:id', requireAuth, requireRole('admin'), 
   });
   res.json({ ok: true });
 });
+
+// ─── Entity catalogs: agentes aduanales & importadores ───────────────────────
+// Auto-registered from uploaded pedimentos; admin (super_admin via superset) may edit fields and
+// flip `verified`. Not super_admin-only like the legacy config keys — these are working catalogs.
+
+const agenteUpdateBody = z.object({
+  patente: z.string().min(1).optional(),
+  name: z.string().optional(),
+  agentRfc: z.string().optional(),
+  agencyRfc: z.string().optional(),
+  verified: z.boolean().optional(),
+});
+
+const importadorUpdateBody = z.object({
+  rfc: z.string().min(1).optional(),
+  name: z.string().optional(),
+  fiscalAddress: z.string().optional(),
+  verified: z.boolean().optional(),
+});
+
+// GET /api/catalogs/agentes-aduanales — admin + super_admin
+catalogsRouter.get('/agentes-aduanales', requireAuth, requireRole('admin'), async (_req, res) => {
+  res.json(await listAgentes());
+});
+
+// PUT /api/catalogs/agentes-aduanales/:id — admin + super_admin
+catalogsRouter.put(
+  '/agentes-aduanales/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam, body: agenteUpdateBody }),
+  async (req, res) => {
+    const { id } = req.params;
+    const { patente, name, agentRfc, agencyRfc, verified } = req.body;
+    const before = await query(`SELECT ${AGENTE_RETURNING} FROM agentes_aduanales WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal not found' }); return; }
+    try {
+      const { rows } = await query(
+        `UPDATE agentes_aduanales SET
+           patente    = COALESCE($2, patente),
+           name       = COALESCE($3, name),
+           agent_rfc  = COALESCE($4, agent_rfc),
+           agency_rfc = COALESCE($5, agency_rfc),
+           verified   = COALESCE($6, verified),
+           updated_at = now()
+         WHERE id = $1
+         RETURNING ${AGENTE_RETURNING}`,
+        [id, patente ?? null, name ?? null, agentRfc ?? null, agencyRfc ?? null, verified ?? null],
+      );
+      await recordAudit({
+        userId: req.user!.userId, action: 'UPDATE_AGENTE_ADUANAL', entity: 'agente_aduanal',
+        entityId: id, before: before.rows[0], after: rows[0], ip: req.ip,
+      });
+      res.json(rows[0]);
+    } catch (err) {
+      if (isUniqueViolation(err)) { res.status(409).json({ error: 'Ya existe un agente con esa patente' }); return; }
+      throw err;
+    }
+  },
+);
+
+// GET /api/catalogs/importadores — admin + super_admin
+catalogsRouter.get('/importadores', requireAuth, requireRole('admin'), async (_req, res) => {
+  res.json(await listImportadores());
+});
+
+// PUT /api/catalogs/importadores/:id — admin + super_admin
+catalogsRouter.put(
+  '/importadores/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam, body: importadorUpdateBody }),
+  async (req, res) => {
+    const { id } = req.params;
+    const { rfc, name, fiscalAddress, verified } = req.body;
+    const before = await query(`SELECT ${IMPORTADOR_RETURNING} FROM importadores WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador not found' }); return; }
+    try {
+      const { rows } = await query(
+        `UPDATE importadores SET
+           rfc            = COALESCE($2, rfc),
+           name           = COALESCE($3, name),
+           fiscal_address = COALESCE($4, fiscal_address),
+           verified       = COALESCE($5, verified),
+           updated_at     = now()
+         WHERE id = $1
+         RETURNING ${IMPORTADOR_RETURNING}`,
+        [id, rfc ?? null, name ?? null, fiscalAddress ?? null, verified ?? null],
+      );
+      await recordAudit({
+        userId: req.user!.userId, action: 'UPDATE_IMPORTADOR', entity: 'importador',
+        entityId: id, before: before.rows[0], after: rows[0], ip: req.ip,
+      });
+      res.json(rows[0]);
+    } catch (err) {
+      if (isUniqueViolation(err)) { res.status(409).json({ error: 'Ya existe un importador con ese RFC' }); return; }
+      throw err;
+    }
+  },
+);

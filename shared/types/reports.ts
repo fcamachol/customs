@@ -66,9 +66,12 @@ export interface ExtractedPedimentoLine {
   id: string | null;            // RFC or CURP as printed
   fraccion?: string | null;     // firmed up by positional pass
   valAduanaUsd?: number | null;
+  valueUsdApprox?: boolean;     // valueUsd derived from peso-rounded VAL ADU (consolidado) — compare with wider tolerance
 }
 
 export interface ExtractedPedimentoHeader {
+  importerName?: string | null;    // razón social printed in the importer block (best-effort)
+  importerAddress?: string | null; // DOMICILIO line of the importer block (best-effort)
   numeroPedimento: string | null;
   clave: string | null;
   importerRfc: string | null;
@@ -99,7 +102,9 @@ export interface ExtractedPedimento {
 /** Built from the manifest's shipments (+ optional import data) — the "should be" side. */
 export interface ExpectedPedimento {
   header: Partial<ExtractedPedimentoHeader>;
-  lines: { guia: string; valueUsd: number; consigneeName: string; id: string }[];
+  // `id` is the display credential (curp ?? rfc); `acceptedIds` carries every credential the
+  // manifest knows for the guía (RFC and CURP), since the pedimento may print either one.
+  lines: { guia: string; valueUsd: number; consigneeName: string; id: string; acceptedIds?: string[] }[];
 }
 
 export interface FieldDiff {

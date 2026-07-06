@@ -186,3 +186,25 @@ describe('CaptureWorkspace', () => {
     expect(screen.getByText('Número de pedimento')).toBeTruthy();
   });
 });
+
+describe('CaptureWorkspace — phase continue buttons', () => {
+  it('Capturar shows "Continuar a Prevalidar" which advances the phase', async () => {
+    vi.mocked(apiGet).mockResolvedValue(detail());
+    render(<CaptureWorkspace manifestId="m-1" onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByText('MAWB-1 — ACME');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continuar a Prevalidar' }));
+    // Prevalidar phase heading appears and its own continue button leads to Finalizar.
+    expect(await screen.findByRole('button', { name: 'Continuar a Finalizar' })).toBeTruthy();
+  });
+  it('Finalizar has no continue button (bulk finalize is the terminal action)', async () => {
+    vi.mocked(apiGet).mockResolvedValue(detail());
+    render(<CaptureWorkspace manifestId="m-1" onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByText('MAWB-1 — ACME');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continuar a Prevalidar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continuar a Finalizar' }));
+    await screen.findByRole('button', { name: /Finalizar pedimentos listos/ });
+    expect(screen.queryByRole('button', { name: /Continuar a/ })).toBeNull();
+  });
+});

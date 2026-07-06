@@ -36,11 +36,15 @@ export function prevalidatePedimento(p: Pedimento): PrevalidationResult {
 
   if (!/^\d{15}$/.test(p.header.numeroPedimento)) errors.push('El número de pedimento debe tener 15 dígitos.');
   if (p.header.clave !== 'T1') errors.push('Clave debe ser T1.');
-  // F05: RFC/CURP checksum now blocking (not just a warning)
-  if (!isValidTaxIdStrict(p.header.importer.rfc)) errors.push('RFC del importador inválido (dígito verificador no coincide).');
-  if (!isValidTaxIdStrict(p.header.agent.agentRfc)) errors.push('RFC del agente inválido (dígito verificador no coincide).');
-  if (p.header.agent.agencyRfc && !isValidTaxIdStrict(p.header.agent.agencyRfc))
-    errors.push('RFC de la agencia inválido (dígito verificador no coincide).');
+  // F05: RFC/CURP checksum blocking when the RFC is PRESENT. A MISSING (empty) RFC means the
+  // entity was auto-registered from a pedimento but not yet verified — that is a warning, not a
+  // hard error, so a captured pedimento can still be prevalidated while the catalog is completed.
+  if (!p.header.importer.rfc) warnings.push('RFC del importador no disponible — entidad sin verificar.');
+  else if (!isValidTaxIdStrict(p.header.importer.rfc)) errors.push('RFC del importador inválido (dígito verificador no coincide).');
+  if (!p.header.agent.agentRfc) warnings.push('RFC del agente no disponible — entidad sin verificar.');
+  else if (!isValidTaxIdStrict(p.header.agent.agentRfc)) errors.push('RFC del agente inválido (dígito verificador no coincide).');
+  if (!p.header.agent.agencyRfc) warnings.push('RFC de la agencia no disponible — entidad sin verificar.');
+  else if (!isValidTaxIdStrict(p.header.agent.agencyRfc)) errors.push('RFC de la agencia inválido (dígito verificador no coincide).');
   if (!p.header.observations?.trim()) errors.push('Faltan observaciones a nivel pedimento.');
 
   p.partidas.forEach((pa) => {

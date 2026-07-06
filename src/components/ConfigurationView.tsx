@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
-import { Card, Button, Field, Input, Textarea, Modal, SearchSelect } from './ui';
+import { Card, Button, Field, Input, Textarea, Modal, SearchSelect, StatusPill, EmptyState } from './ui';
 import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/catalogs';
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
@@ -80,17 +80,25 @@ interface TasaVigencia {
   rate: number;
 }
 
-interface ImporterConfig {
-  rfc: string;
-  name: string;
-  fiscalAddress: string;
+interface AgenteAduanal {
+  id: string;
+  patente: string;
+  name: string | null;
+  agentRfc: string | null;
+  agencyRfc: string | null;
+  verified: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
-interface AgentConfig {
-  patente: string;
-  name: string;
-  agentRfc: string;
-  agencyRfc: string;
+interface Importador {
+  id: string;
+  rfc: string;
+  name: string | null;
+  fiscalAddress: string | null;
+  verified: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const DEFAULT_PARAMS: ValidationParams = {
@@ -132,9 +140,9 @@ export default function ConfigurationView({ domain, onToast }: Props) {
   // Tasa global
   const [vigencias, setVigencias] = useState<TasaVigencia[]>([]);
 
-  // Entidades de pedimento
-  const [importer, setImporter] = useState<ImporterConfig>({ rfc: '', name: '', fiscalAddress: '' });
-  const [agent, setAgent] = useState<AgentConfig>({ patente: '', name: '', agentRfc: '', agencyRfc: '' });
+  // Entidades de pedimento (auto-registradas desde pedimentos)
+  const [agentes, setAgentes] = useState<AgenteAduanal[]>([]);
+  const [importadores, setImportadores] = useState<Importador[]>([]);
 
   // Load all config on mount; each fetch is independent and non-fatal.
   useEffect(() => {
@@ -162,19 +170,11 @@ export default function ConfigurationView({ domain, onToast }: Props) {
         apiGet<ConfigResponse<TasaVigencia[]>>('/api/catalogs/config/tasa_vigencias')
           .then((r) => { if (active && Array.isArray(r.value)) setVigencias(r.value); })
           .catch(() => {}),
-        apiGet<ConfigResponse<ImporterConfig>>('/api/catalogs/config/importer_of_record')
-          .then((r) => {
-            if (active && r.value) {
-              setImporter({ rfc: r.value.rfc ?? '', name: r.value.name ?? '', fiscalAddress: r.value.fiscalAddress ?? '' });
-            }
-          })
+        apiGet<AgenteAduanal[]>('/api/catalogs/agentes-aduanales')
+          .then((r) => { if (active && Array.isArray(r)) setAgentes(r); })
           .catch(() => {}),
-        apiGet<ConfigResponse<AgentConfig>>('/api/catalogs/config/customs_agent')
-          .then((r) => {
-            if (active && r.value) {
-              setAgent({ patente: r.value.patente ?? '', name: r.value.name ?? '', agentRfc: r.value.agentRfc ?? '', agencyRfc: r.value.agencyRfc ?? '' });
-            }
-          })
+        apiGet<Importador[]>('/api/catalogs/importadores')
+          .then((r) => { if (active && Array.isArray(r)) setImportadores(r); })
           .catch(() => {}),
         apiGet<Client[]>('/api/catalogs/clients')
           .then((r) => { if (active) setClients(r); })
@@ -193,6 +193,12 @@ export default function ConfigurationView({ domain, onToast }: Props) {
   }
   function refreshRfcs() {
     apiGet<ValidatedRfc[]>('/api/catalogs/validated-rfcs').then(setRfcs).catch(() => {});
+  }
+  function refreshAgentes() {
+    apiGet<AgenteAduanal[]>('/api/catalogs/agentes-aduanales').then((r) => { if (Array.isArray(r)) setAgentes(r); }).catch(() => {});
+  }
+  function refreshImportadores() {
+    apiGet<Importador[]>('/api/catalogs/importadores').then((r) => { if (Array.isArray(r)) setImportadores(r); }).catch(() => {});
   }
 
   // --- Catálogos save handlers ---
@@ -276,43 +282,6 @@ export default function ConfigurationView({ domain, onToast }: Props) {
     }
   }
 
-  async function saveImporter() {
-    if (!isSuperAdmin) return;
-    setSaving(true);
-    try {
-      const value: ImporterConfig = {
-        rfc: importer.rfc.trim(),
-        name: importer.name.trim(),
-        fiscalAddress: importer.fiscalAddress.trim(),
-      };
-      await apiPut('/api/catalogs/config/importer_of_record', { value });
-      onToast('Importador de registro guardado');
-    } catch (e) {
-      onToast(`Error: ${errMsg(e)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveAgent() {
-    if (!isSuperAdmin) return;
-    setSaving(true);
-    try {
-      const value: AgentConfig = {
-        patente: agent.patente.trim(),
-        name: agent.name.trim(),
-        agentRfc: agent.agentRfc.trim(),
-        agencyRfc: agent.agencyRfc.trim(),
-      };
-      await apiPut('/api/catalogs/config/customs_agent', { value });
-      onToast('Agente aduanal guardado');
-    } catch (e) {
-      onToast(`Error: ${errMsg(e)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
       {!isAdmin && (
@@ -376,14 +345,12 @@ export default function ConfigurationView({ domain, onToast }: Props) {
 
       {domain === 'cfg_entidades' && (
         <EntidadesTab
-          isSuperAdmin={isSuperAdmin}
-          saving={saving}
-          importer={importer}
-          setImporter={setImporter}
-          agent={agent}
-          setAgent={setAgent}
-          onSaveImporter={saveImporter}
-          onSaveAgent={saveAgent}
+          canEdit={isAdmin}
+          agentes={agentes}
+          importadores={importadores}
+          onAgentesChanged={refreshAgentes}
+          onImportadoresChanged={refreshImportadores}
+          onToast={onToast}
         />
       )}
     </div>
@@ -1113,115 +1080,276 @@ function TasaTab({ isSuperAdmin, saving, vigencias, setVigencias, onSave }: Tasa
   );
 }
 
-/* ---------- Entidades de pedimento (importador + agente aduanal) ---------- */
+/* ---------- Entidades de pedimento (agentes aduanales + importadores, auto-registrados) ---------- */
 
 interface EntidadesProps {
-  isSuperAdmin: boolean;
-  saving: boolean;
-  importer: ImporterConfig;
-  setImporter: (v: ImporterConfig) => void;
-  agent: AgentConfig;
-  setAgent: (v: AgentConfig) => void;
-  onSaveImporter: () => void;
-  onSaveAgent: () => void;
+  canEdit: boolean;
+  agentes: AgenteAduanal[];
+  importadores: Importador[];
+  onAgentesChanged: () => void;
+  onImportadoresChanged: () => void;
+  onToast: (msg: string) => void;
 }
 
-function EntidadesTab({ isSuperAdmin, saving, importer, setImporter, agent, setAgent, onSaveImporter, onSaveAgent }: EntidadesProps) {
+function EntidadesTab({ canEdit, agentes, importadores, onAgentesChanged, onImportadoresChanged, onToast }: EntidadesProps) {
+  async function updateAgente(id: string, patch: Partial<Pick<AgenteAduanal, 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) {
+    if (!canEdit) return;
+    try {
+      await apiPut(`/api/catalogs/agentes-aduanales/${id}`, patch);
+      onToast('Agente aduanal actualizado');
+      onAgentesChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  async function updateImportador(id: string, patch: Partial<Pick<Importador, 'name' | 'fiscalAddress' | 'verified'>>) {
+    if (!canEdit) return;
+    try {
+      await apiPut(`/api/catalogs/importadores/${id}`, patch);
+      onToast('Importador actualizado');
+      onImportadoresChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  const autoRegisterMsg = 'Se registran automáticamente al subir un pedimento. Complete o confirme los datos aquí.';
+
   return (
     <div className="space-y-6">
-      {!isSuperAdmin && (
+      {!canEdit && (
         <div className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <p>Solo el Super Admin puede editar las entidades de pedimento.</p>
+          <p>Solo los administradores pueden editar las entidades de pedimento.</p>
         </div>
       )}
 
-      {/* Importador de registro */}
-      <Card className="max-w-xl p-6 shadow-sm">
-        <SectionHeader icon={Landmark}>Importador de registro</SectionHeader>
-        <div className="space-y-4">
-          <Field label="RFC" htmlFor="ir-rfc">
-            <Input
-              id="ir-rfc"
-              value={importer.rfc}
-              onChange={(e) => setImporter({ ...importer, rfc: e.target.value.toUpperCase() })}
-              disabled={!isSuperAdmin}
-              className="font-mono"
-              placeholder="IMP010101ABC"
-            />
-          </Field>
-          <Field label="Nombre / razón social" htmlFor="ir-name">
-            <Input
-              id="ir-name"
-              value={importer.name}
-              onChange={(e) => setImporter({ ...importer, name: e.target.value })}
-              disabled={!isSuperAdmin}
-              placeholder="IMPORTADOR SA DE CV"
-            />
-          </Field>
-          <Field label="Domicilio fiscal" htmlFor="ir-address">
-            <Input
-              id="ir-address"
-              value={importer.fiscalAddress}
-              onChange={(e) => setImporter({ ...importer, fiscalAddress: e.target.value })}
-              disabled={!isSuperAdmin}
-              placeholder="Calle, Colonia, CP, Ciudad, Estado"
-            />
-          </Field>
-          <Button onClick={onSaveImporter} disabled={!isSuperAdmin || saving}>
-            <Save className="h-4 w-4" /> Guardar
-          </Button>
-        </div>
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={UserCheck}>Agentes aduanales</SectionHeader>
+        <p className="mb-4 text-xs text-slate-500">{autoRegisterMsg}</p>
+        {agentes.length === 0 ? (
+          <EmptyState icon={UserCheck} title="Sin agentes aduanales" message={autoRegisterMsg} />
+        ) : (
+          <AgentesAduanalesTable agentes={agentes} canEdit={canEdit} onUpdate={updateAgente} />
+        )}
       </Card>
 
-      {/* Agente aduanal */}
-      <Card className="max-w-xl p-6 shadow-sm">
-        <SectionHeader icon={UserCheck}>Agente aduanal</SectionHeader>
-        <div className="space-y-4">
-          <Field label="Patente" htmlFor="aa-patente">
-            <Input
-              id="aa-patente"
-              value={agent.patente}
-              onChange={(e) => setAgent({ ...agent, patente: e.target.value })}
-              disabled={!isSuperAdmin}
-              className="font-mono"
-              placeholder="3210"
-            />
-          </Field>
-          <Field label="Nombre / razón social" htmlFor="aa-name">
-            <Input
-              id="aa-name"
-              value={agent.name}
-              onChange={(e) => setAgent({ ...agent, name: e.target.value })}
-              disabled={!isSuperAdmin}
-              placeholder="AGENTE ADUANAL SA DE CV"
-            />
-          </Field>
-          <Field label="RFC del agente" htmlFor="aa-agentrfc">
-            <Input
-              id="aa-agentrfc"
-              value={agent.agentRfc}
-              onChange={(e) => setAgent({ ...agent, agentRfc: e.target.value.toUpperCase() })}
-              disabled={!isSuperAdmin}
-              className="font-mono"
-              placeholder="AGT010101ZZZ"
-            />
-          </Field>
-          <Field label="RFC de la agencia" htmlFor="aa-agencyrfc">
-            <Input
-              id="aa-agencyrfc"
-              value={agent.agencyRfc}
-              onChange={(e) => setAgent({ ...agent, agencyRfc: e.target.value.toUpperCase() })}
-              disabled={!isSuperAdmin}
-              className="font-mono"
-              placeholder="AGC010101ZZZ"
-            />
-          </Field>
-          <Button onClick={onSaveAgent} disabled={!isSuperAdmin || saving}>
-            <Save className="h-4 w-4" /> Guardar
-          </Button>
-        </div>
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={Landmark}>Importadores</SectionHeader>
+        <p className="mb-4 text-xs text-slate-500">{autoRegisterMsg}</p>
+        {importadores.length === 0 ? (
+          <EmptyState icon={Landmark} title="Sin importadores" message={autoRegisterMsg} />
+        ) : (
+          <ImportadoresTable importadores={importadores} canEdit={canEdit} onUpdate={updateImportador} />
+        )}
       </Card>
+    </div>
+  );
+}
+
+function VerifiedBadge({ verified }: { verified: boolean }) {
+  return (
+    <StatusPill resultado={verified ? 'verde' : 'amarillo'} label={verified ? 'Verificado' : 'Sin verificar'} />
+  );
+}
+
+function RowActions({ canEdit, isEditing, verified, busy, onVerify, onEdit, onSave, onCancel }: {
+  canEdit: boolean;
+  isEditing: boolean;
+  verified: boolean;
+  busy: boolean;
+  onVerify: () => void;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  if (!canEdit) return null;
+  if (isEditing) {
+    return (
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onSave} disabled={busy}>Guardar</Button>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>Cancelar</Button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-end gap-2">
+      {!verified && <Button variant="secondary" onClick={onVerify} disabled={busy}>Verificar</Button>}
+      <Button variant="ghost" onClick={onEdit} disabled={busy}>Editar</Button>
+    </div>
+  );
+}
+
+function AgentesAduanalesTable({ agentes, canEdit, onUpdate }: {
+  agentes: AgenteAduanal[];
+  canEdit: boolean;
+  onUpdate: (id: string, patch: Partial<Pick<AgenteAduanal, 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: '', agentRfc: '', agencyRfc: '' });
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  function startEdit(a: AgenteAduanal) {
+    setEditingId(a.id);
+    setDraft({ name: a.name ?? '', agentRfc: a.agentRfc ?? '', agencyRfc: a.agencyRfc ?? '' });
+  }
+
+  async function saveEdit(id: string) {
+    setBusyId(id);
+    try {
+      await onUpdate(id, { name: draft.name.trim(), agentRfc: draft.agentRfc.trim().toUpperCase(), agencyRfc: draft.agencyRfc.trim().toUpperCase() });
+      setEditingId(null);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function verify(id: string) {
+    setBusyId(id);
+    try {
+      await onUpdate(id, { verified: true });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-3 py-2 font-semibold">Patente</th>
+            <th className="px-3 py-2 font-semibold">Nombre</th>
+            <th className="px-3 py-2 font-semibold">RFC agente</th>
+            <th className="px-3 py-2 font-semibold">RFC agencia</th>
+            <th className="px-3 py-2 font-semibold">Estado</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {agentes.map((a) => {
+            const isEditing = editingId === a.id;
+            const busy = busyId === a.id;
+            return (
+              <tr key={a.id}>
+                <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.patente}</td>
+                {isEditing ? (
+                  <>
+                    <td className="px-3 py-2"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></td>
+                    <td className="px-3 py-2"><Input className="font-mono" value={draft.agentRfc} onChange={(e) => setDraft({ ...draft, agentRfc: e.target.value.toUpperCase() })} /></td>
+                    <td className="px-3 py-2"><Input className="font-mono" value={draft.agencyRfc} onChange={(e) => setDraft({ ...draft, agencyRfc: e.target.value.toUpperCase() })} /></td>
+                  </>
+                ) : (
+                  <>
+                    <td className="px-3 py-2 text-slate-700">{a.name || '—'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.agentRfc || '—'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.agencyRfc || '—'}</td>
+                  </>
+                )}
+                <td className="px-3 py-2"><VerifiedBadge verified={a.verified} /></td>
+                <td className="px-3 py-2 text-right">
+                  <RowActions
+                    canEdit={canEdit}
+                    isEditing={isEditing}
+                    verified={a.verified}
+                    busy={busy}
+                    onVerify={() => verify(a.id)}
+                    onEdit={() => startEdit(a)}
+                    onSave={() => saveEdit(a.id)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ImportadoresTable({ importadores, canEdit, onUpdate }: {
+  importadores: Importador[];
+  canEdit: boolean;
+  onUpdate: (id: string, patch: Partial<Pick<Importador, 'name' | 'fiscalAddress' | 'verified'>>) => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: '', fiscalAddress: '' });
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  function startEdit(i: Importador) {
+    setEditingId(i.id);
+    setDraft({ name: i.name ?? '', fiscalAddress: i.fiscalAddress ?? '' });
+  }
+
+  async function saveEdit(id: string) {
+    setBusyId(id);
+    try {
+      await onUpdate(id, { name: draft.name.trim(), fiscalAddress: draft.fiscalAddress.trim() });
+      setEditingId(null);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function verify(id: string) {
+    setBusyId(id);
+    try {
+      await onUpdate(id, { verified: true });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-3 py-2 font-semibold">RFC</th>
+            <th className="px-3 py-2 font-semibold">Nombre</th>
+            <th className="px-3 py-2 font-semibold">Domicilio fiscal</th>
+            <th className="px-3 py-2 font-semibold">Estado</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {importadores.map((i) => {
+            const isEditing = editingId === i.id;
+            const busy = busyId === i.id;
+            return (
+              <tr key={i.id}>
+                <td className="px-3 py-2 font-mono text-xs text-slate-600">{i.rfc}</td>
+                {isEditing ? (
+                  <>
+                    <td className="px-3 py-2"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></td>
+                    <td className="px-3 py-2"><Input value={draft.fiscalAddress} onChange={(e) => setDraft({ ...draft, fiscalAddress: e.target.value })} /></td>
+                  </>
+                ) : (
+                  <>
+                    <td className="px-3 py-2 text-slate-700">{i.name || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">{i.fiscalAddress || '—'}</td>
+                  </>
+                )}
+                <td className="px-3 py-2"><VerifiedBadge verified={i.verified} /></td>
+                <td className="px-3 py-2 text-right">
+                  <RowActions
+                    canEdit={canEdit}
+                    isEditing={isEditing}
+                    verified={i.verified}
+                    busy={busy}
+                    onVerify={() => verify(i.id)}
+                    onEdit={() => startEdit(i)}
+                    onSave={() => saveEdit(i.id)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

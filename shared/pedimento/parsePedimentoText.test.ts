@@ -69,6 +69,12 @@ describe('parsePedimentoText', () => {
     const out = parsePedimentoText(SAMPLE);
     expect(out.header.customsEntryCode).toBe('850'); // last token of "9 20.45680 808.000 850"
   });
+  it('extracts the importer name from the line following its RFC (subdivision layout)', () => {
+    // This layout scatters "NOMBRE, DENOMINACION O RAZON SOCIAL:" away from the value; the
+    // razón social prints right under the importer RFC instead.
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header.importerName).toBe('ADMERCE SA DE CV');
+  });
 });
 
 // pdf-parse reorders the page positionally, so the despacho code, the agente name and the partida
@@ -126,6 +132,12 @@ describe('parsePedimentoText — extended capture-prefill fields', () => {
 const SAMPLE_CONSOLIDADO = `
 NUM. PEDIMENTO: 	T. OPER 	CVE. PEDIMENTO: 	REGIMEN: 	IMD
 DESTINO: 	TIPO CAMBIO:
+Clave en el RFC: 	NOMBRE, DENOMINACION O RAZON SOCIAL:
+TMM ALMACENADORA SAPI DE CV
+DOMICILIO:CIRCUITO EXTERIOR MEXIQUENSE NO. KM 33 INT. ALMACEN 2 SANTA LUCIA BASE
+AEREA MILITAR, ZUMPANGO CP. 55640 	MEXICO MEXICO (ESTADOS UNIDOS
+MEXICANOS)
+Clave en el RFC: 	OOV1302208F0
 CODIGO DE ACEPTACION: 	CLAVE DE LA SECCION ADUANERA
 240
 FECHAS
@@ -155,14 +167,45 @@ NOMBRE O RAZ. SOC:
 GESTORES ADUANALES DEL NORESTE Y CIA
 CARLOS FRANCISCO CRUZ LARA CULC611020FT4
 Clave en el RFC:
+MANDATARIO / PERSONA AUTORIZADA
+CURP: 	CULC611020HDFRRR09	GAN1308194J3
 99010001 	00 	0 	6 	6 	10.000 	6 	CHN 	CHN 	491	0	1 	1	33.5000000000	IVA	10.00000
 BRAZALETEPANTALONSUDADERACAMISETABLUSA DE MUJERTRAJE DE MUJERVESTIDO D 	0	1	IGI 	0.0000000000
+VESTIDO DE MUJER
+963 	963 	96.30000
+IDENTIFICADORES
 OBSERVACIONES A NIVEL PARTIDA
-GUIA JMX300626233436 VALOR 55.000 USD NOMBRE JUAN PEREZ LOPEZ RFC-CURP PELJ900101AA1
+JMX300674063160 CONSIGNATARIO: MONTENEGRO QUINTERO ANGELICA MIREYA MOQA961209MSL
+99010001 	00 	0 	6 	6 	8.000 	6 	CHN 	CHN 	568	0	354 	1	33.5000000000	IVA	8.00000
+CHAQUETA DE HOMBRE 	0	1	IGI 	0.0000000000
+727 	727 	90.87500
+IDENTIFICADORES
+OBSERVACIONES A NIVEL PARTIDA
+DECLARO BAJO PROTESTA DE DECIR VERDAD, EN LOS TERMINOS DE LO DISPUESTO POR EL ARTICULO 81
+Página 	de 	255	57	PEDIMENTO
+JMX300674076527 CONSIGNATARIO: JUAN GABRIEL PEREZ SOTO PESJ850315HH7
 FECHAS
 13/01/2026
 13/01/2026
 `;
+
+describe('parsePedimentoText — observation wrapped across lines by pdf-parse', () => {
+  it('parses a partida observation whose RFC-CURP tail lands on the next line', () => {
+    // Verbatim from a real subdivision pedimento (157-09213912): pdf-parse wraps the observation,
+    // so single-line ^…$ matching misses it entirely (0 lines → 0 covered guías).
+    const wrapped = `
+OBSERVACIONES A NIVEL PARTIDA
+GUIA 6051325623510 VALOR 182.200 USD NOMBRE ARTURO MENDOZA ESPINOSA
+RFC-CURP MEEA751207KC4
+99010001	002 00 0 1 6 1.000 6 1.00000 CHN CHN
+`;
+    const out = parsePedimentoText(wrapped);
+    expect(out.lines).toHaveLength(1);
+    expect(out.lines[0]).toMatchObject({
+      guia: '6051325623510', valueUsd: 182.2, consigneeName: 'ARTURO MENDOZA ESPINOSA', id: 'MEEA751207KC4',
+    });
+  });
+});
 
 describe('parsePedimentoText — real consolidado layout (values precede their labels)', () => {
   it('reads tasaImportacion from the number preceding the partida IVA label, not the CANTIDAD after it', () => {
@@ -177,6 +220,33 @@ describe('parsePedimentoText — real consolidado layout (values precede their l
     const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
     expect(out.header.tipoCambio).toBe(17.9842);
   });
+  it('parses CONSIGNATARIO observations into lines, deriving valor from the VAL ADU triplet', () => {
+    // Consolidado observations print "<guía> CONSIGNATARIO: <name> <RFC/CURP>" with no VALOR;
+    // the per-guía valor is the partida block's "VAL ADU / IMP. PRECIO PAG. / PRECIO UNIT."
+    // triplet ("963 963 96.30000"), in MXN, converted at the pedimento's tipo de cambio:
+    // 963 / 17.9842 = 53.55 (approx — SAT rounds VAL ADU to whole pesos).
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.lines).toHaveLength(2);
+    expect(out.lines[0]).toMatchObject({
+      guia: 'JMX300674063160',
+      valueUsd: 53.55,
+      consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA',
+      id: 'MOQA961209MSL',
+      valueUsdApprox: true,
+    });
+  });
+  it('finds the observation even when a page break separates it from its label', () => {
+    // ~19 of 852 partidas in the real consolidado have the page footer ("DECLARO BAJO
+    // PROTESTA…") and next page header between "OBSERVACIONES A NIVEL PARTIDA" and the
+    // observation itself, so the match must not be anchored to the label.
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.lines[1]).toMatchObject({
+      guia: 'JMX300674076527',
+      valueUsd: 40.42, // 727 / 17.9842
+      consigneeName: 'JUAN GABRIEL PEREZ SOTO',
+      id: 'PESJ850315HH7',
+    });
+  });
   it('reads the entrada aduana from the destino/aduana/peso cluster after CERTIFICACIONES', () => {
     // The consolidado scatters the "DESTINO ... ADUANA E/S" value cluster: the tipo de cambio
     // lands next to the labels, while "9 240 2,891.000" (destino, aduana E/S, peso bruto) follows
@@ -190,6 +260,17 @@ describe('parsePedimentoText — real consolidado layout (values precede their l
     // followed by unrelated columns (first digit run = 851780, the valor aduana).
     const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
     expect(out.header.customsClearanceCode).toBe('240');
+  });
+  it('extracts the importer entity (RFC, razón social, domicilio) for auto-registration', () => {
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.header.importerRfc).toBe('OOV1302208F0');
+    expect(out.header.importerName).toBe('TMM ALMACENADORA SAPI DE CV');
+    expect(out.header.importerAddress).toContain('CIRCUITO EXTERIOR MEXIQUENSE');
+  });
+  it('extracts the agent RFCs from the agent block, distinct from the importer RFC', () => {
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.header.agentRfc).toBe('CULC611020FT4');   // persona física (4-letter) RFC
+    expect(out.header.agencyRfc).toBe('GAN1308194J3');   // agencia (3-letter) RFC
   });
   it('still extracts numero/patente/clave from the consolidado header', () => {
     const out = parsePedimentoText(SAMPLE_CONSOLIDADO);

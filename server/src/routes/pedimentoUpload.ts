@@ -13,7 +13,7 @@ import { loadShipments } from '../services/reportData';
 import type { ExtractedPedimento, ReconciliationReport } from '../../../shared/types/reports';
 import { buildExpectedFromManifest, reconcile } from '../../../shared/pedimento/reconcile';
 import { crossCheckEntities } from '../../../shared/pedimento/entityCrossCheck';
-import { loadImporterOfRecord, loadCustomsAgent } from '../services/entityMaster';
+import { loadImporterOfRecord, loadCustomsAgent, upsertAgente, upsertImportador } from '../services/entityMaster';
 
 const EMPTY_SUBDIVISION: SubdivisionInfo = { masterGuide: null, ordinal: null, isLast: false, siblings: [], bultos: null, pesoBrutoKg: null };
 
@@ -146,11 +146,33 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   // Pre-fill the capture form from the extracted header (best-effort). Store only the non-null
   // fields; null when nothing was extracted, so an unparseable PDF leaves import_data NULL.
   const h = extracted.header;
+
+  // Auto-register the agente aduanal (by patente) and importador (by RFC) identified on the
+  // pedimento. Best-effort and fill-only-missing: never overwrites existing values, never flips
+  // `verified`, and never fails the upload — an upsert error is logged and swallowed.
+  try {
+    if (h.patente) {
+      await upsertAgente({
+        patente: h.patente, name: h.agenteAduanal, agentRfc: h.agentRfc,
+        agencyRfc: h.agencyRfc, createdBy: req.user!.userId,
+      });
+    }
+    if (h.importerRfc) {
+      await upsertImportador({
+        rfc: h.importerRfc, name: h.importerName ?? null,
+        fiscalAddress: h.importerAddress ?? null, createdBy: req.user!.userId,
+      });
+    }
+  } catch (err) {
+    console.error('[pedimentoUpload] entity auto-register failed (non-fatal):', err);
+  }
+
   const prefillEntries: [string, unknown][] = [
     ['cveT1', h.clave], ['patente', h.patente], ['fechaEntrada', h.entryDate],
     ['tipoCambio', h.tipoCambio], ['paymentDate', h.paymentDate],
     ['agenteAduanal', h.agenteAduanal], ['claveAduanaEntrada', h.customsEntryCode],
     ['claveAduanaDespacho', h.customsClearanceCode], ['tasaImportacion', h.tasaImportacion],
+    ['importerRfc', h.importerRfc], ['importerName', h.importerName ?? null],
   ].filter(([, v]) => v != null) as [string, unknown][];
   const importPrefill = prefillEntries.length ? Object.fromEntries(prefillEntries) : null;
 

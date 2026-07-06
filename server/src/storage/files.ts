@@ -1,4 +1,4 @@
-import { mkdir, readFile as fsReadFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile as fsReadFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { query } from '../db/pool';
@@ -24,6 +24,21 @@ export async function saveFile(input: SaveFileInput): Promise<FileMeta> {
     [id, input.kind, input.originalName, storagePath, input.bytes.length, input.uploadedBy, contentHash],
   );
   return { id, kind: input.kind, originalName: input.originalName, storagePath, sizeBytes: input.bytes.length, contentHash };
+}
+
+// Fully remove a stored file: delete the `files` row and unlink the backing blob from disk.
+// The DB delete is authoritative (it happens first, via RETURNING the path); the disk unlink is
+// best-effort — a missing/unremovable blob is logged, never thrown, so callers can treat file
+// cleanup as non-fatal side work after the primary transaction has committed.
+export async function deleteFileById(fileId: string): Promise<void> {
+  const { rows } = await query<{ storage_path: string }>(
+    'DELETE FROM files WHERE id=$1 RETURNING storage_path', [fileId]);
+  if (!rows.length) return;
+  try {
+    await unlink(rows[0].storage_path);
+  } catch (err) {
+    console.warn(`[files] failed to unlink ${rows[0].storage_path} for file ${fileId}:`, err);
+  }
 }
 
 export async function readFileById(fileId: string): Promise<{ bytes: Buffer; originalName: string } | null> {

@@ -22,3 +22,10 @@ This divergence is **expected and intended**: the legacy parity is a backward-co
 reference, not a safety constraint. Sanctioned rows should diverge: legacy=amarillo/verde,
 enhanced=rojo. This divergence indicates the enhanced engine is correctly doing more than
 the legacy engine — not a regression.
+
+## Update 2026-07-06: forced-rojo precedence over gris
+
+`scoreRow` now checks `forcesBand: 'rojo'` BEFORE the insufficient-data gris short-circuit.
+A denied-party (F18), prohibited-keyword, or piracy-brand hit classifies `rojo` even when the
+row is missing RFC/CURP, description, or customs value. Previously such rows were silently
+downgraded to `gris` ("Sin evaluar"), contradicting the F18 guarantee above.

@@ -1,4 +1,4 @@
-import { canonicalize, norm } from './normalize';
+import { canonicalize } from './normalize';
 
 // From Risk analysis 17 feb '25.xlsx — piracy brands (col BL) + prohibited keywords (col BA).
 export const PIRACY_BRANDS = [
@@ -93,7 +93,10 @@ export function matchesDeniedParty(
 
   const cleanId = (s: string) => s.toUpperCase().replace(/[\s\-]/g, '');
   const cleanedIds = fields.ids.map((id) => cleanId(id)).filter(Boolean);
-  const normNames = fields.names.map((n) => norm(n)).filter(Boolean);
+  // canonicalize().loose folds diacritics AND Cyrillic/Greek confusables — same
+  // evasion resistance as matchesBrand/matchesProhibited. norm() is NOT used here:
+  // it is reserved for entity keying and deliberately skips the confusable fold.
+  const looseNames = fields.names.map((n) => canonicalize(n).loose.trim()).filter(Boolean);
 
   for (const entry of list) {
     // Exact ID match (preferred — fewer false positives)
@@ -106,13 +109,15 @@ export function matchesDeniedParty(
       }
     }
 
-    // Normalized name match: entry name tokens must appear (in order) in the consignee/sender name.
-    // Token-based check reduces false positives from very common short names.
-    const entryNorm = norm(entry.name);
-    const entryTokens = entryNorm.split(/\s+/).filter((t) => t.length >= 3);
+    // Normalized name match: every entry-name token (>= 3 chars) must appear as a
+    // substring of the candidate name (unordered). Token-based check reduces false
+    // positives from very common short names; unordered matching over-matches
+    // (e.g. reversed name order) — the safe failure direction for screening.
+    const entryLoose = canonicalize(entry.name).loose;
+    const entryTokens = entryLoose.split(/\s+/).filter((t) => t.length >= 3);
     if (entryTokens.length === 0) continue;
 
-    for (const candidate of normNames) {
+    for (const candidate of looseNames) {
       const allTokensMatch = entryTokens.every((token) => candidate.includes(token));
       if (allTokensMatch) {
         return { matched: entry.name, source: entry.source, program: entry.program };

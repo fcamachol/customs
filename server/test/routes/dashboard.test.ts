@@ -18,6 +18,7 @@ beforeEach(async () => {
   const mid = m.rows[0].id;
   const mk = (color: string) => query('INSERT INTO shipments (id,manifest_id,data,risk_color) VALUES (gen_random_uuid(),$1,$2,$3)', [mid, '{}', color]);
   await mk('verde'); await mk('amarillo'); await mk('rojo');
+  await mk('gris');
 });
 
 describe('GET /api/dashboard', () => {
@@ -25,6 +26,6 @@ describe('GET /api/dashboard', () => {
     const res = await request(app).get('/api/dashboard').set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.manifests).toBe(1);
-    expect(res.body.distribution).toEqual({ verde: 1, amarillo: 1, rojo: 1 });
+    expect(res.body.distribution).toEqual({ verde: 1, amarillo: 1, rojo: 1, gris: 1 });
   });
 });

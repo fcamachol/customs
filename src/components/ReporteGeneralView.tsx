@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Search, Download } from 'lucide-react';
 import { apiGet, apiPost, apiDownload } from '../api';
@@ -43,6 +43,9 @@ export default function ReporteGeneralView() {
   const [selectedPlatformId, setSelectedPlatformId] = useState('');
   // False when the manifest arrived fully associated → read-only summary until "Cambiar".
   const [editingAssoc, setEditingAssoc] = useState(true);
+  // Tracks the most recently requested record so a slow /api/records/:id response can't
+  // clobber state after the user has since selected a different record.
+  const selectReqId = useRef<string | null>(null);
 
   useEffect(() => {
     apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => setClients([]));
@@ -87,12 +90,14 @@ export default function ReporteGeneralView() {
   }
 
   async function handleSelect(r: RecordSummary) {
+    selectReqId.current = r.id;
     setSelectedId(r.id);
     setSelectedLabel(`${r.mawbReference} — ${r.clientName}`);
     setError(null);
     setDetail(null);
     try {
       const d = await apiGet<RecordDetail>(`/api/records/${r.id}`);
+      if (selectReqId.current !== r.id) return; // a different record was selected meanwhile
       setDetail(d);
       // Prefill from the manifest's existing association; fall back to a best-effort
       // catalog match on the manifest's client name.
@@ -103,6 +108,7 @@ export default function ReporteGeneralView() {
       setSelectedPlatformId(d.platformId ?? '');
       setEditingAssoc(!(d.clientId && d.platformId));
     } catch (err) {
+      if (selectReqId.current !== r.id) return; // a different record was selected meanwhile
       setError(err instanceof Error ? err.message : 'Error al cargar el registro.');
     }
   }

@@ -42,6 +42,56 @@ async function pickOption(placeholder: string, optionLabel: string) {
   fireEvent.click(optionBtn);
 }
 
+/**
+ * Mocks two records, rA and rB. rA's detail fetch stays pending until `resolveA()` is called;
+ * rB's detail fetch resolves immediately. Lets a test simulate clicking A then B before A's
+ * response lands.
+ */
+function mockApiRace() {
+  let resolveA: (value: unknown) => void = () => {};
+  const detailAPromise = new Promise((resolve) => { resolveA = resolve; });
+  const detailA = { id: 'rA', clientId: 'cl1', platformId: 'p2', pedimentos: [{ id: 'ped-A', numeroPedimento: '999' }] };
+  const detailB = { id: 'rB', clientId: 'cl1', platformId: 'p1', pedimentos: [{ id: 'ped-B', numeroPedimento: '222' }] };
+  (apiGet as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
+    if (path === '/api/catalogs/clients') return Promise.resolve(CLIENTS);
+    if (path.startsWith('/api/records?q=')) return Promise.resolve([
+      { id: 'rA', mawbReference: 'AAA-1', clientName: 'ACME', createdAt: '2026-06-23' },
+      { id: 'rB', mawbReference: 'BBB-1', clientName: 'ACME', createdAt: '2026-06-24' },
+    ]);
+    if (path === '/api/records/rA') return detailAPromise;
+    if (path === '/api/records/rB') return Promise.resolve(detailB);
+    return Promise.resolve([]);
+  });
+  (apiPost as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+  (apiDownload as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  return { resolveA: () => resolveA(detailA) };
+}
+
+describe('ReporteGeneralView stale-fetch guard', () => {
+  it('discards a stale record-detail response when a different record was selected meanwhile', async () => {
+    const { resolveA } = mockApiRace();
+    render(<ReporteGeneralView />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Buscar registro/i), { target: { value: 'A' } });
+    fireEvent.click(screen.getByRole('button', { name: /Buscar/i }));
+    await waitFor(() => screen.getByText(/AAA-1/));
+
+    fireEvent.click(screen.getByText(/AAA-1/)); // selects rA; its detail fetch is left pending
+    fireEvent.click(screen.getByText(/BBB-1/)); // selects rB; its detail fetch resolves right away
+
+    await waitFor(() => screen.getByText(/Plataforma: Shop A/)); // rB's association is shown
+
+    // rA's stale response lands after rB was already selected — must be discarded, not applied.
+    resolveA();
+    await waitFor(() => screen.getByText(/Plataforma: Shop A/));
+    expect(screen.queryByText(/Plataforma: Shop B/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Generar/i }));
+    await waitFor(() => expect(apiDownload).toHaveBeenCalledWith('/api/pedimentos/ped-B/report.xlsx', 'Reporte_General_222.xlsx'));
+    expect(apiDownload).not.toHaveBeenCalledWith('/api/pedimentos/ped-A/report.xlsx', 'Reporte_General_999.xlsx');
+  });
+});
+
 describe('ReporteGeneralView one-click generation', () => {
   it('pre-associated manifest: shows the summary and downloads without re-binding', async () => {
     mockApi({ clientId: 'cl1', platformId: 'p2' });

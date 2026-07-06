@@ -5,7 +5,7 @@ import type { ExtractedPedimento } from '../types/reports';
 const ship = (guideId: string, customsValueUsd: number, name: string, rfc: string) =>
   ({ guideId, customsValueUsd, consignee: { name, rfc, curp: null } });
 
-const extracted = (lines: { guia: string; valueUsd: number | null; consigneeName: string | null; id: string | null }[]): ExtractedPedimento => ({
+const extracted = (lines: ExtractedPedimento['lines']): ExtractedPedimento => ({
   header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, agencyRfc: null, patente: null, customsEntryCode: null, customsClearanceCode: null, agenteAduanal: null, tasaImportacion: null, tipoCambio: null, entryDate: null, paymentDate: null, totalBultos: null },
   lines, extractionMethod: 'deterministic', usedPositional: false, confidence: 0.9, warnings: [], subdivision: { masterGuide: null, ordinal: null, isLast: false, siblings: [], bultos: null, pesoBrutoKg: null }, coveredGuias: [],
 });
@@ -75,5 +75,83 @@ describe('reconcile', () => {
   it('carries notes through', () => {
     const r = reconcile(expected, extracted([]), { notes: ['nota X'] });
     expect(r.notes).toContain('nota X');
+  });
+});
+
+describe('reconcile — peso-rounded (approx) values from consolidado VAL ADU', () => {
+  const expected = { header: {}, lines: [
+    { guia: 'JMX300674063160', valueUsd: 53.52, consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA', id: 'MOQA961209MSL' },
+  ] };
+  it('accepts a small conversion delta when the line value is approximate', () => {
+    const rep = reconcile(expected, extracted([
+      { guia: 'JMX300674063160', valueUsd: 53.55, consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA', id: 'MOQA961209MSL', valueUsdApprox: true },
+    ]));
+    expect(rep.lines[0].status).toBe('matched');
+  });
+  it('still flags the same delta as mismatch for exact (non-approx) values', () => {
+    const rep = reconcile(expected, extracted([
+      { guia: 'JMX300674063160', valueUsd: 53.55, consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA', id: 'MOQA961209MSL' },
+    ]));
+    expect(rep.lines[0].status).toBe('mismatch');
+  });
+  it('keeps real discrepancies as mismatch even when approximate', () => {
+    const rep = reconcile(expected, extracted([
+      { guia: 'JMX300674063160', valueUsd: 31.58, consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA', id: 'MOQA961209MSL', valueUsdApprox: true },
+    ]));
+    expect(rep.lines[0].status).toBe('mismatch');
+  });
+});
+
+describe('reconcile — name normalization and RFC/CURP identity', () => {
+  it('matches names regardless of case, accents, and word order', () => {
+    // Manifest: given names first, mixed case, accented. Pedimento: surnames first, uppercase,
+    // unaccented — same person, must match.
+    const { expected } = buildExpectedFromManifest([
+      ship('G1', 10, 'Angélica Mireya Montenegro Quintero', 'MOQA961209MSL'),
+    ]);
+    const rep = reconcile(expected, extracted([
+      { guia: 'G1', valueUsd: 10, consigneeName: 'MONTENEGRO QUINTERO ANGELICA MIREYA', id: 'MOQA961209MSL' },
+    ]));
+    expect(rep.lines[0].status).toBe('matched');
+  });
+  it('accepts the RFC when the manifest id preference picked the CURP (and vice versa)', () => {
+    // buildExpectedFromManifest prefers curp for the primary id, but the pedimento may print
+    // the RFC — either credential of the same consignee must reconcile.
+    const { expected } = buildExpectedFromManifest([
+      { guideId: 'G2', customsValueUsd: 5, consignee: { name: 'JUAN PEREZ', rfc: 'PESJ850315HH7', curp: 'PESJ850315HDFRRR09' } },
+    ]);
+    const rep = reconcile(expected, extracted([
+      { guia: 'G2', valueUsd: 5, consigneeName: 'JUAN PEREZ', id: 'PESJ850315HH7' },
+    ]));
+    expect(rep.lines[0].status).toBe('matched');
+  });
+  it('still flags genuinely different names and ids as mismatch', () => {
+    const { expected } = buildExpectedFromManifest([ship('G3', 5, 'JUAN PEREZ', 'PESJ850315HH7')]);
+    const rep = reconcile(expected, extracted([
+      { guia: 'G3', valueUsd: 5, consigneeName: 'MARIA LOPEZ', id: 'LOMM900101AA1' },
+    ]));
+    expect(rep.lines[0].status).toBe('mismatch');
+    expect(rep.lines[0].diffs.filter((d) => !d.ok).map((d) => d.field)).toEqual(['nombre', 'rfcCurp']);
+  });
+});
+
+describe('reconcile — truncated CURP in the pedimento observation field', () => {
+  it('accepts a 13-char truncation of the manifest CURP (real consolidado prints only 13)', () => {
+    const { expected } = buildExpectedFromManifest([
+      { guideId: 'JMX300676373341', customsValueUsd: 20, consignee: { name: 'DIANA ELISA GONZALEZ MARQUEZ', rfc: null, curp: 'GOMD960507MGTNRN04' } },
+    ]);
+    const rep = reconcile(expected, extracted([
+      { guia: 'JMX300676373341', valueUsd: 20, consigneeName: 'GONZALEZ MARQUEZ DIANA ELISA', id: 'GOMD960507MGT' },
+    ]));
+    expect(rep.lines[0].status).toBe('matched');
+  });
+  it('rejects prefixes too short to be a credential', () => {
+    const { expected } = buildExpectedFromManifest([
+      { guideId: 'G1', customsValueUsd: 20, consignee: { name: 'DIANA ELISA GONZALEZ MARQUEZ', rfc: null, curp: 'GOMD960507MGTNRN04' } },
+    ]);
+    const rep = reconcile(expected, extracted([
+      { guia: 'G1', valueUsd: 20, consigneeName: 'GONZALEZ MARQUEZ DIANA ELISA', id: 'GOMD9605' },
+    ]));
+    expect(rep.lines[0].status).toBe('mismatch');
   });
 });

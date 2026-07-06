@@ -1,12 +1,20 @@
 import { PDFParse } from 'pdf-parse';
 import { parsePedimentoText } from '../../../../shared/pedimento/parsePedimentoText';
-import { parseSubdivision } from '../../../../shared/pedimento/subdivision';
+import { parseGuiaList, parseSubdivision } from '../../../../shared/pedimento/subdivision';
 import type { ExtractedPedimento } from '../../../../shared/types/reports';
 
 export function extractFromText(fullText: string): ExtractedPedimento {
   const base = parsePedimentoText(fullText);
   const subdivision = parseSubdivision(fullText);
-  const coveredGuias = [...new Set(base.lines.map((l) => l.guia).filter(Boolean))] as string[];
+  // Covered guías come from the partida observations when present (subdivision layout) and from
+  // the (GUIA/ORDEN EMBARQUE) M/H list otherwise (consolidado layout, which has no GUIA/VALOR
+  // observations). The list's M entry also supplies the master guide when the subdivision
+  // observation text is absent.
+  const guiaList = parseGuiaList(fullText);
+  const coveredGuias = [...new Set(
+    [...base.lines.map((l) => l.guia), ...guiaList.houseGuias].filter(Boolean),
+  )] as string[];
+  if (!subdivision.masterGuide && guiaList.masterGuide) subdivision.masterGuide = guiaList.masterGuide;
   return { ...base, subdivision, coveredGuias };
 }
 

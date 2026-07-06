@@ -1,6 +1,6 @@
 import type { ExtractedPedimento, ExtractedPedimentoLine } from '../types/reports';
 import type { SubdivisionInfo } from './subdivision';
-import { parseObservation } from './observation';
+import { scanObservations } from './observation';
 
 const emptySubdivision: SubdivisionInfo = {
   masterGuide: null,
@@ -16,11 +16,9 @@ const RFC_RE = /\b[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}\b/g;
 
 export function parsePedimentoText(text: string): ExtractedPedimento {
   const t = text ?? '';
-  const lines: ExtractedPedimentoLine[] = [];
-  for (const raw of t.split(/\r?\n/)) {
-    const obs = parseObservation(raw);
-    if (obs) lines.push({ guia: obs.guideId, valueUsd: obs.valueUsd, consigneeName: obs.consigneeName, id: obs.id });
-  }
+  const lines: ExtractedPedimentoLine[] = scanObservations(t).map((obs) => (
+    { guia: obs.guideId, valueUsd: obs.valueUsd, consigneeName: obs.consigneeName, id: obs.id }
+  ));
 
   const num = t.match(NUMERO_RE);
   const numeroPedimento = num ? num[1] + num[2] + num[3] + num[4] : null;
@@ -36,6 +34,27 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
     tcCollapsed.match(/ADUANA E\/S:?\s*(?:\d{1,3}\s+)?(\d{1,3}\.\d{4,6})\b/i) ??
     tcCollapsed.match(/\b(\d{1,3}\.\d{4,6})\b/);
   const tipoCambio = tcMatch ? Number(tcMatch[1]) : null;
+
+  // Consolidado partida observations: "<guía> CONSIGNATARIO: <name> <RFC/CURP>" — no GUIA/VALOR
+  // format at all. The per-guía valor is the partida block's VAL ADU (whole MXN): the last
+  // "<valAdu> <precioPag> <precioUnit .ddddd>" triplet printed before the observation, converted
+  // at the pedimento's own tipo de cambio (hence approximate — see valueUsdApprox).
+  if (lines.length === 0) {
+    const chunks = tcCollapsed.split(/OBSERVACIONES A NIVEL PARTIDA/i);
+    for (let i = 1; i < chunks.length; i++) {
+      // Not anchored to the chunk start: a page break can inject the footer/header between the
+      // label and the observation.
+      const obs = chunks[i].match(/(\S+)\s+CONSIGNATARIO:\s+(.+?)\s+([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{2,8})\b/);
+      if (!obs) continue;
+      const triplets = [...chunks[i - 1].matchAll(/\b(\d{1,8})\s+\d{1,8}\s+\d{1,8}\.\d{5}\b/g)];
+      const valAduMxn = triplets.length ? Number(triplets[triplets.length - 1][1]) : null;
+      const valueUsd = valAduMxn != null && tipoCambio ? Math.round((valAduMxn / tipoCambio) * 100) / 100 : null;
+      lines.push({
+        guia: obs[1], valueUsd, consigneeName: obs[2].trim(), id: obs[3],
+        ...(valueUsd != null ? { valueUsdApprox: true } : {}),
+      });
+    }
+  }
   const clave = /\bT1\b/.test(t) ? 'T1' : null;
   const rfcs = t.match(RFC_RE) ?? [];
   const importerRfc = rfcs[0] ?? null;     // first RFC on the page is the importer block
@@ -77,6 +96,45 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   const agenteM = t.match(/NOMBRE\s+O\s+RAZ\.?\s*SOC\.?:?\s*(?:\d+\s*\n)*\s*([^\n]+)/i);
   const agenteAduanal = agenteM ? agenteM[1].trim() : null;
 
+  // Importer entity (razón social + domicilio) for auto-registration. Layout A prints the name
+  // right after the "NOMBRE, DENOMINACION O RAZON SOCIAL:" label (first occurrence only — later
+  // occurrences belong to the supplier block); layout B scatters that label and prints the name
+  // under the importer RFC instead. Both anchors skip digit-only lines and reject column labels.
+  const NOT_A_NAME = /^(VAL\.|VALOR|SEGUROS|FLETES|EMBALAJES|C[OÓ]DIGO|MARCAS|DOMICILIO|TRANSPORTE|MEDIOS|FECHAS|CUADRO|DATOS|CLAVE|NUM\.|NOMBRE|CURP|RFC)/i;
+  const nameCandidate = (m: RegExpMatchArray | null) => {
+    const v = m?.[1]?.trim() ?? '';
+    return v && !NOT_A_NAME.test(v) ? v : null;
+  };
+  const importerName =
+    nameCandidate(t.match(/NOMBRE,\s*DENOMINACION\s+O\s+RAZON\s+SOCIAL:?[^\S\n]*\n(?:[^\S\n]*\d+[^\S\n]*\n)*[^\S\n]*([^\n]+)/i)) ??
+    (importerRfc
+      ? nameCandidate(t.slice(t.indexOf(importerRfc)).match(/^[^\n]*\n(?:[^\S\n]*\d+[^\S\n]*\n)*[^\S\n]*([^\n]+)/))
+      : null);
+
+  // Importer DOMICILIO — only when the address starts on the label's own line (the supplier
+  // block's "… DOMICILIO:" has its value on the next line and must not be picked up).
+  const domicilioM = t.match(/DOMICILIO:[^\S\n]*([^\n]{10,})/i);
+  const importerAddress = domicilioM ? domicilioM[1].trim() : null;
+
+  // Agent RFCs — scan a window around each agent-block anchor ("NOMBRE O RAZ. SOC"), since layouts
+  // print the RFC before or after it. Persona física (4-letter) RFC = agente; 3-letter RFC =
+  // agencia. The importer's RFC can appear near an anchor, so it is explicitly excluded.
+  let agentRfc: string | null = null;
+  let agencyRfc: string | null = null;
+  for (const anchor of tc.matchAll(/NOMBRE\s+O\s+RAZ\.?\s*SOC/gi)) {
+    if (anchor.index == null) continue;
+    const win = tc.slice(Math.max(0, anchor.index - 300), anchor.index + 400);
+    if (!agentRfc) {
+      const m = [...win.matchAll(/\b[A-ZÑ&]{4}\d{6}[A-Z0-9]{3}\b/g)].find((x) => x[0] !== importerRfc);
+      agentRfc = m ? m[0] : null;
+    }
+    if (!agencyRfc) {
+      const m = [...win.matchAll(/\b[A-ZÑ&]{3}\d{6}[A-Z0-9]{3}\b/g)].find((x) => x[0] !== importerRfc);
+      agencyRfc = m ? m[0] : null;
+    }
+    if (agentRfc && agencyRfc) break;
+  }
+
   // Tasa de importación — the partida-level IVA TASA. Captured from the pedimento, never computed
   // (RGCE 3.7.35). pdf-parse's positional ordering differs per layout: consolidados emit the tasa
   // BEFORE the label ("33.5000000000 IVA 10.00000", where the trailing number is the CANTIDAD
@@ -91,8 +149,8 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
 
   return {
     header: {
-      numeroPedimento, clave, importerRfc,
-      agentRfc: null, agencyRfc: null, patente,
+      numeroPedimento, clave, importerRfc, importerName, importerAddress,
+      agentRfc, agencyRfc, patente,
       customsEntryCode, customsClearanceCode, agenteAduanal, tasaImportacion, tipoCambio,
       entryDate, paymentDate, totalBultos: null,
     },

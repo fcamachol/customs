@@ -117,6 +117,19 @@ describe('matchesDeniedParty', () => {
     expect(result).not.toBeNull();
     expect(result?.matched).toBe('Comercial Fantasma');
   });
+
+  it('matches homoglyph-obfuscated candidate (Cyrillic а) against a Latin entry', () => {
+    // 'Ivаn' = "Ivаn" with Cyrillic а (U+0430), visually identical to Latin a
+    const result = matchesDeniedParty({ names: ['Ivаn Petrov'], ids: [] }, OFAC_LIST);
+    expect(result).not.toBeNull();
+    expect(result?.matched).toBe('Ivan Petrov');
+  });
+
+  it('matches a Latin candidate against a homoglyph-obfuscated entry name', () => {
+    // Entry uses Cyrillic а (U+0430) and Cyrillic о (U+043E)
+    const list: DeniedPartyEntry[] = [{ name: 'Ivаn Petrоv', source: 'OFAC' }];
+    expect(matchesDeniedParty({ names: ['ivan petrov'], ids: [] }, list)).not.toBeNull();
+  });
 });
 
 // ─── gradeSignals — denied_party signal ──────────────────────────────────────
@@ -189,5 +202,13 @@ describe('scoreManifest denied_party → rojo', () => {
     const signalIds = out[0].reasons.map((r) => r.signalId);
     expect(signalIds).toContain('denied_party');
     expect(signalIds).toContain('prohibidos');
+  });
+  it('sanctioned consignee WITHOUT RFC/CURP still forces rojo (not gris)', () => {
+    // rfc: '' is how a missing RFC arrives from the parser (ConsigneeData.rfc is a
+    // required string) — blank still triggers the insufficient-data path under test.
+    const s = ship({ consignee: { name: 'Ivan Petrov', rfc: '', address: 'Calle 1' } });
+    const out = scoreManifest([s], {}, { deniedParties: OFAC_LIST });
+    expect(out[0].band).toBe('rojo');
+    expect(out[0].color).toBe('rojo');
   });
 });

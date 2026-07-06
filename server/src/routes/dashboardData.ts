@@ -1,7 +1,7 @@
-export type Distribution = { verde: number; amarillo: number; rojo: number };
+export type Distribution = { verde: number; amarillo: number; rojo: number; gris: number };
 
 export function mergeDistribution(rows: { risk_color: string; n: number }[]): Distribution {
-  const d: Distribution = { verde: 0, amarillo: 0, rojo: 0 };
+  const d: Distribution = { verde: 0, amarillo: 0, rojo: 0, gris: 0 };
   for (const r of rows) if (r.risk_color in d) d[r.risk_color as keyof Distribution] = r.n;
   return d;
 }
@@ -16,7 +16,7 @@ export function buildDashboardResponse(input: {
   const map = new Map<string, { userId: string; username: string; manifests: number; distribution: Distribution }>();
   for (const row of input.byUserRows) {
     let u = map.get(row.userId);
-    if (!u) { u = { userId: row.userId, username: row.username, manifests: row.manifests, distribution: { verde: 0, amarillo: 0, rojo: 0 } }; map.set(row.userId, u); }
+    if (!u) { u = { userId: row.userId, username: row.username, manifests: row.manifests, distribution: { verde: 0, amarillo: 0, rojo: 0, gris: 0 } }; map.set(row.userId, u); }
     if (row.risk_color && row.risk_color in u.distribution) u.distribution[row.risk_color as keyof Distribution] = row.n;
   }
   return { ...base, byUser: Array.from(map.values()) };

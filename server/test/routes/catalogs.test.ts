@@ -262,3 +262,114 @@ describe('PUT /api/catalogs/config/customs_agent', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('GET /api/catalogs/agentes-aduanales', () => {
+  it('admin and super_admin can list; capturista and autoridad are 403', async () => {
+    await query(
+      `INSERT INTO agentes_aduanales (patente, name, agent_rfc, agency_rfc, verified)
+       VALUES ('1653','GUZMOR','GUMM710831UYA','GLG1502247K9', true)`,
+    );
+    const admin = await request(app).get('/api/catalogs/agentes-aduanales').set('Authorization', `Bearer ${adminToken}`);
+    expect(admin.status).toBe(200);
+    expect(admin.body).toHaveLength(1);
+    // camelCase contract, no snake_case leakage.
+    expect(admin.body[0]).toMatchObject({
+      patente: '1653', name: 'GUZMOR', agentRfc: 'GUMM710831UYA', agencyRfc: 'GLG1502247K9', verified: true,
+    });
+    expect(admin.body[0].id).toBeTruthy();
+    expect(admin.body[0].createdAt).toBeTruthy();
+    expect(admin.body[0].updatedAt).toBeTruthy();
+    expect(admin.body[0].agent_rfc).toBeUndefined();
+
+    const sa = await request(app).get('/api/catalogs/agentes-aduanales').set('Authorization', `Bearer ${superAdminToken}`);
+    expect(sa.status).toBe(200);
+    const cap = await request(app).get('/api/catalogs/agentes-aduanales').set('Authorization', `Bearer ${capturistaToken}`);
+    expect(cap.status).toBe(403);
+    const aut = await request(app).get('/api/catalogs/agentes-aduanales').set('Authorization', `Bearer ${autoridadToken}`);
+    expect(aut.status).toBe(403);
+  });
+});
+
+describe('PUT /api/catalogs/agentes-aduanales/:id', () => {
+  it('admin can edit fields + verified, writes an audit row', async () => {
+    const { rows } = await query(
+      `INSERT INTO agentes_aduanales (patente, name, verified) VALUES ('1653','OLD', false) RETURNING id`,
+    );
+    const id = rows[0].id;
+    const res = await request(app)
+      .put(`/api/catalogs/agentes-aduanales/${id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'GESTORES ADUANALES', agentRfc: 'GUMM710831UYA', verified: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: 'GESTORES ADUANALES', agentRfc: 'GUMM710831UYA', verified: true });
+
+    const db = await query<{ name: string; verified: boolean }>(`SELECT name, verified FROM agentes_aduanales WHERE id=$1`, [id]);
+    expect(db.rows[0].name).toBe('GESTORES ADUANALES');
+    expect(db.rows[0].verified).toBe(true);
+
+    const audit = await query(`SELECT action FROM audit_log WHERE action='UPDATE_AGENTE_ADUANAL'`);
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it('capturista PUT → 403', async () => {
+    const { rows } = await query(`INSERT INTO agentes_aduanales (patente) VALUES ('1653') RETURNING id`);
+    const res = await request(app)
+      .put(`/api/catalogs/agentes-aduanales/${rows[0].id}`)
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send({ verified: true });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 for a non-existent agente', async () => {
+    const res = await request(app)
+      .put('/api/catalogs/agentes-aduanales/00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ verified: true });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/catalogs/importadores', () => {
+  it('admin lists in camelCase; autoridad is 403', async () => {
+    await query(
+      `INSERT INTO importadores (rfc, name, fiscal_address, verified)
+       VALUES ('ADM130509UQ0','ADMERCE SA DE CV','CDMX', false)`,
+    );
+    const admin = await request(app).get('/api/catalogs/importadores').set('Authorization', `Bearer ${adminToken}`);
+    expect(admin.status).toBe(200);
+    expect(admin.body[0]).toMatchObject({
+      rfc: 'ADM130509UQ0', name: 'ADMERCE SA DE CV', fiscalAddress: 'CDMX', verified: false,
+    });
+    expect(admin.body[0].fiscal_address).toBeUndefined();
+
+    const aut = await request(app).get('/api/catalogs/importadores').set('Authorization', `Bearer ${autoridadToken}`);
+    expect(aut.status).toBe(403);
+  });
+});
+
+describe('PUT /api/catalogs/importadores/:id', () => {
+  it('admin can edit fields + verified, writes an audit row', async () => {
+    const { rows } = await query(
+      `INSERT INTO importadores (rfc, name, verified) VALUES ('ADM130509UQ0','OLD', false) RETURNING id`,
+    );
+    const id = rows[0].id;
+    const res = await request(app)
+      .put(`/api/catalogs/importadores/${id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'ADMERCE SA DE CV', fiscalAddress: 'PONIENTE 150, CDMX', verified: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: 'ADMERCE SA DE CV', fiscalAddress: 'PONIENTE 150, CDMX', verified: true });
+
+    const audit = await query(`SELECT action FROM audit_log WHERE action='UPDATE_IMPORTADOR'`);
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it('capturista PUT → 403', async () => {
+    const { rows } = await query(`INSERT INTO importadores (rfc) VALUES ('ADM130509UQ0') RETURNING id`);
+    const res = await request(app)
+      .put(`/api/catalogs/importadores/${rows[0].id}`)
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send({ verified: true });
+    expect(res.status).toBe(403);
+  });
+});

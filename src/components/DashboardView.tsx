@@ -4,11 +4,11 @@ import { apiGet } from '../api';
 import { Card, EmptyState } from './ui';
 import type { Section } from '../nav';
 
-type Distribution = { verde: number; amarillo: number; rojo: number };
+type Distribution = { verde: number; amarillo: number; rojo: number; gris: number };
 interface DashboardData { manifests: number; distribution: Distribution; byUser?: { userId: string; username: string; manifests: number; distribution: Distribution }[]; }
 interface RecordSummary { id: string; mawbReference: string; clientName: string; createdAt: string; }
 
-const sum = (d: Distribution) => d.verde + d.amarillo + d.rojo;
+const sum = (d: Distribution) => d.verde + d.amarillo + d.rojo + d.gris;
 const pct = (n: number, total: number) => (total ? Math.round((n / total) * 1000) / 10 : 0);
 
 export default function DashboardView({ onNavigate }: { onNavigate?: (s: Section) => void } = {}) {
@@ -57,11 +57,13 @@ export default function DashboardView({ onNavigate }: { onNavigate?: (s: Section
             <div className="bg-emerald-500" style={{ width: `${pct(data.distribution.verde, guias)}%` }} />
             <div className="bg-amber-500" style={{ width: `${pct(data.distribution.amarillo, guias)}%` }} />
             <div className="bg-red-500" style={{ width: `${pct(data.distribution.rojo, guias)}%` }} />
+            <div className="bg-slate-300" style={{ width: `${pct(data.distribution.gris, guias)}%` }} />
           </div>
           <div className="mt-3 flex gap-4 text-xs text-slate-600">
             <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-500" />Verde {data.distribution.verde}</span>
             <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-500" />Amarillo {data.distribution.amarillo}</span>
             <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500" />Rojo {data.distribution.rojo}</span>
+            <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate-300" />Sin datos {data.distribution.gris}</span>
           </div>
         </Card>
 

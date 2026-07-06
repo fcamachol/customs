@@ -16,6 +16,29 @@ export interface SubdivisionInfo {
   pesoBrutoKg: number | null;
 }
 
+export interface GuiaList {
+  masterGuide: string | null;
+  houseGuias: string[];
+}
+
+// Parse the "(GUIA/ORDEN EMBARQUE)/ID:" list: `<value> M` marks the master guide and `<value> H`
+// the covered house guías. Multi-page consolidados fragment the list with page headers, so houses
+// are collected by a global scan rather than consuming a contiguous run. Guía-shaped tokens (≥8
+// chars containing a digit) keep short `<code> H` identificador rows (e.g. "EP H") out; the master
+// stays anchored to the "ID:" label.
+export function parseGuiaList(text: string): GuiaList {
+  const t = (text ?? '').replace(/\s+/g, ' ');
+  const master = t.match(/\bID:?\s*([A-Z0-9][A-Z0-9-]{5,})\s+M\b/i);
+  const houseGuias: string[] = [];
+  const seen = new Set<string>();
+  for (const m of t.matchAll(/\b([A-Z0-9][A-Z0-9-]{7,})\s+H\b/g)) {
+    if (!/\d/.test(m[1]) || seen.has(m[1])) continue;
+    seen.add(m[1]);
+    houseGuias.push(m[1]);
+  }
+  return { masterGuide: master ? master[1] : null, houseGuias };
+}
+
 export function parseSubdivision(text: string): SubdivisionInfo {
   // Collapse line breaks / runs of whitespace so cross-line anchors match.
   const t = (text ?? '').replace(/\s+/g, ' ').toUpperCase();

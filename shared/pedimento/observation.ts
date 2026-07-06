@@ -22,3 +22,17 @@ export function parseObservation(line: string): ObservationInput | null {
     id: m[4],
   };
 }
+
+// pdf-parse wraps long observation lines (the RFC-CURP tail lands on the next line), so scanning
+// must run over whitespace-collapsed text instead of per-line ^…$ anchors.
+const OBS_SCAN_RE = /\bGUIA\s+(\S+)\s+VALOR\s+([\d.,]+)\s+USD\s+NOMBRE\s+(.+?)\s+RFC-CURP\s+(\S+)/g;
+
+export function scanObservations(text: string): ObservationInput[] {
+  const t = (text ?? '').replace(/\s+/g, ' ');
+  return [...t.matchAll(OBS_SCAN_RE)].map((m) => ({
+    guideId: m[1],
+    valueUsd: Number(m[2].replace(/,/g, '')),
+    consigneeName: m[3].trim(),
+    id: m[4],
+  }));
+}

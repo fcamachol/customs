@@ -159,6 +159,18 @@ export function CaptureWorkspace({ manifestId, onClose, onChanged }: {
             />
           )}
 
+          {(phase === 'capturar' || phase === 'prevalidar') && pedimentos.length > 0 && (
+            <div className="flex justify-end border-t border-slate-200 pt-4">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPhase(phase === 'capturar' ? 'prevalidar' : 'finalizar')}
+              >
+                {phase === 'capturar' ? 'Continuar a Prevalidar' : 'Continuar a Finalizar'}
+              </Button>
+            </div>
+          )}
+
           {phase === 'finalizar' && pedimentos.length > 0 && (
             <div className="flex flex-col items-start gap-2 border-t border-slate-200 pt-4">
               {bulkError && (
@@ -460,7 +472,7 @@ function SubirPhase({ manifestId, pedimentoCount, onUploaded, onGoCapturar }: {
           </Button>
         )}
         {pedimentoCount > 0 && (
-          <Button type="button" variant="secondary" onClick={onGoCapturar}>
+          <Button type="button" variant="secondary" className="ml-auto" onClick={onGoCapturar}>
             Continuar a Capturar
           </Button>
         )}

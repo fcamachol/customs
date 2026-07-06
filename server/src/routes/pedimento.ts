@@ -5,10 +5,21 @@ import { recordAudit } from '../services/audit';
 import { buildPedimento } from '../../../shared/pedimento/buildPedimento';
 import { prevalidatePedimento } from '../../../shared/pedimento/prevalidate';
 import { loadShipments } from '../services/reportData';
-import { loadImporterOfRecord, loadCustomsAgent } from '../services/entityMaster';
+import { upsertAgente, upsertImportador } from '../services/entityMaster';
+import { normPedimentoNumero } from '../../../shared/pedimento/subdivision';
 import { nextSubStatus, type SubStatus } from '../../../shared/pedimento/subStatus';
 
 export const pedimentoRouter = Router();
+
+const strOrNull = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+
+// The patente is digits 5-8 of the 15-digit SAT pedimento number (AA + aduana + PATENTE + …).
+// Used to re-derive the agente key when import_data does not carry an explicit patente.
+function derivePatente(numero: string | null): string | null {
+  const n = normPedimentoNumero(numero ?? '');
+  return n.length === 15 ? n.slice(4, 8) : null;
+}
 
 // Per-pedimento build + prevalidación (Task 9 cutover).
 //
@@ -57,13 +68,35 @@ pedimentoRouter.post(
         return;
       }
 
-      // Assemble BuildOptions from configured entities + persisted import_data.
-      const [importer, agent] = await Promise.all([loadImporterOfRecord(), loadCustomsAgent()]);
-      if (!importer || !agent) {
-        res.status(422).json({ error: 'Configure el importador de registro y el agente aduanal antes de prevalidar.' });
+      const d = (import_data ?? {}) as Record<string, unknown>;
+
+      // Resolve the entities this pedimento identifies, from the catalog tables. Agente by patente
+      // (import_data or re-derived from the numero); importador by import_data.importerRfc. 422 only
+      // when neither source yields a key to resolve with — naming what is missing.
+      const patente = strOrNull(d.patente) ?? derivePatente(numero_pedimento);
+      const importerRfc = strOrNull(d.importerRfc);
+      const unresolvable = [
+        ...(patente ? [] : ['la patente del agente aduanal']),
+        ...(importerRfc ? [] : ['el RFC del importador']),
+      ];
+      if (unresolvable.length) {
+        res.status(422).json({ error: `No se puede resolver la entidad: falta ${unresolvable.join(' y ')}.` });
         return;
       }
-      const d = (import_data ?? {}) as Record<string, unknown>;
+
+      // Auto-create the rows if missing (same fill-only-missing upsert as upload) and read back the
+      // resolved state. Post-upload these already exist; this covers rows captured out-of-band.
+      const [agent, importer] = await Promise.all([
+        upsertAgente({
+          patente: patente!, name: strOrNull(d.agenteAduanal),
+          agentRfc: strOrNull(d.agentRfc), agencyRfc: strOrNull(d.agencyRfc), createdBy: req.user!.userId,
+        }),
+        upsertImportador({
+          rfc: importerRfc!, name: strOrNull(d.importerName),
+          fiscalAddress: strOrNull(d.importerAddress), createdBy: req.user!.userId,
+        }),
+      ]);
+
       const missing = ['tipoCambio', 'claveAduanaEntrada', 'claveAduanaDespacho', 'fechaEntrada', 'paymentDate']
         .filter((k) => d[k] == null || d[k] === '');
       // A zero (or negative) tipoCambio is never valid — treat it the same as missing.
@@ -74,10 +107,13 @@ pedimentoRouter.post(
         });
         return;
       }
+
+      // Missing name/address/agencyRfc pass as '' — prevalidatePedimento treats an empty RFC as a
+      // warning (entity sin verificar), not an error.
       const opts = {
         numeroPedimento: numero_pedimento,
-        importer: { rfc: String(importer.rfc), name: String(importer.name), fiscalAddress: String(importer.fiscalAddress) },
-        agent: { patente: String(agent.patente), name: String(agent.name), agentRfc: String(agent.agentRfc), agencyRfc: String(agent.agencyRfc) },
+        importer: { rfc: importer!.rfc, name: importer!.name ?? '', fiscalAddress: importer!.fiscalAddress ?? '' },
+        agent: { patente: agent!.patente, name: agent!.name ?? '', agentRfc: agent!.agentRfc ?? '', agencyRfc: agent!.agencyRfc ?? '' },
         tipoCambio: Number(d.tipoCambio),
         customsEntryCode: String(d.claveAduanaEntrada),
         customsClearanceCode: String(d.claveAduanaDespacho),
@@ -87,6 +123,10 @@ pedimentoRouter.post(
 
       const ped = buildPedimento(subset.map((s) => s.data), opts);
       const prevalidation = prevalidatePedimento(ped);
+
+      // Surface unverified entities as prevalidation warnings naming the entity.
+      if (agent && !agent.verified) prevalidation.warnings.push(`Agente aduanal (patente ${agent.patente}) sin verificar.`);
+      if (importer && !importer.verified) prevalidation.warnings.push(`Importador (RFC ${importer.rfc}) sin verificar.`);
 
       // Lifecycle guard: only rows in 'capturado' or 'prevalidado' may transition via prevalidation.
       const event = prevalidation.status === 'APPROVED' ? 'prevalidate_pass' : 'prevalidate_block';

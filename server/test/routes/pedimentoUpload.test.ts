@@ -321,6 +321,75 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     ).rejects.toMatchObject({ code: '23505' });
   });
 
+  // A pedimento PDF carrying an importer block (RAZON SOCIAL + importer RFC) so extraction
+  // populates importerName/importerRfc and the importador auto-registers.
+  function importerPdf(numero: string): Buffer {
+    return makeTextPdf([
+      `NUM. PEDIMENTO: ${numero}`,
+      'T1',
+      'SEGUNDA SUBDIVISION DE LA GUIA MASTER NO. 369-94268462',
+      '34 BULTOS CON UN PESO DE 808 KG.',
+      'NOMBRE, DENOMINACION O RAZON SOCIAL:',
+      'TMM ALMACENADORA SAPI DE CV',
+      'ADM130509UQ0',
+      'DESTINO/ORIGEN: TIPO CAMBIO: PESO BRUTO: ADUANA E/S:',
+      '9 20.45680 808.000 850',
+    ]);
+  }
+
+  it('auto-registers the agente aduanal (unverified) from the uploaded pedimento', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001684'), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const ag = await query<{ patente: string; verified: boolean }>(
+      `SELECT patente, verified FROM agentes_aduanales WHERE patente='1653'`);
+    expect(ag.rows).toHaveLength(1);
+    expect(ag.rows[0].verified).toBe(false);
+  });
+
+  it('re-upload with the same patente does not duplicate, overwrite non-null fields, or flip verified', async () => {
+    // Pre-seed a verified agente with a name/agentRfc already filled.
+    await query(
+      `INSERT INTO agentes_aduanales (patente, name, agent_rfc, verified)
+       VALUES ('1653','EXISTING AGENT','GUMM710831UYA', true)`,
+    );
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5009999'), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const ag = await query<{ name: string; agent_rfc: string; verified: boolean }>(
+      `SELECT name, agent_rfc, verified FROM agentes_aduanales WHERE patente='1653'`);
+    expect(ag.rows).toHaveLength(1);            // no duplicate
+    expect(ag.rows[0].name).toBe('EXISTING AGENT'); // not overwritten
+    expect(ag.rows[0].agent_rfc).toBe('GUMM710831UYA');
+    expect(ag.rows[0].verified).toBe(true);     // never flipped
+  });
+
+  it('auto-registers the importador (unverified) and prefills importerRfc/importerName', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', importerPdf('25 85 1653 5002020'), { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const im = await query<{ rfc: string; name: string | null; verified: boolean }>(
+      `SELECT rfc, name, verified FROM importadores WHERE rfc='ADM130509UQ0'`);
+    expect(im.rows).toHaveLength(1);
+    expect(im.rows[0].verified).toBe(false);
+    expect(im.rows[0].name).toBe('TMM ALMACENADORA SAPI DE CV');
+
+    const row = await query<{ import_data: Record<string, unknown> | null }>(
+      `SELECT import_data FROM pedimentos WHERE id=$1`, [res.body.pedimentoId]);
+    expect(row.rows[0].import_data).toMatchObject({
+      importerRfc: 'ADM130509UQ0', importerName: 'TMM ALMACENADORA SAPI DE CV',
+    });
+  });
+
   it('persists a reconciliation report on upload when extraction yields data', async () => {
     // Seed a shipment whose guideId matches the OBSERVACIONES line in the PDF fixture.
     const shipment = {

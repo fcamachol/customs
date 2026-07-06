@@ -64,6 +64,28 @@ describe('records', () => {
     expect(res.body).toHaveProperty('pedimentos');
     expect(res.body).toHaveProperty('coverage');
   });
+
+  it('detail exposes the manifest client/platform association (null until bound)', async () => {
+    const list = await request(app).get('/api/records?q=369-1').set('Authorization', `Bearer ${token}`);
+    const id = list.body[0].id;
+
+    // Unassociated manifest → explicit nulls
+    let res = await request(app).get(`/api/records/${id}`).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.clientId).toBeNull();
+    expect(res.body.platformId).toBeNull();
+
+    // Bind a client + platform, then the detail returns their ids
+    const c = await query(`INSERT INTO clients (name, created_by) VALUES ('Cliente A',$1) RETURNING id`, [userId]);
+    const p = await query(
+      `INSERT INTO client_platforms (client_id, commercial_name, created_by) VALUES ($1,'Tienda A',$2) RETURNING id`,
+      [c.rows[0].id, userId]);
+    await query('UPDATE manifests SET client_id=$1, platform_id=$2 WHERE id=$3', [c.rows[0].id, p.rows[0].id, id]);
+
+    res = await request(app).get(`/api/records/${id}`).set('Authorization', `Bearer ${token}`);
+    expect(res.body.clientId).toBe(c.rows[0].id);
+    expect(res.body.platformId).toBe(p.rows[0].id);
+  });
 });
 
 describe('records — Consulta filters', () => {

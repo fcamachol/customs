@@ -75,7 +75,10 @@ export interface ExtractedPedimentoHeader {
   agentRfc: string | null;
   agencyRfc: string | null;
   patente: string | null;
-  customsClearanceCode: string | null;
+  customsEntryCode: string | null;     // clave de aduana de entrada (ADUANA E/S)
+  customsClearanceCode: string | null; // clave de aduana de despacho (SECCION ADUANERA DE DESPACHO)
+  agenteAduanal: string | null;        // NOMBRE O RAZ. SOC. del agente aduanal
+  tasaImportacion: string | null;      // partida-level IVA TASA (e.g. "33.5"); null when exempt
   tipoCambio: number | null;
   entryDate: string | null;     // ISO yyyy-mm-dd
   paymentDate: string | null;   // ISO yyyy-mm-dd

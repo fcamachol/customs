@@ -4,7 +4,6 @@ import { Search, Download } from 'lucide-react';
 import { apiGet, apiPost, apiDownload } from '../api';
 import { Card, Field, Input, Button, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
-import { ANAM_COUNTRY_OPTIONS } from '../../shared/parsing/catalogs';
 import type { Client } from './AddClientModal';
 
 interface RecordSummary {
@@ -21,6 +20,8 @@ interface PedimentoItem {
 }
 interface RecordDetail {
   id: string;
+  clientId: string | null;
+  platformId: string | null;
   pedimentos: PedimentoItem[];
 }
 
@@ -30,29 +31,19 @@ export default function ReporteGeneralView() {
   const [records, setRecords] = useState<RecordSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedLabel, setSelectedLabel] = useState<string>('');
+  const [detail, setDetail] = useState<RecordDetail | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  // Remitente form state
-  const [nombreCompleto, setNombreCompleto] = useState('');
-  const [idFiscal, setIdFiscal] = useState('');
-  const [domicilio, setDomicilio] = useState('');
-  const [telefono, setTelefono] = useState('');
-  const [correoRemitente, setCorreoRemitente] = useState('');
-
-  // Plataforma form state
-  const [nombreComercial, setNombreComercial] = useState('');
-  const [paisOrigen, setPaisOrigen] = useState('');
-  const [denominacionPlataforma, setDenominacionPlataforma] = useState('');
-  const [correoPlataforma, setCorreoPlataforma] = useState('');
-
-  // Cascading client → platform selection
+  // Cliente/plataforma association. The remitente + plataforma report blocks come from the
+  // clients catalog server-side; this page only needs to know WHICH client/platform.
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedPlatformId, setSelectedPlatformId] = useState('');
+  // False when the manifest arrived fully associated → read-only summary until "Cambiar".
+  const [editingAssoc, setEditingAssoc] = useState(true);
 
-  // Load clients on mount for the cascading selector
   useEffect(() => {
     apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => setClients([]));
   }, []);
@@ -70,24 +61,20 @@ export default function ReporteGeneralView() {
     }));
   }, [clients, selectedClientId]);
 
+  const clientLabel = clients.find((c) => c.id === selectedClientId)?.name ?? '';
+  const platformLabel = platformOptions.find((o) => o.value === selectedPlatformId)?.label ?? '';
+
   function handleClientChange(id: string) {
     setSelectedClientId(id);
     setSelectedPlatformId(''); // platform list depends on the client
   }
-
-  // Prefill país de origen from the chosen platform's configured clave.
-  useEffect(() => {
-    if (!selectedPlatformId) { setPaisOrigen(''); return; }
-    const c = clients.find((c) => c.id === selectedClientId);
-    const p = c?.platforms?.find((p) => p.id === selectedPlatformId);
-    setPaisOrigen(p?.countryOfOrigin ?? '');
-  }, [selectedPlatformId, selectedClientId, clients]);
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSelectedId(null);
     setSelectedLabel('');
+    setDetail(null);
     setSearchLoading(true);
     try {
       const results = await apiGet<RecordSummary[]>(`/api/records?q=${encodeURIComponent(query)}`);
@@ -99,25 +86,43 @@ export default function ReporteGeneralView() {
     }
   }
 
-  function handleSelect(r: RecordSummary) {
+  async function handleSelect(r: RecordSummary) {
     setSelectedId(r.id);
     setSelectedLabel(`${r.mawbReference} — ${r.clientName}`);
+    setError(null);
+    setDetail(null);
+    try {
+      const d = await apiGet<RecordDetail>(`/api/records/${r.id}`);
+      setDetail(d);
+      // Prefill from the manifest's existing association; fall back to a best-effort
+      // catalog match on the manifest's client name.
+      const matchedClient = d.clientId
+        ?? clients.find((c) => c.name.trim().toLowerCase() === (r.clientName ?? '').trim().toLowerCase())?.id
+        ?? '';
+      setSelectedClientId(matchedClient);
+      setSelectedPlatformId(d.platformId ?? '');
+      setEditingAssoc(!(d.clientId && d.platformId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al cargar el registro.');
+    }
   }
 
   async function handleGenerateReport() {
-    if (!selectedId) return;
+    if (!selectedId || !detail) return;
     if (!selectedClientId) { setError('Selecciona un cliente.'); return; }
     if (!selectedPlatformId) { setError('Selecciona una plataforma.'); return; }
     setError(null);
     setDownloading(true);
     try {
-      await apiPost(`/api/manifests/${selectedId}/client`, {
-        clientId: selectedClientId,
-        platformId: selectedPlatformId,
-      });
+      // Only re-bind when the user actually changed the association.
+      if (selectedClientId !== detail.clientId || selectedPlatformId !== detail.platformId) {
+        await apiPost(`/api/manifests/${selectedId}/client`, {
+          clientId: selectedClientId,
+          platformId: selectedPlatformId,
+        });
+      }
       // Reporte General is per-pedimento (each subdivisión is its own customs submission), so
       // download the report.xlsx for each of the record's pedimentos.
-      const detail = await apiGet<RecordDetail>(`/api/records/${selectedId}`);
       const peds = detail.pedimentos ?? [];
       if (peds.length === 0) {
         setError('Este registro aún no tiene pedimentos (subdivisiones). Genere el pedimento antes de descargar el reporte.');
@@ -187,134 +192,50 @@ export default function ReporteGeneralView() {
         </div>
       )}
 
-      {/* Cliente y plataforma */}
-      <Card className="p-6 shadow-sm space-y-5">
-        <h2 className="text-sm font-bold text-slate-800">Cliente y plataforma</h2>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Cliente" htmlFor="rg-cliente">
-            <SearchSelect
-              id="rg-cliente"
-              value={selectedClientId}
-              onChange={handleClientChange}
-              options={clientOptions}
-              placeholder="Selecciona un cliente…"
-            />
-          </Field>
-          <Field label="Plataforma" htmlFor="rg-plataforma">
-            <SearchSelect
-              id="rg-plataforma"
-              value={selectedPlatformId}
-              onChange={setSelectedPlatformId}
-              options={platformOptions}
-              placeholder={selectedClientId ? 'Selecciona una plataforma…' : 'Elige un cliente primero'}
-              disabled={!selectedClientId}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      {/* Datos del Remitente */}
-      <Card className="p-6 shadow-sm space-y-5">
-        <h2 className="text-sm font-bold text-slate-800">Datos del Remitente</h2>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Nombre completo / denominación o razón social" htmlFor="remitente-nombre">
-            <Input
-              id="remitente-nombre"
-              type="text"
-              value={nombreCompleto}
-              onChange={(e) => setNombreCompleto(e.target.value)}
-              placeholder="Nombre o razón social"
-            />
-          </Field>
-          <Field label="Id fiscal" htmlFor="remitente-id-fiscal">
-            <Input
-              id="remitente-id-fiscal"
-              type="text"
-              value={idFiscal}
-              onChange={(e) => setIdFiscal(e.target.value)}
-              placeholder="RFC / Tax ID"
-            />
-          </Field>
-          <div className="sm:col-span-2">
-            <Field label="Domicilio" htmlFor="remitente-domicilio">
-              <Input
-                id="remitente-domicilio"
-                type="text"
-                value={domicilio}
-                onChange={(e) => setDomicilio(e.target.value)}
-                placeholder="Dirección completa"
-              />
-            </Field>
-          </div>
-          <Field label="Teléfono" htmlFor="remitente-telefono">
-            <Input
-              id="remitente-telefono"
-              type="tel"
-              value={telefono}
-              onChange={(e) => setTelefono(e.target.value)}
-              placeholder="+52 55 0000 0000"
-            />
-          </Field>
-          <Field label="Correo electrónico" htmlFor="remitente-correo">
-            <Input
-              id="remitente-correo"
-              type="email"
-              value={correoRemitente}
-              onChange={(e) => setCorreoRemitente(e.target.value)}
-              placeholder="correo@ejemplo.com"
-            />
-          </Field>
-        </div>
-      </Card>
-
-      {/* Datos de la Plataforma */}
-      <Card className="p-6 shadow-sm space-y-5">
-        <h2 className="text-sm font-bold text-slate-800">Datos de la Plataforma</h2>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Nombre comercial" htmlFor="plataforma-nombre-comercial">
-            <Input
-              id="plataforma-nombre-comercial"
-              type="text"
-              value={nombreComercial}
-              onChange={(e) => setNombreComercial(e.target.value)}
-              placeholder="Nombre comercial"
-            />
-          </Field>
-          <Field label="País de origen" htmlFor="plataforma-pais">
-            <SearchSelect
-              id="plataforma-pais"
-              value={paisOrigen}
-              onChange={setPaisOrigen}
-              options={ANAM_COUNTRY_OPTIONS}
-              placeholder="México, China, EUA…"
-            />
-          </Field>
-          <Field label="Denominación o razón social" htmlFor="plataforma-denominacion">
-            <Input
-              id="plataforma-denominacion"
-              type="text"
-              value={denominacionPlataforma}
-              onChange={(e) => setDenominacionPlataforma(e.target.value)}
-              placeholder="Razón social"
-            />
-          </Field>
-          <Field label="Correo electrónico" htmlFor="plataforma-correo">
-            <Input
-              id="plataforma-correo"
-              type="email"
-              value={correoPlataforma}
-              onChange={(e) => setCorreoPlataforma(e.target.value)}
-              placeholder="correo@plataforma.com"
-            />
-          </Field>
-        </div>
-      </Card>
+      {/* Cliente y plataforma — read-only summary when the manifest is already associated */}
+      {selectedId && detail && (
+        <Card className="p-6 shadow-sm space-y-5">
+          <h2 className="text-sm font-bold text-slate-800">Cliente y plataforma</h2>
+          {!editingAssoc ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-700">
+                Cliente: {clientLabel || '—'} · Plataforma: {platformLabel || '—'}
+              </p>
+              <Button type="button" variant="secondary" onClick={() => setEditingAssoc(true)}>
+                Cambiar
+              </Button>
+            </div>
+          ) : (
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Cliente" htmlFor="rg-cliente">
+                <SearchSelect
+                  id="rg-cliente"
+                  value={selectedClientId}
+                  onChange={handleClientChange}
+                  options={clientOptions}
+                  placeholder="Selecciona un cliente…"
+                />
+              </Field>
+              <Field label="Plataforma" htmlFor="rg-plataforma">
+                <SearchSelect
+                  id="rg-plataforma"
+                  value={selectedPlatformId}
+                  onChange={setSelectedPlatformId}
+                  options={platformOptions}
+                  placeholder={selectedClientId ? 'Selecciona una plataforma…' : 'Elige un cliente primero'}
+                  disabled={!selectedClientId}
+                />
+              </Field>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Generate report action */}
       <div className="flex items-center gap-3">
         <Button
           type="button"
-          disabled={!selectedId || downloading}
+          disabled={!selectedId || !detail || downloading}
           onClick={handleGenerateReport}
         >
           <Download className="h-4 w-4" />

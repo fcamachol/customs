@@ -152,7 +152,7 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     expect(sib.rows[0].prevalidation).toBeNull();
   });
 
-  it('returns 400 when covered_guias is empty (no shipments in subset)', async () => {
+  it('returns 400 naming the extraction gap when covered_guias is empty', async () => {
     await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
@@ -168,10 +168,11 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/No shipments/);
+    expect(res.body.error).toMatch(/no tiene guías asignadas/);
+    expect(res.body.reason).toBe('sin_guias_asignadas');
   });
 
-  it('returns 400 when covered_guias is null (no shipments in subset)', async () => {
+  it('returns 400 naming the extraction gap when covered_guias is null', async () => {
     await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
@@ -187,7 +188,47 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/No shipments/);
+    expect(res.body.error).toMatch(/no tiene guías asignadas/);
+    expect(res.body.reason).toBe('sin_guias_asignadas');
+  });
+
+  it('returns 400 naming the empty manifest when it has no shipments at all', async () => {
+    await setEntities();
+    // No shipments seeded — the manifest is empty even though the pedimento declares guías.
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['g1'], userId, JSON.stringify(IMPORT_DATA)],
+    );
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/manifiesto no tiene guías/);
+    expect(res.body.reason).toBe('manifiesto_sin_guias');
+  });
+
+  it('returns 400 listing the unmatched guías when covered_guias match no manifest shipment', async () => {
+    await setEntities();
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+
+    // covered_guias formatted differently from the shipment guideId → exact-match intersection empty.
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['G-1', 'G-2'], userId, JSON.stringify(IMPORT_DATA)],
+    );
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no coinciden/);
+    expect(res.body.error).toContain('G-1');
+    expect(res.body.error).toContain('g1'); // shows manifest guías so the mismatch is visible
+    expect(res.body.reason).toBe('guias_no_coinciden');
   });
 
   it('returns 404 when pedimento row does not exist', async () => {

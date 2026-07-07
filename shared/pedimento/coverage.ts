@@ -50,8 +50,12 @@ export function computeCoverage(manifestGuias: string[], pedimentos: PedimentoCo
   const duplicatedGuias = [...coverCount].filter(([, c]) => c > 1).map(([g]) => g);
   const coveredGuiaCount = manifestGuias.length - uncoveredGuias.length;
 
+  // A manifest with zero guías can never be 'completo': with nothing to cover, the uncovered/
+  // duplicated checks pass vacuously and would paint a green badge over a broken state (manifest
+  // whose shipments never loaded). Surface it as 'parcial' so someone looks at it.
   let status: ManifestCoverageStatus;
   if (pedimentos.length === 0) status = 'sin_pedimento';
+  else if (manifestGuias.length === 0) status = 'parcial';
   else if (missingNumeros.length === 0 && uncoveredGuias.length === 0 && duplicatedGuias.length === 0) status = 'completo';
   else status = 'parcial';
 

@@ -164,6 +164,26 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     expect(ped.rows[0].numero_pedimento).toBeNull();
   });
 
+  it('warns sin_guias_cubiertas when extraction parses the PDF but finds no covered guías', async () => {
+    // MINIMAL_PDF parses cleanly but carries no text → coveredGuias = []. The attach must proceed
+    // (201) while warning that prevalidation will be blocked until a readable PDF is re-uploaded.
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', MINIMAL_PDF, { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.warnings.some((w: string) => /guías cubiertas/.test(w))).toBe(true);
+  });
+
+  it('warns when the manifest itself has no shipments to cover', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', MINIMAL_PDF, { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.warnings.some((w: string) => /manifiesto no tiene guías/.test(w))).toBe(true);
+  });
+
   it('accepts a flagged PDF under default flag policy and records the scan', async () => {
     const res = await request(app)
       .post(`/api/manifests/${manifestId}/pedimento-pdf`)

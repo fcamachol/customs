@@ -54,17 +54,33 @@ pedimentoRouter.post(
       const coveredSet = new Set(covered_guias ?? []);
 
       // Load all manifest shipments (decrypted), then narrow to this pedimento's guía subset.
-      // An empty subset means no shipments are assigned to this subdivision — reject with 400 so
-      // the caller can fix covered_guias before retrying (mirrors the old "No shipments for manifest").
+      // An empty subset blocks with 400 — but the three ways it can be empty need different fixes
+      // (re-upload the manifest, re-upload the pedimento PDF, or reconcile guía formats), so name
+      // the one that applies instead of a generic "assign covered_guias".
       const allShipments = await loadShipments(manifest_id);
       const subset = coveredSet.size > 0
         ? allShipments.filter((s) => coveredSet.has(s.data.guideId))
         : [];
 
       if (!subset.length) {
-        res.status(400).json({
-          error: 'No shipments assigned to this pedimento subdivision. Assign covered_guias first.',
-        });
+        const preview = (list: string[]) => list.slice(0, 5).join(', ') + (list.length > 5 ? '…' : '');
+        if (!allShipments.length) {
+          res.status(400).json({
+            reason: 'manifiesto_sin_guias',
+            error: 'El manifiesto no tiene guías (embarques) cargadas, así que no hay nada que prevalidar. Revisa la carga del manifiesto.',
+          });
+        } else if (!coveredSet.size) {
+          res.status(400).json({
+            reason: 'sin_guias_asignadas',
+            error: 'Este pedimento no tiene guías asignadas: la extracción del PDF no encontró guías cubiertas. Elimina el pedimento y vuelve a subir un PDF legible (no escaneado).',
+          });
+        } else {
+          const manifestGuias = allShipments.map((s) => s.data.guideId);
+          res.status(400).json({
+            reason: 'guias_no_coinciden',
+            error: `Las guías del pedimento no coinciden con ninguna guía del manifiesto. Pedimento: ${preview([...coveredSet])} · Manifiesto: ${preview(manifestGuias)}.`,
+          });
+        }
         return;
       }
 

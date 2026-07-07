@@ -275,6 +275,17 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
     warnings.push(`El pedimento cubre guías que no están declaradas en el manifiesto: ${strayGuias.join(', ')}`);
   }
 
+  // Prevalidation intersects covered_guias with the manifest's shipments, so either side being
+  // empty guarantees a block at step 3. Say so now, at attach time, instead of letting the user
+  // capture a pedimento that cannot prevalidate. (pdf_unparseable already covers the parse-throw
+  // case — don't stack a second warning on it.)
+  if (allShipments.length === 0) {
+    warnings.push('El manifiesto no tiene guías (embarques) cargadas; la prevalidación quedará bloqueada.');
+  }
+  if (extracted.coveredGuias.length === 0 && !warnings.includes('pdf_unparseable')) {
+    warnings.push('No se encontraron guías cubiertas en el PDF del pedimento; la prevalidación quedará bloqueada hasta subir un PDF legible.');
+  }
+
   // `warnings` carries every code/message; `warning` keeps the single-string field the UI displays.
   const warning = warnings.length > 0 ? warnings.join(' · ') : undefined;
   res.status(201).json({ pedimentoId: ins.rows[0].id, fileId: meta.id, numeroPedimento, scan, warnings, ...(warning ? { warning } : {}) });

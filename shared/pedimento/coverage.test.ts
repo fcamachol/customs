@@ -42,4 +42,10 @@ describe('computeCoverage', () => {
     expect(r.duplicatedGuias).toEqual(['G1']);
     expect(r.status).toBe('parcial');
   });
+
+  it('parcial (never completo) when the manifest has no guías — coverage cannot be vacuously satisfied', () => {
+    const r = computeCoverage([], [ped('1', [], { siblings: [], isLast: true, ordinal: 1 })]);
+    expect(r.status).toBe('parcial');
+    expect(r.manifestGuiaCount).toBe(0);
+  });
 });

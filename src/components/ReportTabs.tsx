@@ -152,7 +152,7 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
   );
 }
 
-type PedimentoTabKey = 'reporte' | 'layout' | 'pedimento';
+type PedimentoTabKey = 'riesgo' | 'reporte' | 'layout' | 'pedimento';
 const PEDIMENTO_TABS: { key: PedimentoTabKey; label: string }[] = [
   { key: 'reporte', label: 'Reporte General' },
   { key: 'layout', label: 'Layout' },
@@ -162,26 +162,37 @@ const PEDIMENTO_TABS: { key: PedimentoTabKey; label: string }[] = [
  * Per-PEDIMENTO Reporte General + Layout + Pedimento PDF for one subdivisión. Fetches the report
  * bundle built over THIS pedimento's covered-guía subset + its own import_data, and downloads that
  * subdivisión's report.xlsx / layout.xlsx / PDF.
+ *
+ * With `riskRecordId` (Consulta) the panel leads with the generated files: an extra
+ * "Análisis de Riesgo" tab (the manifest-level artifact + its download) comes first, followed by
+ * Pedimento / Reporte General / Layout — the searchable-files view the client asked for.
  */
 export function PedimentoReportTabs({
   pedimentoId,
   title,
   pedimentoPdf = null,
   refreshKey = 0,
+  riskRecordId = null,
 }: {
   pedimentoId: string;
   title?: string;
   pedimentoPdf?: string | null;
   refreshKey?: number;
+  riskRecordId?: string | null;
 }) {
   const [bundle, setBundle] = useState<PedimentoReportsBundle | null>(null);
-  const [tab, setTab] = useState<PedimentoTabKey>('reporte');
+  const [riskBundle, setRiskBundle] = useState<RiskBundle | null>(null);
+  const [tab, setTab] = useState<PedimentoTabKey>(riskRecordId ? 'riesgo' : 'reporte');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [drawerRow, setDrawerRow] = useState<{ row: Record<string, string>; title: string } | null>(null);
 
-  const tabs = pedimentoPdf ? [...PEDIMENTO_TABS, { key: 'pedimento' as PedimentoTabKey, label: 'Pedimento' }] : PEDIMENTO_TABS;
+  const pdfTab = pedimentoPdf ? [{ key: 'pedimento' as PedimentoTabKey, label: 'Pedimento' }] : [];
+  const tabs = riskRecordId
+    // Files mode (Consulta): Análisis de Riesgo | Pedimento | Reporte General — no Layout tab.
+    ? [{ key: 'riesgo' as PedimentoTabKey, label: 'Análisis de Riesgo' }, ...pdfTab, { key: 'reporte' as PedimentoTabKey, label: 'Reporte General' }]
+    : [...PEDIMENTO_TABS, ...pdfTab];
 
   useEffect(() => {
     let active = true;
@@ -195,12 +206,24 @@ export function PedimentoReportTabs({
     return () => { active = false; };
   }, [pedimentoId, refreshKey, revealed]);
 
+  // The Análisis de Riesgo artifact is manifest-level; fetched only in files mode (Consulta).
+  useEffect(() => {
+    if (!riskRecordId) return;
+    let active = true;
+    apiGet<RiskBundle>(`/api/records/${riskRecordId}/reports.json`)
+      .then((b) => { if (active) setRiskBundle(b); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar el análisis de riesgo.'); })
+      .finally(() => { /* report bundle drives the loading state */ });
+    return () => { active = false; };
+  }, [riskRecordId, refreshKey]);
+
   // Reset reveal + tab when switching pedimentos.
-  useEffect(() => { setRevealed(false); setDrawerRow(null); setTab('reporte'); }, [pedimentoId]);
+  useEffect(() => { setRevealed(false); setDrawerRow(null); setTab(riskRecordId ? 'riesgo' : 'reporte'); }, [pedimentoId, riskRecordId]);
 
   async function handleDownloadCurrent() {
     let target: { path: string; name: string } | null = null;
-    if (tab === 'reporte') target = { path: `/api/pedimentos/${pedimentoId}/report.xlsx`, name: 'Reporte_General.xlsx' };
+    if (tab === 'riesgo' && riskRecordId) target = { path: `/api/records/${riskRecordId}/risk.xlsx`, name: 'Analisis_de_Riesgo.xlsx' };
+    else if (tab === 'reporte') target = { path: `/api/pedimentos/${pedimentoId}/report.xlsx`, name: 'Reporte_General.xlsx' };
     else if (tab === 'layout') target = { path: `/api/pedimentos/${pedimentoId}/layout.xlsx`, name: 'LayOut_sistema.xlsx' };
     else if (tab === 'pedimento' && pedimentoPdf) target = { path: pedimentoPdf, name: 'Pedimento.pdf' };
     if (!target) return;
@@ -259,6 +282,19 @@ export function PedimentoReportTabs({
             </div>
           )}
 
+          {tab === 'riesgo' && riskRecordId && (
+            <div className="space-y-4">
+              {riskBundle?.riskStale && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>Riesgo desactualizado: los datos de importación cambiaron después del análisis. Vuelva a correr el análisis de riesgo antes de continuar al previo.</span>
+                </div>
+              )}
+              {riskBundle
+                ? <RiskResultTable rows={riskBundle.risk ?? []} />
+                : <p className="px-1 py-6 text-sm text-slate-500">Cargando…</p>}
+            </div>
+          )}
           {tab === 'reporte' && (
             <GridTable
               columns={REPORT_COLUMNS}

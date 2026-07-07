@@ -26,6 +26,7 @@ describe('RiskResultTable', () => {
       consignee: 'Acme Corp',
       senderCity: 'Shenzhen',
       senderCountry: 'CN',
+      description: 'Pantalones, Funda protectora',
       resultado: 'rojo' as const,
       motivo: 'Sender flagged on watchlist',
     },
@@ -35,19 +36,23 @@ describe('RiskResultTable', () => {
       consignee: 'Beta LLC',
       senderCity: 'Miami',
       senderCountry: 'US',
+      description: 'Camiseta',
       resultado: 'verde' as const,
       motivo: 'Sin observaciones',
     },
   ];
 
-  it('renders both rows with sender country and resultado labels', () => {
+  it('renders both rows with descripción de la mercancía and resultado labels', () => {
     render(<RiskResultTable rows={rows} />);
+    expect(screen.getByText('Descripción de la mercancía')).toBeTruthy();
     expect(screen.getByText('MWB-001')).toBeTruthy();
     expect(screen.getByText('MWB-002')).toBeTruthy();
     expect(screen.getByText('Acme Corp')).toBeTruthy();
     expect(screen.getByText('Beta LLC')).toBeTruthy();
-    expect(screen.getByText('CN')).toBeTruthy();
-    expect(screen.getByText('US')).toBeTruthy();
+    expect(screen.getByText('Pantalones, Funda protectora')).toBeTruthy();
+    expect(screen.getByText('Camiseta')).toBeTruthy();
+    // The País remitente column was replaced by the merchandise description (client observation).
+    expect(screen.queryByText('País remitente')).toBeNull();
     expect(screen.getByText('Rojo')).toBeTruthy();
     expect(screen.getByText('Verde')).toBeTruthy();
   });

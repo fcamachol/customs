@@ -23,6 +23,12 @@ describe('layoutExport', () => {
     expect(row[LAYOUT_HEADERS[30]]).toBe('SHEIN');           // col 31 plataforma nombre comercial
     expect(row[LAYOUT_HEADERS[34]]).toBe('https://shein.com'); // col 35 plataforma URL
   });
+  it('fills País de procedencia from the sender country (procedenceCountry), not país de origen', () => {
+    const row = toLayoutRows([{ ...s, procedenceCountry: 'CN', originCountry: 'US' }])[0];
+    expect(row['País de procedencia']).toBe('CN');
+    // Without a sender country the column degrades to país de origen.
+    expect(toLayoutRows([s])[0]['País de procedencia']).toBe('CN');
+  });
   it('injects generic fraction, PCS unit, and N/A RRNA', () => {
     const rows = toLayoutRows([{ ...s, hsCode: '6109100022', unit: 'gramo' }]);
     expect(rows[0]['Fracción arancelaria']).toBe('9901000100');

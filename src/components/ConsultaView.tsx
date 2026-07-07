@@ -359,14 +359,17 @@ export default function ConsultaView() {
 
       {detail && (
         <div className="space-y-6">
-          {/* Risk is manifest-level (shipment-scoped); shown once. */}
-          <RiskPanel recordId={detail.id} />
-
-          {/* Report + Layout + Pedimento PDF are per-pedimento (each subdivisión is its own submission). */}
+          {/* Consulta surfaces the GENERATED FILES per registro (Análisis de Riesgo / Pedimento /
+              Reporte General / Layout), not the risk-analysis summary (client observation). The
+              risk artifact is manifest-level and rides as the first tab of each pedimento panel. */}
           {(detail.pedimentos ?? []).length === 0 ? (
-            <Card className="p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Aún no hay pedimentos (subdivisiones) para este registro.</p>
-            </Card>
+            <>
+              {/* No pedimento yet — the risk artifact is still reachable on its own. */}
+              <RiskPanel recordId={detail.id} />
+              <Card className="p-5 shadow-sm">
+                <p className="text-sm text-slate-500">Aún no hay pedimentos (subdivisiones) para este registro.</p>
+              </Card>
+            </>
           ) : (
             (detail.pedimentos ?? []).map((p: PedimentoItem) => (
               // Fragment carries the list key (the codebase types components with inline prop
@@ -376,6 +379,7 @@ export default function ConsultaView() {
                   pedimentoId={p.id}
                   title={pedimentoTitle(p)}
                   pedimentoPdf={p.pedimentoPdf}
+                  riskRecordId={detail.id}
                 />
               </Fragment>
             ))

@@ -69,6 +69,13 @@ describe('parsePedimentoText', () => {
     const out = parsePedimentoText(SAMPLE);
     expect(out.header.customsEntryCode).toBe('850'); // last token of "9 20.45680 808.000 850"
   });
+  it('leaves medios-de-transporte claves and registro EM null when the blocks are absent', () => {
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header.medioTransporteEntrada).toBeNull();
+    expect(out.header.medioTransporteArribo).toBeNull();
+    expect(out.header.medioTransporteSalida).toBeNull();
+    expect(out.header.t1RegistryNumber).toBeNull();
+  });
   it('extracts the importer name from the line following its RFC (subdivision layout)', () => {
     // This layout scatters "NOMBRE, DENOMINACION O RAZON SOCIAL:" away from the value; the
     // razón social prints right under the importer RFC instead.
@@ -89,6 +96,13 @@ ESTADO DE MÉXICO.
 850
 DESTINO/ORIGEN: TIPO CAMBIO: PESO BRUTO: ADUANA E/S:
 9 17.10420 209.000 460
+4 4 7
+CLAVE/COMPL. IDENTIFICADOR COMPLEMENTO 1 COMPLEMENTO 2 COMPLEMENTO 3
+CR 293
+EM 137
+MJ
+ED 0438230VUZ2I8
+OBSERVACIONES
 TASAS A NIVEL PEDIMENTO
 23 IVA/PRV 1 16.000
 CON. TASA T.T. F.P. IMPORTE
@@ -114,6 +128,16 @@ describe('parsePedimentoText — extended capture-prefill fields', () => {
   it('reads tasaImportacion from the partida IVA row, not the pedimento-level IVA/PRV', () => {
     const out = parsePedimentoText(SAMPLE_HEADER);
     expect(out.header.tasaImportacion).toBe('33.5'); // partida "IVA 33.50000", not "IVA/PRV ... 16.000"
+  });
+  it('extracts the medios-de-transporte claves trailing the value cluster (entrada/salida, arribo, salida)', () => {
+    const out = parsePedimentoText(SAMPLE_HEADER);
+    expect(out.header.medioTransporteEntrada).toBe('4'); // "9 17.10420 209.000 460" → "4 4 7"
+    expect(out.header.medioTransporteArribo).toBe('4');
+    expect(out.header.medioTransporteSalida).toBe('7');
+  });
+  it('extracts the No. de registro from the EM row of the CLAVE/COMPL. IDENTIFICADOR table', () => {
+    const out = parsePedimentoText(SAMPLE_HEADER);
+    expect(out.header.t1RegistryNumber).toBe('137'); // "CR 293 / EM 137 / MJ / ED …" → EM complemento 1
   });
   it('leaves tasaImportacion null for an exempt pedimento (IGI 0, no partida IVA row)', () => {
     // SAMPLE has no partida IVA row — sub-$50 courier exempt case (e.g. 3010110.pdf).
@@ -169,6 +193,10 @@ CARLOS FRANCISCO CRUZ LARA CULC611020FT4
 Clave en el RFC:
 MANDATARIO / PERSONA AUTORIZADA
 CURP: 	CULC611020HDFRRR09	GAN1308194J3
+NUMERO/TIPO 	396 	56
+CLAVE/COMPL. IDENTIFICADOR 	COMPLEMENTO 1 	COMPLEMENTO 2 	COMPLEMENTO 3
+EM 	147
+OBSERVACIONES
 99010001 	00 	0 	6 	6 	10.000 	6 	CHN 	CHN 	491	0	1 	1	33.5000000000	IVA	10.00000
 BRAZALETEPANTALONSUDADERACAMISETABLUSA DE MUJERTRAJE DE MUJERVESTIDO D 	0	1	IGI 	0.0000000000
 VESTIDO DE MUJER
@@ -271,6 +299,17 @@ describe('parsePedimentoText — real consolidado layout (values precede their l
     const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
     expect(out.header.agentRfc).toBe('CULC611020FT4');   // persona física (4-letter) RFC
     expect(out.header.agencyRfc).toBe('GAN1308194J3');   // agencia (3-letter) RFC
+  });
+  it('reads the scattered medios-de-transporte claves from the consolidado anchors', () => {
+    // Consolidados scatter the MEDIOS DE TRANSPORTE values: one lands after "PRECIO PAGADO/VALOR
+    // COMERCIAL:" and one after the CERTIFICACIONES destino/aduana/peso cluster.
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.header.medioTransporteEntrada).toBe('7');
+    expect(out.header.medioTransporteArribo).toBe('7');
+  });
+  it('reads the No. de registro (EM 147) from the consolidado identificador table', () => {
+    const out = parsePedimentoText(SAMPLE_CONSOLIDADO);
+    expect(out.header.t1RegistryNumber).toBe('147');
   });
   it('still extracts numero/patente/clave from the consolidado header', () => {
     const out = parsePedimentoText(SAMPLE_CONSOLIDADO);

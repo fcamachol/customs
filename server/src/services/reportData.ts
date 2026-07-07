@@ -5,6 +5,7 @@ import { decryptShipment } from '../crypto/fieldCrypto';
 import { toLayoutRows } from '../../../shared/export/layoutExport';
 import { buildReportRows } from '../../../shared/export/reportBuilder';
 import { countryDisplayName } from '../../../shared/parsing/catalogs';
+import { traducirDescripcion } from '../../../shared/i18n/descripcionEs';
 import type { Shipment } from '../../../shared/types/shipment';
 import type { RiskScreenRow, RiskResultado } from '../../../shared/types/reports';
 
@@ -49,11 +50,12 @@ export async function loadShipments(manifestId: string): Promise<LoadedShipment[
   return rows.map((r) => ({ ...r, data: decryptShipment(r.data) }));
 }
 
-/** 4-column rows for the downloadable Análisis de Riesgo workbook (compliance artifact). */
+/** Rows for the downloadable Análisis de Riesgo workbook (compliance artifact). */
 export function buildRiskXlsxRows(loaded: LoadedShipment[]): Record<string, string>[] {
   return loaded.map((r) => ({
     Guia: r.data.guideId,
     Destinatario: r.data.consignee.name,
+    'Descripción de la mercancía': traducirDescripcion(r.data.description ?? ''),
     Resultado: r.risk_color ?? '',
     Motivo: (r.risk_incidences ?? []).join('; '),
   }));
@@ -67,6 +69,7 @@ export function buildRiskScreenRows(loaded: LoadedShipment[]): RiskScreenRow[] {
     consignee: r.data.consignee.name,
     senderCity: r.data.sender.address ?? '',
     senderCountry: r.data.platform.countryOfOrigin ?? r.data.originCountry,
+    description: traducirDescripcion(r.data.description ?? ''),
     resultado: (r.risk_color ?? 'gris') as RiskResultado,
     motivo: (r.risk_incidences ?? []).join('; '),
   }));

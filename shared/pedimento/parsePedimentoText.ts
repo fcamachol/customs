@@ -89,6 +89,32 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
     tc.match(/CLAVE\s+DE\s+LA\s+SECCION\s+ADUANERA\s+(\d{2,3})\b/i);
   const customsClearanceCode = despachoM ? despachoM[1] : null;
 
+  // MEDIOS DE TRANSPORTE claves (Apéndice 3) — what the ANAM report's "Clave de Aduana de
+  // entrada/despacho" columns must carry (client observation). Layout A prints the three values
+  // right after the DESTINO/TIPO CAMBIO/PESO/ADUANA cluster in label order (ENTRADA/SALIDA,
+  // ARRIBO, SALIDA): "9 17.10420 209.000 850 4 4 7". Consolidados scatter them instead: one value
+  // lands after "PRECIO PAGADO/VALOR COMERCIAL:" and one after the CERTIFICACIONES
+  // destino/aduana/peso cluster; the (?![.,]) guards reject monetary tokens. Best-effort.
+  const mediosM = tc.match(/\b\d{1,3}\s+\d{1,3}\.\d{4,6}\s+[\d.,]+\s+\d{2,3}\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\b(?![.,])/);
+  let medioTransporteEntrada = mediosM ? mediosM[1] : null;
+  let medioTransporteArribo = mediosM ? mediosM[2] : null;
+  let medioTransporteSalida = mediosM ? mediosM[3] : null;
+  if (!mediosM) {
+    const certMedioM = tc.match(/CERTIFICACIONES\s+\d{1,2}\s+\d{2,3}\s+\d{1,3}(?:,\d{3})*\.\d{3}\s+(\d{1,2})\b(?![.,])/i);
+    const pagadoMedioM = tc.match(/PRECIO\s+PAGADO\/VALOR\s+COMERCIAL:\s*(\d{1,2})\b(?![.,])/i);
+    medioTransporteEntrada = certMedioM?.[1] ?? pagadoMedioM?.[1] ?? null;
+    medioTransporteArribo = pagadoMedioM?.[1] ?? certMedioM?.[1] ?? null;
+    medioTransporteSalida = null;
+  }
+
+  // No. de registro (empresa de mensajería): the COMPLEMENTO 1 of the EM row in the
+  // pedimento-level "CLAVE/COMPL. IDENTIFICADOR" table. Partida-level identifier tables use the
+  // "IDENTIF." header instead, so this anchor never matches those. The window stops at
+  // OBSERVACIONES (the section that follows the table in both layouts).
+  const identBlockM = tc.match(/CLAVE\/COMPL\.?\s+IDENTIFICADOR(.{0,400}?)(?:OBSERVACIONES|$)/i);
+  const emM = identBlockM ? identBlockM[1].match(/\bEM\s+(\d{1,6})\b/) : null;
+  const t1RegistryNumber = emM ? emM[1] : null;
+
   // Agente aduanal — the name on the "NOMBRE O RAZ. SOC.:" line of the agent block (distinct from
   // the importer's "NOMBRE, DENOMINACION O RAZON SOCIAL:" anchor). Read from original text for
   // case. Consolidados emit the label on its own line followed by the patente number before the
@@ -151,7 +177,9 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
     header: {
       numeroPedimento, clave, importerRfc, importerName, importerAddress,
       agentRfc, agencyRfc, patente,
-      customsEntryCode, customsClearanceCode, agenteAduanal, tasaImportacion, tipoCambio,
+      customsEntryCode, customsClearanceCode,
+      medioTransporteEntrada, medioTransporteArribo, medioTransporteSalida, t1RegistryNumber,
+      agenteAduanal, tasaImportacion, tipoCambio,
       entryDate, paymentDate, totalBultos: null,
     },
     lines,

@@ -20,7 +20,9 @@ const EMPTY_SUBDIVISION: SubdivisionInfo = { masterGuide: null, ordinal: null, i
 // Fallback when a scan-clean PDF cannot be parsed (see best-effort note at the call site).
 const EMPTY_EXTRACTED: ExtractedPedimento = {
   header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, agencyRfc: null,
-    patente: null, customsEntryCode: null, customsClearanceCode: null, agenteAduanal: null,
+    patente: null, customsEntryCode: null, customsClearanceCode: null,
+    medioTransporteEntrada: null, medioTransporteArribo: null, medioTransporteSalida: null,
+    t1RegistryNumber: null, agenteAduanal: null,
     tasaImportacion: null, tipoCambio: null, entryDate: null, paymentDate: null,
     totalBultos: null },
   lines: [],
@@ -167,11 +169,16 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
     console.error('[pedimentoUpload] entity auto-register failed (non-fatal):', err);
   }
 
+  // Claves de aduana de entrada/despacho carry the MEDIOS DE TRANSPORTE claves (ENTRADA/SALIDA y
+  // ARRIBO, Apéndice 3) — client observation — not the aduana-section codes, which stay available
+  // on the header as customsEntryCode/customsClearanceCode.
   const prefillEntries: [string, unknown][] = [
     ['cveT1', h.clave], ['patente', h.patente], ['fechaEntrada', h.entryDate],
     ['tipoCambio', h.tipoCambio], ['paymentDate', h.paymentDate],
-    ['agenteAduanal', h.agenteAduanal], ['claveAduanaEntrada', h.customsEntryCode],
-    ['claveAduanaDespacho', h.customsClearanceCode], ['tasaImportacion', h.tasaImportacion],
+    ['agenteAduanal', h.agenteAduanal], ['claveAduanaEntrada', h.medioTransporteEntrada],
+    ['claveAduanaDespacho', h.medioTransporteArribo], ['tasaImportacion', h.tasaImportacion],
+    ['noRegistro', h.t1RegistryNumber],
+    ['noPedimento', h.numeroPedimento ? h.numeroPedimento.slice(-7) : null],
     ['importerRfc', h.importerRfc], ['importerName', h.importerName ?? null],
   ].filter(([, v]) => v != null) as [string, unknown][];
   const importPrefill = prefillEntries.length ? Object.fromEntries(prefillEntries) : null;

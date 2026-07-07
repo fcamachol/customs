@@ -48,17 +48,31 @@ describe('buildReportRows', () => {
       importData: {
         patente: 'AA3456',
         tasaImportacion: '0%',
-        claveAduanaEntrada: 'ADN',
-        claveAduanaDespacho: 'LAX',
-        cveT1: 'T1-2024-001',
+        claveAduanaEntrada: '7',
+        claveAduanaDespacho: '7',
+        cveT1: 'T1',
+        noRegistro: '147',
+        noPedimento: '6001719',
+        fechaEntrada: '2026-01-13',
       },
     });
     expect(rows[0]['Patente AA']).toBe('AA3456');
     expect(rows[0]['Tasa global o cuota aplicada']).toBe('0%');
-    expect(rows[0]['Clave de Aduana de entrada']).toBe('ADN');
-    expect(rows[0]['Clave de Aduana de despacho']).toBe('LAX');
-    expect(rows[0]['No. de registro T1']).toBe('T1-2024-001');
-    expect(rows[0]['No. pedimento']).toBe('T1-2024-001');
+    expect(rows[0]['Clave de Aduana de entrada']).toBe('7');
+    expect(rows[0]['Clave de Aduana de despacho']).toBe('7');
+    expect(rows[0]['No. de registro T1']).toBe('147');
+    expect(rows[0]['No. pedimento']).toBe('6001719');
+    expect(rows[0]['Fecha de arribo a territorio nacional']).toBe('13/01/2026');
+  });
+
+  it('does not fill registro/pedimento columns from the Clave T1 régimen flag', () => {
+    const rows = buildReportRows({
+      shipments: [{ ...baseShipment }],
+      riskByGuide: {},
+      importData: { cveT1: 'T1' },
+    });
+    expect(rows[0]['No. de registro T1']).toBe('');
+    expect(rows[0]['No. pedimento']).toBe('');
   });
 
   it('overlays client remitente and platform fields', () => {

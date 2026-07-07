@@ -20,7 +20,9 @@ export function toLayoutRows(shipments: Shipment[]): Record<string, string>[] {
     const v = [
       s.t1RegistryId ?? '', s.patente ?? '', s.pedimentoNumber ?? '', s.description,
       GENERIC_T1_FRACTION_LAYOUT, String(s.quantity), 'PCS', String(s.customsValueUsd),
-      s.currency, s.originCountry, s.arrivalDate ?? '', s.guideId,
+      // País de procedencia = código de país del remitente del manifiesto (shipped-from), not the
+      // manufactured-in país de origen. Falls back to originCountry for manifests without sender.
+      s.currency, s.procedenceCountry || s.originCountry, s.arrivalDate ?? '', s.guideId,
       s.appliedRate != null ? String(s.appliedRate) : '', 'N/A',
       s.customsEntryCode ?? '', s.customsClearanceCode ?? '',
       s.consignee.name, s.consignee.rfc, s.consignee.curp ?? '',

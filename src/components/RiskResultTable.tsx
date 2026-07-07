@@ -8,6 +8,8 @@ export interface RiskRow {
   consignee: string;
   senderCity: string;
   senderCountry: string;
+  /** Descripción de la mercancía (traducida al español cuando aplica). */
+  description?: string;
   resultado: RiskResultado;
   motivo: string;
 }
@@ -51,7 +53,7 @@ export function RiskResultTable({ rows }: { rows: RiskRow[] }) {
               <th className="px-4 py-3">MWB</th>
               <th className="px-4 py-3">Guía</th>
               <th className="px-4 py-3">Destinatario</th>
-              <th className="px-4 py-3">País remitente</th>
+              <th className="px-4 py-3">Descripción de la mercancía</th>
               <th className="px-4 py-3">Resultado</th>
               <th className="px-4 py-3">Motivo</th>
             </tr>
@@ -62,7 +64,7 @@ export function RiskResultTable({ rows }: { rows: RiskRow[] }) {
                 <td className="px-4 py-3 font-mono text-xs text-slate-600">{r.mwb}</td>
                 <td className="px-4 py-3 font-mono text-xs text-slate-600">{r.guide}</td>
                 <td className="px-4 py-3 font-medium text-slate-800">{r.consignee}</td>
-                <td className="px-4 py-3">{r.senderCountry}</td>
+                <td className="px-4 py-3">{r.description || '—'}</td>
                 <td className="px-4 py-3">
                   <StatusPill resultado={r.resultado} />
                 </td>

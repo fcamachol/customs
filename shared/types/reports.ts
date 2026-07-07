@@ -12,6 +12,8 @@ export interface RiskScreenRow {
   consignee: string;
   senderCity: string;
   senderCountry: string;
+  /** Descripción de la mercancía (traducida al español cuando aplica). */
+  description: string;
   resultado: RiskResultado;
   motivo: string;
 }
@@ -80,6 +82,10 @@ export interface ExtractedPedimentoHeader {
   patente: string | null;
   customsEntryCode: string | null;     // clave de aduana de entrada (ADUANA E/S)
   customsClearanceCode: string | null; // clave de aduana de despacho (SECCION ADUANERA DE DESPACHO)
+  medioTransporteEntrada: string | null; // MEDIOS DE TRANSPORTE — clave ENTRADA/SALIDA (Apéndice 3)
+  medioTransporteArribo: string | null;  // MEDIOS DE TRANSPORTE — clave ARRIBO
+  medioTransporteSalida: string | null;  // MEDIOS DE TRANSPORTE — clave SALIDA
+  t1RegistryNumber: string | null;     // No. de registro: COMPLEMENTO 1 del identificador EM
   agenteAduanal: string | null;        // NOMBRE O RAZ. SOC. del agente aduanal
   tasaImportacion: string | null;      // partida-level IVA TASA (e.g. "33.5"); null when exempt
   tipoCambio: number | null;

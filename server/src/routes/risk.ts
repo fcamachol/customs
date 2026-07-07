@@ -10,6 +10,7 @@ import { saveFile } from '../storage/files';
 import type { Shipment } from '../../../shared/types/shipment';
 import { decryptShipment } from '../crypto/fieldCrypto';
 import { scoreLegacyParity } from '../../../shared/risk/legacyParity';
+import { traducirDescripcion } from '../../../shared/i18n/descripcionEs';
 import type { DeniedPartyEntry } from '../../../shared/risk/lists';
 import { validate } from '../validation/middleware';
 import { riskBody } from '../validation/schemas';
@@ -78,6 +79,7 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), va
   const riskRows = scored.map((s) => ({
     Guia: s.shipment.guideId,
     Destinatario: s.shipment.consignee.name,
+    'Descripción de la mercancía': traducirDescripcion(s.shipment.description ?? ''),
     Resultado: s.color,
     Motivo: s.incidences.join('; '),
   }));
@@ -110,6 +112,7 @@ riskRouter.post('/:id/risk', requireAuth, requireRole('admin', 'capturista'), va
       consignee: s.shipment.consignee.name,
       senderCity: s.shipment.sender.address ?? '',
       senderCountry: s.shipment.platform.countryOfOrigin ?? s.shipment.originCountry,
+      description: traducirDescripcion(s.shipment.description ?? ''),
       resultado: s.color,
       resultadoLegacy: legacyRows[i].resultado,
       motivo: s.incidences.join('; '),

@@ -6,7 +6,7 @@ const ship = (guideId: string, customsValueUsd: number, name: string, rfc: strin
   ({ guideId, customsValueUsd, consignee: { name, rfc, curp: null } });
 
 const extracted = (lines: ExtractedPedimento['lines']): ExtractedPedimento => ({
-  header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, agencyRfc: null, patente: null, customsEntryCode: null, customsClearanceCode: null, agenteAduanal: null, tasaImportacion: null, tipoCambio: null, entryDate: null, paymentDate: null, totalBultos: null },
+  header: { numeroPedimento: null, clave: null, importerRfc: null, agentRfc: null, agencyRfc: null, patente: null, customsEntryCode: null, customsClearanceCode: null, medioTransporteEntrada: null, medioTransporteArribo: null, medioTransporteSalida: null, t1RegistryNumber: null, agenteAduanal: null, tasaImportacion: null, tipoCambio: null, entryDate: null, paymentDate: null, totalBultos: null },
   lines, extractionMethod: 'deterministic', usedPositional: false, confidence: 0.9, warnings: [], subdivision: { masterGuide: null, ordinal: null, isLast: false, siblings: [], bultos: null, pesoBrutoKg: null }, coveredGuias: [],
 });
 

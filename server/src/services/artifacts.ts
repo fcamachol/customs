@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 export interface RiskRow {
   Guia: string;
   Destinatario: string;
+  'Descripción de la mercancía'?: string;
   Resultado: string;
   Motivo: string;
 }

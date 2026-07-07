@@ -9,6 +9,16 @@ export interface ImportData {
   fechaEntrada?: string;
   claveAduanaEntrada?: string;
   claveAduanaDespacho?: string;
+  /** No. de registro — COMPLEMENTO 1 del identificador EM del pedimento (e.g. "147"). */
+  noRegistro?: string;
+  /** No. de pedimento — consecutivo del NUM. PEDIMENTO (e.g. "6001719"). */
+  noPedimento?: string;
+}
+
+/** ISO yyyy-mm-dd → dd/mm/yyyy (pedimento presentation); any other shape passes through. */
+function toDisplayDate(v: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
 }
 
 export interface ClientData {
@@ -70,11 +80,12 @@ export function buildReportRows(input: ReportInput): Record<string, string>[] {
       if (d.tasaImportacion != null) out['Tasa global o cuota aplicada'] = d.tasaImportacion;
       if (d.claveAduanaEntrada != null) out['Clave de Aduana de entrada'] = d.claveAduanaEntrada;
       if (d.claveAduanaDespacho != null) out['Clave de Aduana de despacho'] = d.claveAduanaDespacho;
-      const t1 = d.cveT1;
-      if (t1 != null) {
-        out['No. de registro T1'] = t1;
-        out['No. pedimento'] = t1;
-      }
+      // No. de registro = identificador EM (complemento 1); No. pedimento = consecutivo del
+      // NUM. PEDIMENTO. The Clave T1 is a régimen flag, not a registry/pedimento number.
+      if (d.noRegistro != null) out['No. de registro T1'] = d.noRegistro;
+      if (d.noPedimento != null) out['No. pedimento'] = d.noPedimento;
+      // Fecha de arribo = ENTRADA of the pedimento's FECHAS block (captured as fechaEntrada).
+      if (d.fechaEntrada) out['Fecha de arribo a territorio nacional'] = toDisplayDate(d.fechaEntrada);
     }
 
     // Overlay client Remitente block (authoritative)

@@ -59,25 +59,41 @@ describe('ConsultaView', () => {
     expect(screen.queryByRole('button', { name: 'Buscar' })).toBeNull();
   });
 
-  it('renders the manifest risk panel once and a per-pedimento report panel for each subdivisión', async () => {
+  it('renders a generated-files panel per pedimento with Análisis de Riesgo / Pedimento / Reporte General tabs', async () => {
     render(<ConsultaView />);
 
     const recordButton = await screen.findByText(/MAWB-123/);
     fireEvent.click(recordButton);
 
-    // Manifest-level risk shown once.
+    // One files panel per pedimento, each titled with its número + subdivisión.
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Análisis de Riesgo' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: /258516535001684 — subdivisión 1/ })).toBeTruthy();
     });
-
-    // One report panel per pedimento, each titled with its número + subdivisión.
-    expect(screen.getByRole('heading', { name: /258516535001684 — subdivisión 1/ })).toBeTruthy();
     expect(screen.getByRole('heading', { name: /258516535001685 — subdivisión 2 \(última\)/ })).toBeTruthy();
 
-    // Each pedimento panel has Reporte General + Layout + Pedimento tabs.
-    expect(screen.getAllByRole('button', { name: 'Reporte General' })).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: 'Layout' })).toHaveLength(2);
+    // Consulta surfaces the generated files: each panel leads with the Análisis de Riesgo artifact
+    // tab followed by Pedimento / Reporte General (client observation). No Layout tab here.
+    expect(screen.getAllByRole('button', { name: 'Análisis de Riesgo' })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: 'Pedimento' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Reporte General' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Layout' })).toBeNull();
+
+    // The risk-analysis SUMMARY (stat tiles) is no longer what Consulta leads with.
+    expect(screen.queryByText('Analizados')).toBeNull();
+  });
+
+  it('downloads the Análisis de Riesgo artifact from the default tab', async () => {
+    render(<ConsultaView />);
+    fireEvent.click(await screen.findByText(/MAWB-123/));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /258516535001684/ })).toBeTruthy());
+
+    // Default tab is Análisis de Riesgo; its download targets the manifest-level risk.xlsx.
+    const downloads = screen.getAllByRole('button', { name: /Descargar/ });
+    fireEvent.click(downloads[0]);
+    await waitFor(() => {
+      expect(apiDownload).toHaveBeenCalledWith('/api/records/rec-1/risk.xlsx', 'Analisis_de_Riesgo.xlsx');
+    });
   });
 
   it("downloads a pedimento's Reporte General from its own panel", async () => {
@@ -87,10 +103,10 @@ describe('ConsultaView', () => {
     // Wait for the per-pedimento panels to load.
     await waitFor(() => expect(screen.getByRole('heading', { name: /258516535001684/ })).toBeTruthy());
 
-    // The first panel's download (default tab: Reporte General) targets THAT pedimento's report.xlsx.
+    // Switch the FIRST panel to its Reporte General tab, then download THAT pedimento's report.xlsx.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reporte General' })[0]);
     const downloads = screen.getAllByRole('button', { name: /Descargar/ });
-    // Risk panel's Descargar is first; the next two are the per-pedimento panels.
-    fireEvent.click(downloads[1]);
+    fireEvent.click(downloads[0]);
     await waitFor(() => {
       expect(apiDownload).toHaveBeenCalledWith('/api/pedimentos/p1/report.xlsx', 'Reporte_General.xlsx');
     });

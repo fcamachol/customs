@@ -20,10 +20,20 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
     { guia: obs.guideId, valueUsd: obs.valueUsd, consigneeName: obs.consigneeName, id: obs.id }
   ));
 
+  // Numero de pedimento — 15 digits. Prefer the anchored "NUM. PEDIMENTO:" value, tolerating
+  // arbitrary internal spacing/grouping (\s between digit runs), so a layout printing 15 contiguous
+  // digits still registers the numero — and, with it, the upload's duplicate-numero gate. Both
+  // known layouts scatter the numero away from the label (SAMPLE prints "CVE. PEDIMENTO:" between
+  // them; the consolidado prints "T. OPER …"), so the anchor fails there and we fall back to the
+  // canonical unanchored "dd dd dddd ddddddd" spaced pattern.
+  const anchoredNum = t.match(/NUM\.?\s*PEDIMENTO:?\s*((?:\d\s*){15})(?!\d)/i);
   const num = t.match(NUMERO_RE);
-  const numeroPedimento = num ? num[1] + num[2] + num[3] + num[4] : null;
-  // Patente is the 4-digit group of the pedimento number ("25 85 1653 5001684" → "1653").
-  const patente = num ? num[3] : null;
+  const numeroPedimento = anchoredNum
+    ? anchoredNum[1].replace(/\D/g, '')
+    : (num ? num[1] + num[2] + num[3] + num[4] : null);
+  // Patente is digits 5-8 of the normalized 15-digit numero ("258516535001684" → "1653"), keeping
+  // the same contract as derivePatente() in server/src/routes/pedimento.ts.
+  const patente = numeroPedimento && numeroPedimento.length === 15 ? numeroPedimento.slice(4, 8) : null;
   // Tipo de cambio: the ≥4-decimal token of the "ADUANA E/S" value cluster (pdf-parse emits the
   // rate there in both known layouts: "ADUANA E/S: 9 20.45680 808.000 850" and consolidado
   // "ADUANA E/S: 17.98420"). Anchoring matters: consolidados print PRV/IVA fee amounts with 5
@@ -59,8 +69,15 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   const rfcs = t.match(RFC_RE) ?? [];
   const importerRfc = rfcs[0] ?? null;     // first RFC on the page is the importer block
 
-  // FECHAS block: first dd/mm/yyyy = ENTRADA, second = PAGO. Normalize to ISO. Best-effort.
-  const isoDates = [...t.matchAll(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g)].map((m) => `${m[3]}-${m[2]}-${m[1]}`);
+  // FECHAS block: first dd/mm/yyyy = ENTRADA, second = PAGO. Normalize to ISO. Both known layouts
+  // print the two dates right after a "FECHAS" anchor, so scan from there first — a layout printing
+  // an emission/print date earlier in the page would otherwise shift both. Fall back to the whole-
+  // text scan when no FECHAS anchor exists (or none follow it). Best-effort.
+  const scanDates = (s: string) =>
+    [...s.matchAll(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g)].map((m) => `${m[3]}-${m[2]}-${m[1]}`);
+  const fechasIdx = t.search(/\bFECHAS\b/i);
+  const anchoredDates = fechasIdx >= 0 ? scanDates(t.slice(fechasIdx)) : [];
+  const isoDates = anchoredDates.length ? anchoredDates : scanDates(t);
   const entryDate = isoDates[0] ?? null;
   const paymentDate = isoDates[1] ?? null;
 
@@ -145,17 +162,40 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   // Agent RFCs — scan a window around each agent-block anchor ("NOMBRE O RAZ. SOC"), since layouts
   // print the RFC before or after it. Persona física (4-letter) RFC = agente; 3-letter RFC =
   // agencia. The importer's RFC can appear near an anchor, so it is explicitly excluded.
+  //
+  // Partida OBSERVACIONES lines are full of RFC/CURP-shaped consignee identifiers and commonly sit
+  // right before the agente block, so picking the first match by document position (as this used
+  // to do) let a consignee RFC a few hundred characters BEFORE the anchor beat the real agent RFC
+  // that both known layouts print shortly AFTER the "NOMBRE O RAZ. SOC"/"RFC:" label. Pick the
+  // match CLOSEST to the anchor instead (absolute distance), tie-broken toward after-the-anchor
+  // since neither layout ever prints the real RFC before the label at equal distance.
+  //
+  // Fixed-length regexes ({4}/{3} letters + {6} digits + {3} alnum, both wrapped in \b) already
+  // reject a match that's really the first 13 chars of an 18-char CURP: the CURP's 14th character
+  // is itself a word character, so there is no trailing word boundary at position 13 and the match
+  // attempt fails — no separate CURP-length guard needed.
+  const closestRfcMatch = (re: RegExp, winStart: number, winEnd: number, anchorIndex: number) => {
+    let best: RegExpMatchArray | null = null;
+    let bestDist = Infinity;
+    for (const m of tc.matchAll(re)) {
+      if (m.index == null || m.index < winStart || m.index > winEnd || m[0] === importerRfc) continue;
+      const dist = m.index >= anchorIndex ? m.index - anchorIndex : anchorIndex - m.index + 0.5;
+      if (dist < bestDist) { bestDist = dist; best = m; }
+    }
+    return best;
+  };
   let agentRfc: string | null = null;
   let agencyRfc: string | null = null;
   for (const anchor of tc.matchAll(/NOMBRE\s+O\s+RAZ\.?\s*SOC/gi)) {
     if (anchor.index == null) continue;
-    const win = tc.slice(Math.max(0, anchor.index - 300), anchor.index + 400);
+    const winStart = Math.max(0, anchor.index - 300);
+    const winEnd = anchor.index + 400;
     if (!agentRfc) {
-      const m = [...win.matchAll(/\b[A-ZÑ&]{4}\d{6}[A-Z0-9]{3}\b/g)].find((x) => x[0] !== importerRfc);
+      const m = closestRfcMatch(/\b[A-ZÑ&]{4}\d{6}[A-Z0-9]{3}\b/g, winStart, winEnd, anchor.index);
       agentRfc = m ? m[0] : null;
     }
     if (!agencyRfc) {
-      const m = [...win.matchAll(/\b[A-ZÑ&]{3}\d{6}[A-Z0-9]{3}\b/g)].find((x) => x[0] !== importerRfc);
+      const m = closestRfcMatch(/\b[A-ZÑ&]{3}\d{6}[A-Z0-9]{3}\b/g, winStart, winEnd, anchor.index);
       agencyRfc = m ? m[0] : null;
     }
     if (agentRfc && agencyRfc) break;
@@ -171,7 +211,17 @@ export function parsePedimentoText(text: string): ExtractedPedimento {
   const tasaImportacion = tasaM ? String(Number(tasaM[1])) : null;
 
   const warnings: string[] = [];
-  if (lines.length === 0) warnings.push('No se encontraron observaciones a nivel partida en el texto.');
+  if (lines.length === 0) {
+    // A present-but-unparsable "OBSERVACIONES A NIVEL PARTIDA" section is the production-incident
+    // signature (a format variant we could not read → zero guías silently). Surface it specifically
+    // so upload flags the pedimento instead of accepting an empty extraction; the generic message
+    // covers pedimentos that genuinely have no partida-level section.
+    if (/OBSERVACIONES\s+A\s+NIVEL\s+PARTIDA/i.test(tc)) {
+      warnings.push('Se encontró la sección OBSERVACIONES pero no se pudo interpretar ninguna guía. Verifique el formato de las observaciones a nivel partida (GUIA/VALOR/NOMBRE/RFC-CURP).');
+    } else {
+      warnings.push('No se encontraron observaciones a nivel partida en el texto.');
+    }
+  }
 
   return {
     header: {

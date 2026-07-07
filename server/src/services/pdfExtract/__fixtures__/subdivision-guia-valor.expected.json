@@ -1,0 +1,51 @@
+{
+  "header": {
+    "numeroPedimento": "259122446002317",
+    "clave": "T1",
+    "importerRfc": "VAG980304PX1",
+    "importerName": "VALDEZ AGUILERA GRUPO SA DE CV",
+    "importerAddress": "AV. INSURGENTES SUR 1234 COL. DEL VALLE CP. 03100 CDMX",
+    "agentRfc": "SOVB680214FT4",
+    "agencyRfc": "SAA240115LK2",
+    "patente": "2244",
+    "customsEntryCode": "460",
+    "customsClearanceCode": "850",
+    "medioTransporteEntrada": "4",
+    "medioTransporteArribo": "4",
+    "medioTransporteSalida": "7",
+    "t1RegistryNumber": "152",
+    "agenteAduanal": "BALTAZAR ENRIQUE SOSA VILLARREAL",
+    "tasaImportacion": "16",
+    "tipoCambio": 18.3241,
+    "entryDate": "2026-03-11",
+    "paymentDate": "2026-03-12",
+    "totalBultos": null
+  },
+  "lines": [
+    {
+      "guia": "JMX400112233445",
+      "valueUsd": 45.5,
+      "consigneeName": "ROSA ISELA DOMINGUEZ FLORES",
+      "id": "DOFR870512MD3"
+    },
+    {
+      "guia": "JMX400118877665",
+      "valueUsd": 22.75,
+      "consigneeName": "HECTOR MANUEL RAMOS OCHOA",
+      "id": "RAOH650930HD2"
+    }
+  ],
+  "extractionMethod": "deterministic",
+  "usedPositional": false,
+  "confidence": 0.9,
+  "warnings": [],
+  "subdivision": {
+    "masterGuide": "349-77123456",
+    "ordinal": 2,
+    "isLast": false,
+    "siblings": ["259122446002316", "259122446002318"],
+    "bultos": 27,
+    "pesoBrutoKg": 612
+  },
+  "coveredGuias": ["JMX400112233445", "JMX400118877665"]
+}

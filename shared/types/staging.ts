@@ -28,4 +28,8 @@ export interface IngestResult {
   duplicateHeaders: string[];
   fileRejected: boolean;
   headerRow: string[];
+  // Multi-sheet workbooks: which sheet was ingested and which were skipped. Set only by
+  // ingestWorkbook (validateManifest is sheet-agnostic); undefined for single-sheet inputs.
+  sheetName?: string;
+  skippedSheets?: string[];
 }

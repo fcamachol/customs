@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from 'react';
-import { Upload, ChevronDown, ChevronRight, CheckCircle2, FileText, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Upload, ChevronDown, ChevronRight, CheckCircle2, FileText, Loader2, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api';
 import { Modal, Stepper, Button } from './ui';
 import { CoverageBadge, Pill, SUB_STATUS_BADGE, SCAN_BADGE } from './capture/status';
@@ -268,6 +268,8 @@ function PedimentoCard({ pedimento, done, open, onToggle, onDelete, children }: 
   const scan = pedimento.scanVerdict && Object.prototype.hasOwnProperty.call(SCAN_BADGE, pedimento.scanVerdict)
     ? SCAN_BADGE[pedimento.scanVerdict as ScanVerdict]
     : null;
+  // Fix 4: extraction diagnostics surfaced at upload (empty text layer, stray/missing guías, …).
+  const extractionWarnings = pedimento.extractionWarnings ?? [];
 
   async function handleConfirmDelete(e: MouseEvent) {
     e.stopPropagation();
@@ -334,6 +336,16 @@ function PedimentoCard({ pedimento, done, open, onToggle, onDelete, children }: 
                 <Trash2 className="h-4 w-4" />
               </button>
             )}
+            {extractionWarnings.length > 0 && (
+              <span
+                title={extractionWarnings.join('\n')}
+                aria-label={`${extractionWarnings.length} advertencia(s) de extracción`}
+                className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20"
+              >
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {extractionWarnings.length}
+              </span>
+            )}
             {scan && <Pill label={scan.label} cls={scan.cls} />}
             <Pill label={badge.label} cls={badge.cls} />
           </span>
@@ -342,7 +354,21 @@ function PedimentoCard({ pedimento, done, open, onToggle, onDelete, children }: 
       {error && (
         <p className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">{error}</p>
       )}
-      {open && <div className="border-t border-slate-100 p-4">{children}</div>}
+      {open && (
+        <div className="border-t border-slate-100 p-4">
+          {extractionWarnings.length > 0 && (
+            <ul className="mb-4 space-y-1.5">
+              {extractionWarnings.map((w, i) => (
+                <li key={i} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{w}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {children}
+        </div>
+      )}
     </div>
   );
 }

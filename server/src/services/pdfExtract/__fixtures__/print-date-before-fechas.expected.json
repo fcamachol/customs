@@ -1,0 +1,45 @@
+{
+  "header": {
+    "numeroPedimento": "257733914008212",
+    "clave": "T1",
+    "importerRfc": "COT450811LK5",
+    "importerName": "COTERA TRANSPORTES INTERNACIONALES SA DE CV",
+    "importerAddress": null,
+    "agentRfc": null,
+    "agencyRfc": null,
+    "patente": "3391",
+    "customsEntryCode": "470",
+    "customsClearanceCode": null,
+    "medioTransporteEntrada": null,
+    "medioTransporteArribo": null,
+    "medioTransporteSalida": null,
+    "t1RegistryNumber": null,
+    "agenteAduanal": null,
+    "tasaImportacion": null,
+    "tipoCambio": 19.8723,
+    "entryDate": "2026-02-18",
+    "paymentDate": "2026-02-19",
+    "totalBultos": null
+  },
+  "lines": [
+    {
+      "guia": "JMX500233441122",
+      "valueUsd": 33.4,
+      "consigneeName": "DANIELA PATRICIA MORALES SOTO",
+      "id": "MOSD910304MG7"
+    }
+  ],
+  "extractionMethod": "deterministic",
+  "usedPositional": false,
+  "confidence": 0.9,
+  "warnings": [],
+  "subdivision": {
+    "masterGuide": null,
+    "ordinal": null,
+    "isLast": false,
+    "siblings": [],
+    "bultos": null,
+    "pesoBrutoKg": null
+  },
+  "coveredGuias": ["JMX500233441122"]
+}

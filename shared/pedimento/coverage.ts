@@ -1,4 +1,5 @@
 import { normPedimentoNumero } from './subdivision';
+import { normGuia } from './guia';
 
 export interface PedimentoCoverageInput {
   numeroPedimento: string;
@@ -38,12 +39,20 @@ export function computeCoverage(manifestGuias: string[], pedimentos: PedimentoCo
   const expectedCount = expected.size > 0 ? expected.size : null;
   const missingNumeros = [...expected].filter((n) => !uploadedSet.has(n));
 
-  // Coverage count per manifest guía.
+  // Coverage count per manifest guía. Match manifest guías to pedimento covered guías by their
+  // normalized form (dashes/spaces/case differ across the two sources) while keeping the RAW
+  // manifest guía as the map key, so uncovered/duplicated lists report the value as declared.
   const coverCount = new Map<string, number>();
-  for (const g of manifestGuias) coverCount.set(g, 0);
+  const normToRaw = new Map<string, string>();
+  for (const g of manifestGuias) {
+    coverCount.set(g, 0);
+    const n = normGuia(g);
+    if (n && !normToRaw.has(n)) normToRaw.set(n, g);
+  }
   for (const p of pedimentos) {
     for (const g of p.coveredGuias) {
-      if (coverCount.has(g)) coverCount.set(g, (coverCount.get(g) ?? 0) + 1);
+      const raw = normToRaw.get(normGuia(g));
+      if (raw !== undefined) coverCount.set(raw, (coverCount.get(raw) ?? 0) + 1);
     }
   }
   const uncoveredGuias = [...coverCount].filter(([, c]) => c === 0).map(([g]) => g);

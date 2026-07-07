@@ -202,3 +202,40 @@ describe('manifest duplicate prevention (Poka-Yoke)', () => {
     ).rejects.toMatchObject({ code: '23505' });
   });
 });
+
+describe('per-client header mappings applied at upload', () => {
+  // A client whose description column is named differently than any built-in synonym.
+  const CLIENT_HEADER = ['Número de guía de embarque', 'Detalle Mercancía', 'Código HS', 'Número de productos', 'Valor total declarado', 'Divisa', 'Código de país del remitente', 'ID'];
+  const GOOD_ROW = ['G1', 'Camisa', '6109100022', '1', '6.03', 'Dólar estadounidense', 'CN', 'AERA790828HBSRBR04'];
+
+  it('reports the unmapped header, then ingests it once a client mapping is stored', async () => {
+    const client = await query(`INSERT INTO clients (name) VALUES ('MappingCo') RETURNING id`);
+    const clientId = client.rows[0].id;
+
+    // First upload (no mapping): the client's column is unmapped and the row errors on description.
+    const first = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-map-1').field('clientId', clientId)
+      .attach('file', xlsxBuffer([CLIENT_HEADER, GOOD_ROW]), 'm.xlsx');
+    expect(first.status).toBe(201);
+    expect(first.body.unmappedHeaders).toContain('Detalle Mercancía');
+    expect(first.body.counts.error).toBe(1);
+
+    // Admin stores the mapping for this client.
+    const admin = await query(`INSERT INTO users (username,password_hash,role) VALUES ('adm',$1,'admin') RETURNING id`,
+      [await hashPassword('p')]);
+    const adminToken = signToken({ userId: admin.rows[0].id, role: 'admin', tv: 0 });
+    const save = await request(app).post('/api/header-mappings').set('Authorization', `Bearer ${adminToken}`)
+      .send({ clientId, header: 'Detalle Mercancía', canonicalPath: 'core.description' });
+    expect(save.status).toBe(201);
+
+    // Next upload (distinct MAWB + distinct content) applies the stored mapping: header maps,
+    // description present, no error.
+    const SECOND_ROW = ['G2', 'Pantalón', '6109100022', '1', '7.50', 'Dólar estadounidense', 'CN', 'AERA790828HBSRBR04'];
+    const second = await request(app).post('/api/manifests').set('Authorization', `Bearer ${token}`)
+      .field('mawbReference', '369-map-2').field('clientId', clientId)
+      .attach('file', xlsxBuffer([CLIENT_HEADER, SECOND_ROW]), 'm.xlsx');
+    expect(second.status).toBe(201);
+    expect(second.body.unmappedHeaders).not.toContain('Detalle Mercancía');
+    expect(second.body.counts.error).toBe(0);
+  });
+});

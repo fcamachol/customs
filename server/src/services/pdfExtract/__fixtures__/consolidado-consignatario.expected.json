@@ -1,0 +1,58 @@
+{
+  "header": {
+    "numeroPedimento": "264351086003925",
+    "clave": "T1",
+    "importerRfc": "LFB170822PT6",
+    "importerName": "LOGISTICA FRONTERIZA DEL BAJIO SA DE CV",
+    "importerAddress": "BLVD. LOGISTICO 4501 PARQUE INDUSTRIAL COLOMBIA CP. 66050",
+    "agentRfc": "VACI690503RH8",
+    "agencyRfc": "CEP1006157B3",
+    "patente": "5108",
+    "customsEntryCode": "136",
+    "customsClearanceCode": "136",
+    "medioTransporteEntrada": "6",
+    "medioTransporteArribo": "6",
+    "medioTransporteSalida": null,
+    "t1RegistryNumber": "163",
+    "agenteAduanal": "COMERCIO EXTERIOR DEL PACIFICO Y CIA",
+    "tasaImportacion": "16",
+    "tipoCambio": 19.6315,
+    "entryDate": "2026-02-22",
+    "paymentDate": "2026-02-22",
+    "totalBultos": null
+  },
+  "lines": [
+    {
+      "guia": "JMX700118823410",
+      "valueUsd": 75.39,
+      "consigneeName": "PATRICIA ELENA NAVARRO ZUÑIGA",
+      "id": "NAZP830621MJC",
+      "valueUsdApprox": true
+    },
+    {
+      "guia": "JMX700119904471",
+      "valueUsd": 31.07,
+      "consigneeName": "RODOLFO ALBERTO MEZA TREVIÑO",
+      "id": "METR780914HH3",
+      "valueUsdApprox": true
+    }
+  ],
+  "extractionMethod": "deterministic",
+  "usedPositional": false,
+  "confidence": 0.9,
+  "warnings": [],
+  "subdivision": {
+    "masterGuide": "511-38294017",
+    "ordinal": null,
+    "isLast": false,
+    "siblings": [],
+    "bultos": null,
+    "pesoBrutoKg": null
+  },
+  "coveredGuias": [
+    "JMX700118823410",
+    "JMX700119904471",
+    "JMX700120017764",
+    "JMX700121188236"
+  ]
+}

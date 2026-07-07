@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Upload, Check } from 'lucide-react';
 import { apiGet, apiPost, apiUpload } from '../api';
+import { useAuth } from '../context/AuthContext';
 import { Stepper, Button, Field, Input, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
+import { CANONICAL_PATHS } from '../../shared/parsing/headerSynonyms';
 import { extractMawb } from '../lib/extractMawb';
 import { AddClientModal, type Client, type ClientPlatform } from './AddClientModal';
 import { AddPlatformModal } from './AddPlatformModal';
@@ -16,6 +18,9 @@ interface StagingResponse {
   warnings: { rowIndex: number; field: string; message: string }[];
   unmappedHeaders: string[];
   duplicateHeaders: string[];
+  // Multi-sheet workbooks: the ingested sheet and the ones skipped (present when >1 sheet).
+  sheetName?: string;
+  skippedSheets?: string[];
 }
 
 interface RiskResponse {
@@ -37,6 +42,8 @@ const VALIDATION_LABELS = [
 const STEPS = ['Cargar manifiesto', 'Datos del manifiesto', 'Análisis de riesgo', 'Resultado'];
 
 export default function RegistroView() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const [current, setCurrent] = useState(0);
   const [mawbReference, setMawbReference] = useState('');
   const [mawbAmbiguous, setMawbAmbiguous] = useState(false);
@@ -51,6 +58,12 @@ export default function RegistroView() {
   const [staging, setStaging] = useState<StagingResponse | null>(null);
   const [result, setResult] = useState<RiskResponse | null>(null);
   const [checkedCount, setCheckedCount] = useState(0);
+  // Admin header-mapping panel state: chosen canonical path per unmapped header, whether to save it
+  // for this client or globally, and which headers have already been saved this session.
+  const [mappingChoices, setMappingChoices] = useState<Record<string, string>>({});
+  const [mappingScope, setMappingScope] = useState<'client' | 'global'>('client');
+  const [savedHeaders, setSavedHeaders] = useState<string[]>([]);
+  const [savingHeader, setSavingHeader] = useState<string | null>(null);
 
   useEffect(() => {
     apiGet<Client[]>('/api/catalogs/clients').then(setClients).catch(() => {});
@@ -60,6 +73,30 @@ export default function RegistroView() {
     () => clients.map((c) => ({ value: c.id, label: c.name })),
     [clients],
   );
+
+  // The canonical paths an admin can map an unmapped column onto.
+  const canonicalOptions: SearchSelectOption[] = useMemo(
+    () => CANONICAL_PATHS.map((p) => ({ value: p, label: p })),
+    [],
+  );
+
+  async function saveMapping(header: string) {
+    const canonicalPath = mappingChoices[header];
+    if (!canonicalPath) return;
+    setSavingHeader(header);
+    try {
+      await apiPost('/api/header-mappings', {
+        clientId: mappingScope === 'client' ? clientId : null,
+        header,
+        canonicalPath,
+      });
+      setSavedHeaders((prev) => (prev.includes(header) ? prev : [...prev, header]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar el mapeo de columna.');
+    } finally {
+      setSavingHeader(null);
+    }
+  }
 
   const platformOptions: SearchSelectOption[] = useMemo(() => {
     const c = clients.find((c) => c.id === clientId);
@@ -116,6 +153,9 @@ export default function RegistroView() {
     setResult(null);
     setUnmappedHeaders([]);
     setStaging(null);
+    setMappingChoices({});
+    setSavedHeaders([]);
+    setMappingScope(clientId ? 'client' : 'global');
 
     if (!file) { setError('Selecciona un archivo de manifiesto.'); return; }
     if (!mawbReference.trim()) { setError('El MAWB es requerido.'); return; }
@@ -131,6 +171,8 @@ export default function RegistroView() {
       form.append('file', file);
       form.append('mawbReference', mawbReference.trim());
       form.append('clientName', clientName);
+      // Bind the upload to the client so its saved header mappings apply on this and future uploads.
+      form.append('clientId', clientId);
 
       const stagingResult = await apiUpload<StagingResponse>('/api/manifests', form);
       setUnmappedHeaders(stagingResult.unmappedHeaders ?? []);
@@ -164,9 +206,76 @@ export default function RegistroView() {
         </div>
       )}
 
+      {staging?.skippedSheets && staging.skippedSheets.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600">
+          El archivo tiene varias hojas; se procesó «{staging.sheetName}». Hojas omitidas: {staging.skippedSheets.join(', ')}.
+        </div>
+      )}
+
       {unmappedHeaders.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
           Columnas no mapeadas: {unmappedHeaders.join(', ')}
+        </div>
+      )}
+
+      {isAdmin && unmappedHeaders.length > 0 && (
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">Mapear columnas no reconocidas</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Asocia cada columna a un campo del sistema. Los mapeos guardados se aplicarán en la próxima carga de este manifiesto.
+            </p>
+          </div>
+
+          <div className="inline-flex rounded-lg border border-slate-200 p-0.5 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setMappingScope('client')}
+              disabled={!clientId}
+              className={`rounded-md px-3 py-1.5 transition ${
+                mappingScope === 'client' ? 'bg-navy-800 text-white' : 'text-slate-600 hover:bg-slate-50 disabled:opacity-50'
+              }`}
+            >
+              Solo este cliente
+            </button>
+            <button
+              type="button"
+              onClick={() => setMappingScope('global')}
+              className={`rounded-md px-3 py-1.5 transition ${
+                mappingScope === 'global' ? 'bg-navy-800 text-white' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Global (todos los clientes)
+            </button>
+          </div>
+
+          <ul className="space-y-3">
+            {unmappedHeaders.map((h) => {
+              const saved = savedHeaders.includes(h);
+              return (
+                <li key={h} className="flex flex-wrap items-center gap-3">
+                  <span className="min-w-[9rem] flex-1 truncate text-sm font-medium text-slate-700" title={h}>{h}</span>
+                  <div className="w-60">
+                    <SearchSelect
+                      value={mappingChoices[h] ?? ''}
+                      onChange={(v) => setMappingChoices((prev) => ({ ...prev, [h]: v }))}
+                      options={canonicalOptions}
+                      placeholder="Selecciona un campo…"
+                      disabled={saved}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!mappingChoices[h] || saved || savingHeader === h}
+                    onClick={() => saveMapping(h)}
+                  >
+                    {saved ? 'Guardado' : savingHeader === h ? 'Guardando…' : 'Guardar'}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 

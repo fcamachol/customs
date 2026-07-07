@@ -1,0 +1,45 @@
+{
+  "header": {
+    "numeroPedimento": "258619473006112",
+    "clave": "T1",
+    "importerRfc": "GUZ870115RT8",
+    "importerName": "GUZMAN INTERNACIONAL DE COMERCIO SA DE CV",
+    "importerAddress": null,
+    "agentRfc": null,
+    "agencyRfc": null,
+    "patente": "1947",
+    "customsEntryCode": "490",
+    "customsClearanceCode": null,
+    "medioTransporteEntrada": null,
+    "medioTransporteArribo": null,
+    "medioTransporteSalida": null,
+    "t1RegistryNumber": null,
+    "agenteAduanal": null,
+    "tasaImportacion": null,
+    "tipoCambio": 21.3045,
+    "entryDate": "2026-01-27",
+    "paymentDate": "2026-01-28",
+    "totalBultos": null
+  },
+  "lines": [
+    {
+      "guia": "JMX600277001938",
+      "valueUsd": 18.9,
+      "consigneeName": "FERNANDO JAVIER LUNA CASTELLANOS",
+      "id": "LUCF880622HH1"
+    }
+  ],
+  "extractionMethod": "deterministic",
+  "usedPositional": false,
+  "confidence": 0.9,
+  "warnings": [],
+  "subdivision": {
+    "masterGuide": "214-66837120",
+    "ordinal": null,
+    "isLast": false,
+    "siblings": [],
+    "bultos": null,
+    "pesoBrutoKg": null
+  },
+  "coveredGuias": ["JMX600277001938"]
+}

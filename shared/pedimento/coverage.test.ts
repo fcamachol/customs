@@ -48,4 +48,29 @@ describe('computeCoverage', () => {
     expect(r.status).toBe('parcial');
     expect(r.manifestGuiaCount).toBe(0);
   });
+
+  it('covers a guía even when manifest and pedimento format it differently (dashes/case)', () => {
+    const r = computeCoverage(['G-1', 'G2'], [
+      ped('1', ['g1', 'G-2'], { siblings: [], isLast: true, ordinal: 1 }),
+    ]);
+    expect(r.status).toBe('completo');
+    expect(r.uncoveredGuias).toEqual([]);
+    expect(r.coveredGuiaCount).toBe(2);
+  });
+
+  it('reports the RAW manifest guía (not the normalized form) as uncovered', () => {
+    const r = computeCoverage(['369-94268462', 'ABC-1'], [
+      ped('1', ['36994268462'], { siblings: [], isLast: true, ordinal: 1 }),
+    ]);
+    expect(r.uncoveredGuias).toEqual(['ABC-1']);
+  });
+
+  it('flags a normalized duplicate covered by two pedimentos', () => {
+    const r = computeCoverage(['G-1'], [
+      ped('1', ['g1'], { siblings: ['2'] }),
+      ped('2', ['G1'], { siblings: ['1'] }),
+    ]);
+    expect(r.duplicatedGuias).toEqual(['G-1']);
+    expect(r.status).toBe('parcial');
+  });
 });

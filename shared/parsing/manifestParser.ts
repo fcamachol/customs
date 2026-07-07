@@ -8,6 +8,19 @@ import { resolveCountry } from './catalogs';
 // mapRowToShipment is an internal mapper; the only sanctioned manifest entry point is validateManifest.
 
 function cleanCell(v: unknown): string {
+  // A guía / ID column that Excel typed as a number arrives here as a JS number (xlsx reads raw
+  // cell values). guideId is the join key for the entire pipeline, so a corrupted stringification
+  // silently breaks pedimento↔manifest matching. Stringify whole numbers via BigInt: this keeps
+  // every digit of long identifiers and never falls back to scientific notation the way String()
+  // does for values ≥ 1e21 (String(1e21) === '1e+21'). Non-integer numbers (weights, declared
+  // values) keep full String() precision for the strict numeric parsers downstream.
+  //
+  // Leading zeros are NOT recoverable here: a General-format numeric cell ("0012345") already lost
+  // them when Excel stored it as the number 12345. They survive only when the source column is
+  // text-formatted, in which case the cell reaches us as a string and takes the branch below.
+  if (typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v)) {
+    return BigInt(v).toString();
+  }
   return String(v ?? '').replace(/\s*\n\s*/g, ' ').trim();
 }
 
@@ -20,10 +33,10 @@ function blankShipment(mawb: string): Shipment {
   } as Shipment;
 }
 
-export function mapRowToShipment(row: Record<string, unknown>): Shipment {
+export function mapRowToShipment(row: Record<string, unknown>, extraMappings?: Record<string, string>): Shipment {
   const s: any = blankShipment('');
   for (const [rawHeader, raw] of Object.entries(row)) {
-    const path = resolveHeader(rawHeader);
+    const path = resolveHeader(rawHeader, extraMappings);
     if (!path) continue;
     let value = cleanCell(raw);
     if (path === 'core.originCountry') value = value.toUpperCase();

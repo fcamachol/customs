@@ -66,7 +66,7 @@ const TABLE: Record<string, string> = {
   'url': 'platform.url',
 };
 
-function normalize(h: string): string {
+export function normalize(h: string): string {
   return h
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -76,6 +76,15 @@ function normalize(h: string): string {
     .toLowerCase();
 }
 
-export function resolveHeader(raw: string): string | null {
-  return TABLE[normalize(raw)] ?? null;
+// Distinct canonical paths the static table can produce — the option set for the per-client
+// mapping UI (a spreadsheet header may only be mapped onto one of these known paths).
+export const CANONICAL_PATHS: string[] = [...new Set(Object.values(TABLE))].sort();
+
+// Resolve a raw header to a canonical path. `extra` is an optional per-client override table keyed
+// by the NORMALIZED header (normalize()); it is consulted BEFORE the static table so a client's
+// saved mapping wins over any built-in synonym. Zero-arg behavior is identical to the static table.
+export function resolveHeader(raw: string, extra?: Record<string, string>): string | null {
+  const n = normalize(raw);
+  if (extra && n in extra) return extra[n];
+  return TABLE[n] ?? null;
 }

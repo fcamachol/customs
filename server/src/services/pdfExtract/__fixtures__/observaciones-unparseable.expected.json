@@ -1,0 +1,40 @@
+{
+  "header": {
+    "numeroPedimento": "256822103007745",
+    "clave": "T1",
+    "importerRfc": "MOR760229TX4",
+    "importerName": "MORALES DISTRIBUCIONES DEL SURESTE SA DE CV",
+    "importerAddress": null,
+    "agentRfc": null,
+    "agencyRfc": null,
+    "patente": "2210",
+    "customsEntryCode": "430",
+    "customsClearanceCode": null,
+    "medioTransporteEntrada": null,
+    "medioTransporteArribo": null,
+    "medioTransporteSalida": null,
+    "t1RegistryNumber": null,
+    "agenteAduanal": null,
+    "tasaImportacion": null,
+    "tipoCambio": 18.552,
+    "entryDate": "2026-03-09",
+    "paymentDate": "2026-03-10",
+    "totalBultos": null
+  },
+  "lines": [],
+  "extractionMethod": "deterministic",
+  "usedPositional": false,
+  "confidence": 0.1,
+  "warnings": [
+    "Se encontró la sección OBSERVACIONES pero no se pudo interpretar ninguna guía. Verifique el formato de las observaciones a nivel partida (GUIA/VALOR/NOMBRE/RFC-CURP)."
+  ],
+  "subdivision": {
+    "masterGuide": null,
+    "ordinal": null,
+    "isLast": false,
+    "siblings": [],
+    "bultos": null,
+    "pesoBrutoKg": null
+  },
+  "coveredGuias": []
+}

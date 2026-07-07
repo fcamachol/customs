@@ -7,13 +7,16 @@ import { parseNumberStrict, convertWeight, parseManifestDate } from './normalize
 
 const str = (v: unknown): string => String(v ?? '').trim();
 
-export function validateManifest(headerRow: string[], dataRows: unknown[][], mawb: string): IngestResult {
+// Spanish month abbreviations, indexed 0=enero..11=diciembre, for the date_ambiguous warning message.
+const MESES_ABREV = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+export function validateManifest(headerRow: string[], dataRows: unknown[][], mawb: string, extraMappings?: Record<string, string>): IngestResult {
   // Duplicate mapped headers → ambiguous provenance → whole-file rejection.
   const seen = new Map<string, number>();
   const duplicateHeaders: string[] = [];
   const unmapped = new Set<string>();
   for (const h of headerRow) {
-    const path = resolveHeader(h);
+    const path = resolveHeader(h, extraMappings);
     if (!path) { unmapped.add(h); continue; }
     seen.set(path, (seen.get(path) ?? 0) + 1);
     if (seen.get(path) === 2) duplicateHeaders.push(h);
@@ -26,7 +29,7 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
   const rows: StagingRow[] = dataRows.map((cells, rowIndex) => {
     const record: Record<string, unknown> = {};
     headerRow.forEach((h, i) => { record[h] = cells[i]; });
-    const shipment = mapRowToShipment(record);
+    const shipment = mapRowToShipment(record, extraMappings);
     shipment.mawbReference = mawb;
 
     const errors: RowIssue[] = [];
@@ -35,7 +38,7 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
     const warn = (field: string, code: string, message: string, rawValue?: string) => warnings.push({ rowIndex, field, code, severity: 'warning', message, rawValue });
 
     const get = (path: string): string => {
-      for (const h of headerRow) if (resolveHeader(h) === path) return str(record[h]);
+      for (const h of headerRow) if (resolveHeader(h, extraMappings) === path) return str(record[h]);
       return '';
     };
 
@@ -91,9 +94,18 @@ export function validateManifest(headerRow: string[], dataRows: unknown[][], maw
     // Date (only when present)
     const dateRaw = get('core.arrivalDate');
     if (str(dateRaw)) {
-      const d = parseManifestDate(record[headerRow.find((h) => resolveHeader(h) === 'core.arrivalDate') ?? '']);
+      const d = parseManifestDate(record[headerRow.find((h) => resolveHeader(h, extraMappings) === 'core.arrivalDate') ?? '']);
       if (!d.ok) err('arrivalDate', 'date_invalid', `Fecha inválida: ${dateRaw}`, dateRaw);
-      else shipment.arrivalDate = d.iso;
+      else {
+        shipment.arrivalDate = d.iso;
+        if (d.ambiguous) {
+          const [, mm, dd] = d.iso.split('-').map(Number);
+          const assumed = `${dd}-${MESES_ABREV[mm - 1]}`;
+          const alt = `${mm}-${MESES_ABREV[dd - 1]}`; // the mm/dd reading, swapping day/month
+          warn('arrivalDate', 'date_ambiguous',
+            `Fecha ambigua (se asumió dd/mm/aaaa): "${dateRaw}" — podría ser ${alt} o ${assumed}`, dateRaw);
+        }
+      }
     }
 
     // Consignee identity — presence required, but missing/invalid is a WARNING (generic-RFC path)

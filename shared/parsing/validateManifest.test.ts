@@ -1,6 +1,7 @@
 // shared/parsing/validateManifest.test.ts
 import { describe, expect, it } from 'vitest';
 import { validateManifest } from './validateManifest';
+import { normalize } from './headerSynonyms';
 
 const H = ['Número de guía de embarque', 'Descripción del Producto', 'Código HS', 'Número de productos',
   'Valor total declarado', 'Divisa', 'Código de país del remitente', 'ID', 'Peso', 'Unidad de peso'];
@@ -63,5 +64,34 @@ describe('validateManifest', () => {
     const r = validateManifest(H, [row(), row()], 'M');
     expect(r.rows[0].idempotencyKey).toBe('M|G1|1|6109100022');
     expect(r.rows[1].idempotencyKey).toBe('M|G1|2|6109100022');
+  });
+  it('warns (not errors) on a dd/mm vs mm/dd ambiguous arrival date', () => {
+    const arrivalH = [...H, 'Fecha de arribo a territorio nacional'];
+    const r = validateManifest(arrivalH, [[...row(), '04/07/2026']], 'M');
+    expect(r.rows[0].status).not.toBe('error');
+    const w = r.rows[0].warnings.find((w) => w.code === 'date_ambiguous');
+    expect(w).toBeTruthy();
+    expect(w?.message).toBe('Fecha ambigua (se asumió dd/mm/aaaa): "04/07/2026" — podría ser 7-abr o 4-jul');
+    expect(r.rows[0].shipment.arrivalDate).toBe('2026-07-04');
+  });
+  it('does not warn on an unambiguous arrival date', () => {
+    const arrivalH = [...H, 'Fecha de arribo a territorio nacional'];
+    const r = validateManifest(arrivalH, [[...row(), '25/12/2026']], 'M');
+    expect(r.rows[0].warnings.map((w) => w.code)).not.toContain('date_ambiguous');
+  });
+
+  it('threads extra mappings: an otherwise-unmapped header ingests as its mapped path', () => {
+    // Replace the known "Descripción del Producto" with a client-specific header and supply a mapping.
+    const CH = H.map((h) => (h === 'Descripción del Producto' ? 'Detalle Mercancía' : h));
+    const cells = row();
+    const extra = { [normalize('Detalle Mercancía')]: 'core.description' };
+    const without = validateManifest(CH, [cells], 'M');
+    expect(without.unmappedHeaders).toContain('Detalle Mercancía');
+    expect(without.rows[0].errors.map((e) => e.code)).toContain('description_required');
+
+    const withMap = validateManifest(CH, [cells], 'M', extra);
+    expect(withMap.unmappedHeaders).not.toContain('Detalle Mercancía');
+    expect(withMap.rows[0].shipment.description).toBe('Camisa');
+    expect(withMap.rows[0].errors.map((e) => e.code)).not.toContain('description_required');
   });
 });

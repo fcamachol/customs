@@ -58,7 +58,9 @@ export function convertWeight(value: number, unit: string): { ok: true; kg: numb
 const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
 const iso = (d: Date): string => d.toISOString().slice(0, 10);
 
-export function parseManifestDate(raw: unknown): { ok: true; iso: string } | { ok: false } {
+export type DateResult = { ok: true; iso: string; ambiguous?: true } | { ok: false };
+
+export function parseManifestDate(raw: unknown): DateResult {
   if (raw == null || raw === '') return { ok: false };
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return { ok: true, iso: iso(new Date(EXCEL_EPOCH + raw * 86400000)) };
@@ -66,7 +68,14 @@ export function parseManifestDate(raw: unknown): { ok: true; iso: string } | { o
   const s = String(raw).trim();
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) { const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return Number.isNaN(d.getTime()) ? { ok: false } : { ok: true, iso: iso(d) }; }
-  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/); // dd/mm/yyyy
-  if (m) { const d = new Date(Date.UTC(+m[3], +m[2] - 1, +m[1])); return Number.isNaN(d.getTime()) || +m[2] > 12 ? { ok: false } : { ok: true, iso: iso(d) }; }
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/); // dd/mm/yyyy (assumed reading)
+  if (m) {
+    const day = +m[1], month = +m[2], year = +m[3];
+    const d = new Date(Date.UTC(year, month - 1, day));
+    if (Number.isNaN(d.getTime()) || month > 12) return { ok: false };
+    // Ambiguous with a mm/dd reading only when both numbers could be a month (<=12) and swapping them changes the date.
+    const ambiguous = day <= 12 && day !== month;
+    return ambiguous ? { ok: true, iso: iso(d), ambiguous: true } : { ok: true, iso: iso(d) };
+  }
   return { ok: false };
 }

@@ -34,4 +34,13 @@ describe('parseManifestDate', () => {
   it('parses an ISO string', () => expect(parseManifestDate('2024-01-31')).toEqual({ ok: true, iso: '2024-01-31' }));
   it('parses dd/mm/yyyy', () => expect(parseManifestDate('31/01/2024')).toEqual({ ok: true, iso: '2024-01-31' }));
   it('fails on garbage', () => expect(parseManifestDate('not a date')).toEqual({ ok: false }));
+
+  it('flags a dd/mm vs mm/dd ambiguous date, assuming dd/mm', () =>
+    expect(parseManifestDate('04/07/2026')).toEqual({ ok: true, iso: '2026-07-04', ambiguous: true }));
+  it('does not flag a date where the month component exceeds 12 (unambiguous dd/mm)', () =>
+    expect(parseManifestDate('25/12/2026')).toEqual({ ok: true, iso: '2026-12-25' }));
+  it('does not flag a date where day and month are the same number', () =>
+    expect(parseManifestDate('05/05/2026')).toEqual({ ok: true, iso: '2026-05-05' }));
+  it('never flags an Excel serial number as ambiguous', () =>
+    expect(parseManifestDate(45000)).not.toHaveProperty('ambiguous'));
 });

@@ -7,6 +7,7 @@ import { prevalidatePedimento } from '../../../shared/pedimento/prevalidate';
 import { loadShipments } from '../services/reportData';
 import { upsertAgente, upsertImportador } from '../services/entityMaster';
 import { normPedimentoNumero } from '../../../shared/pedimento/subdivision';
+import { normGuia, normGuiaSet } from '../../../shared/pedimento/guia';
 import { nextSubStatus, type SubStatus } from '../../../shared/pedimento/subStatus';
 
 export const pedimentoRouter = Router();
@@ -51,15 +52,18 @@ pedimentoRouter.post(
         return;
       }
       const { manifest_id, covered_guias, sub_status: current, numero_pedimento, import_data } = rows[0];
-      const coveredSet = new Set(covered_guias ?? []);
+      const rawCovered = covered_guias ?? [];
+      // Match by normalized guía (dashes/spaces/case differ between the PDF's covered_guias and the
+      // manifest's guideId) so formatting alone never empties the subset; keep rawCovered for display.
+      const coveredNorm = normGuiaSet(rawCovered);
 
       // Load all manifest shipments (decrypted), then narrow to this pedimento's guía subset.
       // An empty subset blocks with 400 — but the three ways it can be empty need different fixes
       // (re-upload the manifest, re-upload the pedimento PDF, or reconcile guía formats), so name
       // the one that applies instead of a generic "assign covered_guias".
       const allShipments = await loadShipments(manifest_id);
-      const subset = coveredSet.size > 0
-        ? allShipments.filter((s) => coveredSet.has(s.data.guideId))
+      const subset = coveredNorm.size > 0
+        ? allShipments.filter((s) => coveredNorm.has(normGuia(s.data.guideId)))
         : [];
 
       if (!subset.length) {
@@ -69,16 +73,18 @@ pedimentoRouter.post(
             reason: 'manifiesto_sin_guias',
             error: 'El manifiesto no tiene guías (embarques) cargadas, así que no hay nada que prevalidar. Revisa la carga del manifiesto.',
           });
-        } else if (!coveredSet.size) {
+        } else if (!coveredNorm.size) {
           res.status(400).json({
             reason: 'sin_guias_asignadas',
             error: 'Este pedimento no tiene guías asignadas: la extracción del PDF no encontró guías cubiertas. Elimina el pedimento y vuelve a subir un PDF legible (no escaneado).',
           });
         } else {
+          // Only reached when the guías genuinely differ after normalization — a real mismatch, not
+          // a formatting one. The message lists the raw values so a human can reconcile them.
           const manifestGuias = allShipments.map((s) => s.data.guideId);
           res.status(400).json({
             reason: 'guias_no_coinciden',
-            error: `Las guías del pedimento no coinciden con ninguna guía del manifiesto. Pedimento: ${preview([...coveredSet])} · Manifiesto: ${preview(manifestGuias)}.`,
+            error: `Las guías del pedimento no coinciden con ninguna guía del manifiesto. Pedimento: ${preview(rawCovered)} · Manifiesto: ${preview(manifestGuias)}.`,
           });
         }
         return;

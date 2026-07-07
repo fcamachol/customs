@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveHeader } from './headerSynonyms';
+import { resolveHeader, normalize, CANONICAL_PATHS } from './headerSynonyms';
 
 describe('resolveHeader', () => {
   it('maps Spanish consignee headers', () => {
@@ -20,6 +20,40 @@ describe('resolveHeader', () => {
   });
   it('returns null for unknown headers', () => {
     expect(resolveHeader('Columna Rara')).toBeNull();
+  });
+});
+
+describe('resolveHeader with a per-client override mapping', () => {
+  it('maps a header the static table does not know', () => {
+    const extra = { [normalize('Clave del Producto')]: 'core.hsCode' };
+    expect(resolveHeader('Clave del Producto')).toBeNull();
+    expect(resolveHeader('Clave del Producto', extra)).toBe('core.hsCode');
+  });
+
+  it('lets a client override win over the static synonym', () => {
+    // "RFC" resolves to consignee.rfc by default; a client remaps it.
+    expect(resolveHeader('RFC')).toBe('consignee.rfc');
+    const extra = { [normalize('RFC')]: 'sender.taxId' };
+    expect(resolveHeader('RFC', extra)).toBe('sender.taxId');
+  });
+
+  it('is accent/case-insensitive on the override key', () => {
+    const extra = { [normalize('Código Interno')]: 'core.description' };
+    expect(resolveHeader('  CÓDIGO   interno ', extra)).toBe('core.description');
+  });
+
+  it('falls through to the static table for headers not in the override', () => {
+    const extra = { [normalize('Algo Raro')]: 'core.hsCode' };
+    expect(resolveHeader('Fracción arancelaria', extra)).toBe('core.hsCode');
+    expect(resolveHeader('Otra Cosa', extra)).toBeNull();
+  });
+});
+
+describe('CANONICAL_PATHS', () => {
+  it('exposes the distinct canonical paths as a de-duplicated list', () => {
+    expect(CANONICAL_PATHS).toContain('core.hsCode');
+    expect(CANONICAL_PATHS).toContain('consignee.rfc');
+    expect(new Set(CANONICAL_PATHS).size).toBe(CANONICAL_PATHS.length);
   });
 });
 

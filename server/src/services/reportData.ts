@@ -8,6 +8,7 @@ import { countryDisplayName } from '../../../shared/parsing/catalogs';
 import { traducirDescripcion } from '../../../shared/i18n/descripcionEs';
 import type { Shipment } from '../../../shared/types/shipment';
 import type { RiskScreenRow, RiskResultado } from '../../../shared/types/reports';
+import { normGuia, normGuiaSet } from '../../../shared/pedimento/guia';
 
 export interface LoadedShipment {
   data: Shipment;
@@ -161,8 +162,10 @@ export async function loadPedimentoScope(pedimentoId: string): Promise<Pedimento
 /** Narrow a manifest's shipments to a pedimento's covered-guía subset (empty subset → no rows). */
 export function subsetForCoverage(loaded: LoadedShipment[], coveredGuias: string[]): LoadedShipment[] {
   if (!coveredGuias.length) return [];
-  const set = new Set(coveredGuias);
-  return loaded.filter((s) => set.has(s.data.guideId));
+  // Normalized match: covered_guias (from the PDF) and guideId (from the manifest) may differ only
+  // in punctuation/case; compare canonical forms so a subdivisión's report keeps its real subset.
+  const set = normGuiaSet(coveredGuias);
+  return loaded.filter((s) => set.has(normGuia(s.data.guideId)));
 }
 
 /**

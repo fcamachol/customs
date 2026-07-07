@@ -28,11 +28,13 @@ interface PedimentoRow {
   import_data_version: number;
   sub_status: SubStatus;
   pedimento_reconciliation: Record<string, unknown> | null;
+  extraction_confidence: number | null;
+  extraction_warnings: string[] | null;
 }
 
 const PEDIMENTO_COLS = `id, manifest_id, numero_pedimento, subdivision_ordinal, is_last_subdivision,
   sibling_numeros, covered_guias, file_id, pedimento_scan, prevalidation, import_data, import_data_version, sub_status,
-  pedimento_reconciliation`;
+  pedimento_reconciliation, extraction_confidence, extraction_warnings`;
 
 /** Coverage input for a pedimentos row (numero + declared siblings + covered guías). */
 function coverageInput(p: PedimentoRow) {
@@ -176,6 +178,10 @@ recordsRouter.get('/:id', requireAuth, async (req, res) => {
     coveredGuias: p.covered_guias ?? [],
     pedimentoPdf: p.file_id ? `/api/files/${p.file_id}` : null,
     reconciliation: p.pedimento_reconciliation ?? null,
+    // Extraction diagnostics captured at upload (Fix 4): confidence 0..1 and the warnings array
+    // (pdf_unparseable / pdf_sin_texto / stray-guía / no-guías). Drive the amber row indicator.
+    extractionConfidence: p.extraction_confidence ?? null,
+    extractionWarnings: p.extraction_warnings ?? [],
     // Per-pedimento report artifacts (Task 10): Reporte General + Layout built over this
     // subdivisión's covered-guía subset + its own import_data.
     artifacts: {

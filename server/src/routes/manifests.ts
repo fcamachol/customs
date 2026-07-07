@@ -8,6 +8,7 @@ import { recordAudit } from '../services/audit';
 import { encryptShipmentPii } from '../crypto/fieldCrypto';
 import { saveFile } from '../storage/files';
 import { ingestWorkbook } from '../services/manifestIngest';
+import { loadHeaderMappings } from '../services/headerMappings';
 import { computeLock } from '../services/manifestLock';
 import type { SubStatus } from '../../../shared/pedimento/subStatus';
 import { withTransaction } from '../db/tx';
@@ -20,10 +21,13 @@ const MAX_ROWS = 5000; // synchronous ceiling (async deferred to Increment 2)
 export const manifestsRouter = Router();
 
 manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), validate({ body: manifestCreateBody }), async (req, res) => {
-  const { mawbReference, clientName } = req.body;
+  const { mawbReference, clientName, clientId } = req.body;
   if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
 
-  const result = ingestWorkbook(req.file.buffer, mawbReference);
+  // Apply the client's saved header mappings (client-specific + global) so its column naming ingests
+  // without a code change. With no clientId only the global mappings apply.
+  const extraMappings = await loadHeaderMappings(clientId ?? null);
+  const result = ingestWorkbook(req.file.buffer, mawbReference, extraMappings);
   if (result.fileRejected) {
     res.status(422).json({ error: 'Encabezados duplicados', duplicateHeaders: result.duplicateHeaders });
     return;
@@ -58,9 +62,9 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
 
     manifestId = await withTransaction(async (q) => {
       const m = await q(
-        `INSERT INTO manifests (mawb_reference, client_name, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
-         VALUES ($1,$2,$3,'staged',$4,$5,$6) RETURNING id`,
-        [mawbReference, clientName ?? null, req.user!.userId, file.id, JSON.stringify(result.headerRow), file.contentHash],
+        `INSERT INTO manifests (mawb_reference, client_name, client_id, created_by, ingestion_status, source_file_id, source_header, file_content_hash)
+         VALUES ($1,$2,$3,$4,'staged',$5,$6,$7) RETURNING id`,
+        [mawbReference, clientName ?? null, clientId ?? null, req.user!.userId, file.id, JSON.stringify(result.headerRow), file.contentHash],
       );
       const id = m.rows[0].id;
       for (const row of result.rows) {
@@ -89,6 +93,7 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
     manifestId, ingestionStatus: 'staged', counts: result.counts,
     rejected: result.rows.flatMap((r) => r.errors), warnings: result.rows.flatMap((r) => r.warnings),
     unmappedHeaders: result.unmappedHeaders, duplicateHeaders: result.duplicateHeaders,
+    sheetName: result.sheetName, skippedSheets: result.skippedSheets,
   });
 });
 

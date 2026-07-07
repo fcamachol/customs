@@ -307,6 +307,44 @@ describe('records — detail pedimentos[]', () => {
     expect(p.id).toBe(ped.rows[0].id);
     expect(p.reconciliation).toMatchObject({ summary: { color: 'verde' } });
   });
+
+  it('surfaces extractionConfidence and extractionWarnings on the detail row (Fix 4)', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('951-1','Cliente P',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    const warnings = ['pdf_unparseable', 'El manifiesto no tiene guías (embarques) cargadas; la prevalidación quedará bloqueada.'];
+    await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, extraction_confidence, extraction_warnings, created_by)
+       VALUES ($1,'667',$2,$3::jsonb,$4)`,
+      [id, 0.1, JSON.stringify(warnings), userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.extractionConfidence).toBeCloseTo(0.1);
+    expect(p.extractionWarnings).toEqual(warnings);
+  });
+
+  it('defaults extractionWarnings to [] and extractionConfidence to null when unset', async () => {
+    const m = await query(
+      `INSERT INTO manifests (mawb_reference, client_name, created_by) VALUES ('952-1','Cliente Q',$1) RETURNING id`,
+      [userId],
+    );
+    const id = m.rows[0].id;
+    await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, created_by) VALUES ($1,'668',$2)`,
+      [id, userId],
+    );
+
+    const res = await request(app).get(`/api/records/${id}`).set(auth());
+    expect(res.status).toBe(200);
+    const p = res.body.pedimentos[0];
+    expect(p.extractionConfidence).toBeNull();
+    expect(p.extractionWarnings).toEqual([]);
+  });
 });
 
 describe('records — Consulta filters (cont.)', () => {

@@ -164,15 +164,34 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     expect(ped.rows[0].numero_pedimento).toBeNull();
   });
 
-  it('warns sin_guias_cubiertas when extraction parses the PDF but finds no covered guías', async () => {
-    // MINIMAL_PDF parses cleanly but carries no text → coveredGuias = []. The attach must proceed
-    // (201) while warning that prevalidation will be blocked until a readable PDF is re-uploaded.
+  it('warns pdf_sin_texto for a text-layerless (scanned) PDF and does not stack the generic no-guías message', async () => {
+    // MINIMAL_PDF parses cleanly but carries no text layer → the scan detection fires (Fix 3). The
+    // attach proceeds (201) with the specific "escaneado sin capa de texto" warning, and the generic
+    // no-guías message is suppressed in its favor (mirroring pdf_unparseable).
     const res = await request(app)
       .post(`/api/manifests/${manifestId}/pedimento-pdf`)
       .set('Authorization', `Bearer ${token}`)
       .attach('file', MINIMAL_PDF, { filename: 'pedimento.pdf', contentType: 'application/pdf' });
     expect(res.status).toBe(201);
-    expect(res.body.warnings.some((w: string) => /guías cubiertas/.test(w))).toBe(true);
+    expect(res.body.warnings.some((w: string) => /escaneado sin capa de texto/i.test(w))).toBe(true);
+    expect(res.body.warnings.some((w: string) => /No se encontraron guías cubiertas/i.test(w))).toBe(false);
+  });
+
+  it('persists extraction_confidence and the full warnings array on the pedimentos row (Fix 4)', async () => {
+    const res = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', MINIMAL_PDF, { filename: 'pedimento.pdf', contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const row = await query<{ extraction_confidence: number | null; extraction_warnings: string[] | null }>(
+      'SELECT extraction_confidence, extraction_warnings FROM pedimentos WHERE id=$1', [res.body.pedimentoId]);
+    // A textless PDF yields the parser's low-confidence score (never null) …
+    expect(row.rows[0].extraction_confidence).not.toBeNull();
+    expect(row.rows[0].extraction_confidence).toBeLessThan(0.5);
+    // … and the persisted warnings mirror the response body (the scanned-PDF message included).
+    expect(row.rows[0].extraction_warnings).toEqual(res.body.warnings);
+    expect(row.rows[0].extraction_warnings?.some((w) => /escaneado sin capa de texto/i.test(w))).toBe(true);
   });
 
   it('warns when the manifest itself has no shipments to cover', async () => {
@@ -330,6 +349,28 @@ describe('POST /api/manifests/:id/pedimento-pdf', () => {
     expect(overlap.status).toBe(409);
     expect(overlap.body.error).toMatch(/ya cubiertas por otro pedimento/i);
     expect(overlap.body.overlap).toContain('JMX999000111');
+    const peds = await query('SELECT id FROM pedimentos WHERE manifest_id=$1', [manifestId]);
+    expect(peds.rows).toHaveLength(1);
+  });
+
+  it('overlap gate catches the same guía written with different formatting (normalized)', async () => {
+    const first = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001001', ['GUIA JMX999000111 VALOR 120.00 USD NOMBRE JUAN RFC-CURP TOMM020922D40']),
+        { filename: 'a.pdf', contentType: 'application/pdf' });
+    expect(first.status).toBe(201);
+
+    // Second pedimento covers the SAME guía but dash-formatted ('JMX-999-000-111'). It parses as a
+    // single \S+ token and normalizes to 'JMX999000111', so the overlap gate must still fire (409).
+    const overlap = await request(app)
+      .post(`/api/manifests/${manifestId}/pedimento-pdf`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', pedimentoPdf('25 85 1653 5001002', ['GUIA JMX-999-000-111 VALOR 120.00 USD NOMBRE JUAN RFC-CURP TOMM020922D40']),
+        { filename: 'b.pdf', contentType: 'application/pdf' });
+    expect(overlap.status).toBe(409);
+    expect(overlap.body.error).toMatch(/ya cubiertas por otro pedimento/i);
+    expect(overlap.body.overlap).toContain('JMX-999-000-111'); // raw extracted value surfaced
     const peds = await query('SELECT id FROM pedimentos WHERE manifest_id=$1', [manifestId]);
     expect(peds.rows).toHaveLength(1);
   });

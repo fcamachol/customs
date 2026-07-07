@@ -67,6 +67,9 @@ export interface PedimentoItem {
   prevalidation: Prevalidation | null;
   reconciliation: ReconciliationReport | null;
   lock: LockState;
+  // Extraction diagnostics captured when the PDF was attached (optional: absent on older rows).
+  extractionConfidence?: number | null;
+  extractionWarnings?: string[];
 }
 
 interface PedimentoForm {

@@ -103,6 +103,10 @@ export interface ExtractedPedimento {
   warnings: string[];
   subdivision: SubdivisionInfo;
   coveredGuias: string[];
+  // Set by extractPedimento (not extractFromText) when the PDF's text layer is empty or trivially
+  // short — the signature of an image-only scan that pdf-parse reads without throwing. Detection
+  // only; there is no OCR fallback in this pass.
+  scannedNoTextLayer?: boolean;
 }
 
 /** Built from the manifest's shipments (+ optional import data) — the "should be" side. */

@@ -175,6 +175,28 @@ describe('CaptureWorkspace', () => {
     expect(screen.queryByText('¿Eliminar pedimento?')).toBeNull();
   });
 
+  it('shows an amber extraction-warning indicator and the warning text when extractionWarnings is non-empty', async () => {
+    const warn = 'El PDF parece ser un documento escaneado sin capa de texto.';
+    vi.mocked(apiGet).mockResolvedValue(detail({
+      pedimentos: [ped({ id: 'p1', subStatus: 'pendiente', extractionWarnings: [warn] })],
+    }));
+    render(<CaptureWorkspace manifestId="m-1" onClose={() => {}} onChanged={() => {}} />);
+
+    await screen.findByText('MAWB-1 — ACME');
+    // Compact header indicator (count) is labelled for screen readers …
+    expect(screen.getByLabelText('1 advertencia(s) de extracción')).toBeTruthy();
+    // … and the card auto-expands (first not-done in Capturar), showing the readable warning line.
+    expect(await screen.findByText(warn)).toBeTruthy();
+  });
+
+  it('renders no extraction-warning indicator when extractionWarnings is empty/absent', async () => {
+    vi.mocked(apiGet).mockResolvedValue(detail({ pedimentos: [ped({ id: 'p1', subStatus: 'pendiente' })] }));
+    render(<CaptureWorkspace manifestId="m-1" onClose={() => {}} onChanged={() => {}} />);
+
+    await screen.findByText('MAWB-1 — ACME');
+    expect(screen.queryByLabelText(/advertencia\(s\) de extracción/)).toBeNull();
+  });
+
   it('clicking the trash icon does not toggle the accordion', async () => {
     vi.mocked(apiGet).mockResolvedValue(detail({ pedimentos: [ped({ id: 'p1', subStatus: 'pendiente' })] }));
     render(<CaptureWorkspace manifestId="m-1" onClose={() => {}} onChanged={() => {}} />);

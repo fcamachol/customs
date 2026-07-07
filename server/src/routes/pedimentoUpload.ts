@@ -14,6 +14,7 @@ import type { ExtractedPedimento, ReconciliationReport } from '../../../shared/t
 import { buildExpectedFromManifest, reconcile } from '../../../shared/pedimento/reconcile';
 import { crossCheckEntities } from '../../../shared/pedimento/entityCrossCheck';
 import { loadImporterOfRecord, loadCustomsAgent, upsertAgente, upsertImportador } from '../services/entityMaster';
+import { normGuia, normGuiaSet } from '../../../shared/pedimento/guia';
 
 const EMPTY_SUBDIVISION: SubdivisionInfo = { masterGuide: null, ordinal: null, isLast: false, siblings: [], bultos: null, pesoBrutoKg: null };
 
@@ -41,10 +42,8 @@ export const pedimentoUploadRouter = Router();
 // punctuation / prefixes ("GUIA MASTER NO. 369-94268462" → parsed "369-94268462"; manifest
 // mawb_reference may be "369-1"). Strip everything that is not a letter or digit and compare
 // case-insensitively so formatting differences (dashes, spaces, casing) never trigger a false
-// mismatch — only a genuinely different guide does.
-function normMasterGuide(s: string): string {
-  return (s ?? '').replace(/[^a-z0-9]/gi, '').toUpperCase();
-}
+// mismatch — only a genuinely different guide does. Shares the canonical form with normGuia.
+const normMasterGuide = normGuia;
 
 pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
@@ -99,6 +98,16 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
     // no numero/subdivisión metadata could be auto-populated — the row is attached unverified.
     warnings.push('pdf_unparseable');
   }
+
+  // Fix 3: an image-only PDF does not throw in pdf-parse — it returns an empty text layer, so
+  // extraction silently yields all-nulls without tripping pdf_unparseable above. Warn distinctly so
+  // the user re-uploads a text-based PDF (detection only; no OCR in this pass). This warning stands
+  // in for the generic no-guías message below, mirroring how pdf_unparseable already does.
+  const scannedNoText = extracted.scannedNoTextLayer === true;
+  if (scannedNoText) {
+    warnings.push('El PDF parece ser un documento escaneado sin capa de texto. Vuelve a subir un pedimento en PDF con texto seleccionable para poder leer sus datos.');
+  }
+
   const numeroPedimento = extracted.header.numeroPedimento;
   const { subdivision } = extracted;
 
@@ -135,8 +144,10 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   if (extracted.coveredGuias.length > 0) {
     const others = await query<{ covered_guias: string[] | null }>(
       'SELECT covered_guias FROM pedimentos WHERE manifest_id=$1', [req.params.id]);
-    const alreadyCovered = new Set(others.rows.flatMap((r) => r.covered_guias ?? []));
-    const overlap = extracted.coveredGuias.filter((g) => alreadyCovered.has(g));
+    // Compare by normalized guía so "G-1" and "g1" are recognized as the same shipment; keep the
+    // raw extracted values in `overlap` for the Spanish error message.
+    const alreadyCovered = normGuiaSet(others.rows.flatMap((r) => r.covered_guias ?? []));
+    const overlap = extracted.coveredGuias.filter((g) => alreadyCovered.has(normGuia(g)));
     if (overlap.length > 0) {
       res.status(409).json({ error: `El pedimento cubre guías ya cubiertas por otro pedimento: ${overlap.join(', ')}`, overlap });
       return;
@@ -190,10 +201,10 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   let reconciliation: ReconciliationReport | null = null;
   try {
     if (extracted.lines.length > 0 || extracted.coveredGuias.length > 0) {
-      const covered = new Set(extracted.coveredGuias);
+      const covered = normGuiaSet(extracted.coveredGuias);
       const subset = allShipments
         .map((s) => s.data)
-        .filter((d) => covered.size === 0 || covered.has(d.guideId));
+        .filter((d) => covered.size === 0 || covered.has(normGuia(d.guideId)));
       const { expected, warnings: bwWarnings } = buildExpectedFromManifest(
         subset.map((d) => ({
           guideId: d.guideId,
@@ -223,6 +234,28 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
     reconciliation = null; // advisory — never block the upload
   }
 
+  // Compute the remaining attach-time warnings BEFORE the INSERT so the full array is persisted on
+  // the row (Fix 4), not just the pre-gate codes. These are non-blocking — the row still attaches.
+  //
+  // coveredGuias must be a subset of the manifest's shipment guías; a guía not declared on the
+  // manifest is surfaced but not rejected (decision #4).
+  const manifestGuias = normGuiaSet(allShipments.map((s) => s.data.guideId));
+  const strayGuias = extracted.coveredGuias.filter((g) => !manifestGuias.has(normGuia(g)));
+  if (strayGuias.length > 0) {
+    warnings.push(`El pedimento cubre guías que no están declaradas en el manifiesto: ${strayGuias.join(', ')}`);
+  }
+
+  // Prevalidation intersects covered_guias with the manifest's shipments, so either side being
+  // empty guarantees a block at step 3. Say so now, at attach time, instead of letting the user
+  // capture a pedimento that cannot prevalidate. (pdf_unparseable / pdf_sin_texto already explain
+  // the empty extraction — don't stack the generic no-guías message on top of either.)
+  if (allShipments.length === 0) {
+    warnings.push('El manifiesto no tiene guías (embarques) cargadas; la prevalidación quedará bloqueada.');
+  }
+  if (extracted.coveredGuias.length === 0 && !warnings.includes('pdf_unparseable') && !scannedNoText) {
+    warnings.push('No se encontraron guías cubiertas en el PDF del pedimento; la prevalidación quedará bloqueada hasta subir un PDF legible.');
+  }
+
   // INSERT the pedimentos row (decision #1). file_id/pedimento_scan now live here, not on manifests.
   // try/catch backstops the app-level dup check against a concurrent insert hitting
   // pedimentos_numero_global_uq.
@@ -232,8 +265,8 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
       `INSERT INTO pedimentos
          (manifest_id, numero_pedimento, master_guide, subdivision_ordinal, is_last_subdivision,
           sibling_numeros, bultos, peso_bruto_kg, covered_guias, file_id, pedimento_scan, created_by,
-          import_data, pedimento_reconciliation)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+          import_data, pedimento_reconciliation, extraction_confidence, extraction_warnings)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
       [
         req.params.id,
         numeroPedimento,
@@ -249,6 +282,8 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
         req.user!.userId,
         importPrefill ? JSON.stringify(importPrefill) : null,
         reconciliation ? JSON.stringify(reconciliation) : null,
+        extracted.confidence,
+        JSON.stringify(warnings),
       ],
     );
   } catch (err) {
@@ -266,25 +301,6 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   await recordAudit({ userId: req.user!.userId, action: 'ATTACH_PEDIMENTO_PDF', entity: 'manifest', entityId: req.params.id, after: { fileId: meta.id, pedimentoId: ins.rows[0].id }, ip: req.ip });
   const scanAction = scan.verdict === 'clean' ? 'PEDIMENTO_SCAN_CLEAN' : 'PEDIMENTO_SCAN_FLAGGED';
   await recordAudit({ userId: req.user!.userId, action: scanAction, entity: 'manifest', entityId: req.params.id, after: scanSummary, ip: req.ip });
-
-  // Non-blocking warning (decision #4): coveredGuias must be a subset of the manifest's shipment
-  // guías. If a pedimento covers a guía not declared on the manifest, surface it but do not reject.
-  const manifestGuias = new Set(allShipments.map((s) => s.data.guideId));
-  const strayGuias = extracted.coveredGuias.filter((g) => !manifestGuias.has(g));
-  if (strayGuias.length > 0) {
-    warnings.push(`El pedimento cubre guías que no están declaradas en el manifiesto: ${strayGuias.join(', ')}`);
-  }
-
-  // Prevalidation intersects covered_guias with the manifest's shipments, so either side being
-  // empty guarantees a block at step 3. Say so now, at attach time, instead of letting the user
-  // capture a pedimento that cannot prevalidate. (pdf_unparseable already covers the parse-throw
-  // case — don't stack a second warning on it.)
-  if (allShipments.length === 0) {
-    warnings.push('El manifiesto no tiene guías (embarques) cargadas; la prevalidación quedará bloqueada.');
-  }
-  if (extracted.coveredGuias.length === 0 && !warnings.includes('pdf_unparseable')) {
-    warnings.push('No se encontraron guías cubiertas en el PDF del pedimento; la prevalidación quedará bloqueada hasta subir un PDF legible.');
-  }
 
   // `warnings` carries every code/message; `warning` keeps the single-string field the UI displays.
   const warning = warnings.length > 0 ? warnings.join(' · ') : undefined;

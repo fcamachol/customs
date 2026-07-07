@@ -83,6 +83,16 @@ export const validatedRfcBody = z.object({
 export const manifestCreateBody = z.object({
   mawbReference: z.string().min(1),
   clientName: z.string().optional(),
+  // Optional: bind the upload to a known client so its saved header mappings apply and the
+  // association is recorded up front (the /:id/client route can still set it later).
+  clientId: z.string().min(1).optional(),
+});
+
+// catalogs — per-client header mappings
+export const headerMappingCreateBody = z.object({
+  clientId: z.string().min(1).nullable().optional(), // null/absent = global mapping
+  header: z.string().min(1),
+  canonicalPath: z.string().min(1),
 });
 
 export const manifestClientBody = z.object({

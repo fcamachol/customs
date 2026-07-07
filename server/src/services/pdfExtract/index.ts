@@ -23,6 +23,17 @@ export async function getPdfText(buffer: Buffer): Promise<string> {
   return r.text;
 }
 
+// Below this many non-whitespace characters the text layer is treated as absent (image-only scan).
+// A real pedimento carries thousands of characters, so the threshold only trips on genuinely empty
+// or near-empty extractions — never on a legitimately parsed document.
+const TEXT_LAYER_MIN_CHARS = 50;
+
 export async function extractPedimento(buffer: Buffer): Promise<ExtractedPedimento> {
-  return extractFromText(await getPdfText(buffer));
+  const text = await getPdfText(buffer);
+  const extracted = extractFromText(text);
+  // An image-only PDF does not throw in pdf-parse — getPdfText returns an empty/near-empty string,
+  // so extraction quietly yields all-nulls and the pdf_unparseable path (which needs a thrown error)
+  // never fires. Flag the missing text layer here so the upload route can warn distinctly.
+  if (text.replace(/\s/g, '').length < TEXT_LAYER_MIN_CHARS) extracted.scannedNoTextLayer = true;
+  return extracted;
 }

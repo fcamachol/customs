@@ -209,15 +209,16 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
     expect(res.body.reason).toBe('manifiesto_sin_guias');
   });
 
-  it('returns 400 listing the unmatched guías when covered_guias match no manifest shipment', async () => {
+  it('returns 400 listing the unmatched guías when covered_guias genuinely differ from the manifest', async () => {
     await setEntities();
     const s = makeShipment('g1');
     await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
 
-    // covered_guias formatted differently from the shipment guideId → exact-match intersection empty.
+    // covered_guias are DIFFERENT guías (not merely differently formatted) → still no match after
+    // normalization, so the mismatch is real and the raw values are surfaced for reconciliation.
     const ped = await query(
       `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
-      [manifestId, ['G-1', 'G-2'], userId, JSON.stringify(IMPORT_DATA)],
+      [manifestId, ['ZZZ-1', 'ZZZ-2'], userId, JSON.stringify(IMPORT_DATA)],
     );
 
     const res = await request(app)
@@ -226,9 +227,29 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/no coinciden/);
-    expect(res.body.error).toContain('G-1');
-    expect(res.body.error).toContain('g1'); // shows manifest guías so the mismatch is visible
+    expect(res.body.error).toContain('ZZZ-1'); // raw covered guía shown
+    expect(res.body.error).toContain('g1');     // shows manifest guías so the mismatch is visible
     expect(res.body.reason).toBe('guias_no_coinciden');
+  });
+
+  it('matches covered_guias to shipments by normalized guía (dashes/case ignored) end-to-end', async () => {
+    await setEntities();
+    // Manifest guía is 'g1'; the pedimento declares 'G-1'. These differ only in formatting, so the
+    // subset must NOT be empty and prevalidation must proceed to APPROVED over the single shipment.
+    const s = makeShipment('g1');
+    await query('INSERT INTO shipments (id,manifest_id,data) VALUES ($1,$2,$3)', [s.id, manifestId, JSON.stringify(s)]);
+    const ped = await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, covered_guias, created_by, sub_status, import_data) VALUES ($1,'258516535001684',$2,$3,'capturado',$4) RETURNING id`,
+      [manifestId, ['G-1'], userId, JSON.stringify(IMPORT_DATA)],
+    );
+
+    const res = await request(app)
+      .post(`/api/pedimentos/${ped.rows[0].id}/pedimento`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(201);
+    expect(res.body.prevalidation.status).toBe('APPROVED');
+    expect(res.body.pedimento.partidas).toHaveLength(1);
   });
 
   it('returns 404 when pedimento row does not exist', async () => {

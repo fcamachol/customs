@@ -217,6 +217,64 @@ FECHAS
 13/01/2026
 `;
 
+describe('parsePedimentoText — anchored dates and numero (Fix 7)', () => {
+  it('prefers dd/mm/yyyy dates after the FECHAS anchor over an earlier print date', () => {
+    // A layout printing an emission/print date before the FECHAS block must not shift entrada/pago.
+    const withPrintDate = `
+FECHA DE IMPRESION: 01/01/2025
+NUM. PEDIMENTO: 25 85 1653 5001684
+DESTINO/ORIGEN: TIPO CAMBIO: PESO BRUTO: ADUANA E/S:
+9 20.45680 808.000 850
+FECHAS
+04/04/2025
+05/04/2025
+`;
+    const out = parsePedimentoText(withPrintDate);
+    expect(out.header.entryDate).toBe('2025-04-04'); // from the FECHAS block, not 01/01/2025
+    expect(out.header.paymentDate).toBe('2025-04-05');
+  });
+  it('falls back to the whole-text scan when no FECHAS anchor is present', () => {
+    const noFechas = `
+ALGUN ENCABEZADO 04/04/2025
+05/04/2025
+`;
+    const out = parsePedimentoText(noFechas);
+    expect(out.header.entryDate).toBe('2025-04-04');
+    expect(out.header.paymentDate).toBe('2025-04-05');
+  });
+  it('parses a contiguous 15-digit numero anchored on NUM. PEDIMENTO (patente = digits 5-8)', () => {
+    const contiguous = `
+NUM. PEDIMENTO: 258516535001684
+T1
+`;
+    const out = parsePedimentoText(contiguous);
+    expect(out.header.numeroPedimento).toBe('258516535001684');
+    expect(out.header.patente).toBe('1653'); // digits 5-8 of the normalized 15-digit numero
+  });
+  it('still parses the canonical dd dd dddd ddddddd spaced numero (fallback)', () => {
+    const out = parsePedimentoText(SAMPLE);
+    expect(out.header.numeroPedimento).toBe('258516535001684');
+    expect(out.header.patente).toBe('1653');
+  });
+});
+
+describe('parsePedimentoText — OBSERVACIONES section present but unparsable', () => {
+  it('warns specifically when a partida OBSERVACIONES section yields zero guías', () => {
+    const unparsable = `
+OBSERVACIONES A NIVEL PARTIDA
+GUIA-NUM 12345 IMPORTE 60 USD DESTINATARIO JUAN PEREZ RFC XXXX000000XXX
+`;
+    const out = parsePedimentoText(unparsable);
+    expect(out.lines).toHaveLength(0);
+    expect(out.warnings.some((w) => w.includes('no se pudo interpretar ninguna guía'))).toBe(true);
+  });
+  it('keeps the generic warning when there is no partida OBSERVACIONES section at all', () => {
+    const out = parsePedimentoText('PEDIMENTO SIN SECCION DE OBSERVACIONES');
+    expect(out.warnings.some((w) => w.includes('No se encontraron observaciones'))).toBe(true);
+    expect(out.warnings.some((w) => w.includes('no se pudo interpretar ninguna guía'))).toBe(false);
+  });
+});
+
 describe('parsePedimentoText — observation wrapped across lines by pdf-parse', () => {
   it('parses a partida observation whose RFC-CURP tail lands on the next line', () => {
     // Verbatim from a real subdivision pedimento (157-09213912): pdf-parse wraps the observation,
@@ -232,6 +290,47 @@ RFC-CURP MEEA751207KC4
     expect(out.lines[0]).toMatchObject({
       guia: '6051325623510', valueUsd: 182.2, consigneeName: 'ARTURO MENDOZA ESPINOSA', id: 'MEEA751207KC4',
     });
+  });
+});
+
+// Verbatim excerpt of a real subdivision pedimento (sanitized), mirroring
+// server/src/services/pdfExtract/__fixtures__/subdivision-guia-valor.txt: the OBSERVACIONES A
+// NIVEL PARTIDA lines are full of RFC/CURP-shaped consignee identifiers and sit right before the
+// agente block, which is the exact collision the agentRfc/agencyRfc window scan must resolve
+// correctly (see the "Agent RFCs" comment in parsePedimentoText.ts).
+const SAMPLE_AGENT_COLLISION = `
+DATOS DEL IMPORTADOR / EXPORTADOR
+NUM. PEDIMENTO: CVE. PEDIMENTO:
+25 91 2244 6002317
+VAG980304PX1
+VALDEZ AGUILERA GRUPO SA DE CV
+OBSERVACIONES A NIVEL PARTIDA
+GUIA JMX400112233445 VALOR 45.500 USD NOMBRE ROSA ISELA DOMINGUEZ FLORES
+RFC-CURP DOFR870512MD3
+99010001	002 00 0 1 6 1.000 6 CHN CHN
+GORRA DE BEISBOL
+OBSERVACIONES A NIVEL PARTIDA
+GUIA JMX400118877665 VALOR 22.750 USD NOMBRE HECTOR MANUEL RAMOS OCHOA RFC-CURP RAOH650930HD2
+FECHAS
+11/03/2026
+12/03/2026
+AGENTE ADUANAL, AGENCIA ADUANAL, APODERADO ADUANAL O DE ALMACEN
+NOMBRE O RAZ. SOC.:
+BALTAZAR ENRIQUE SOSA VILLARREAL
+RFC: SOVB680214FT4
+AGENCIA: SOSA Y ASOCIADOS AGENCIA ADUANAL
+RFC AGENCIA: SAA240115LK2
+`;
+
+describe('parsePedimentoText — agent RFC window prefers the closest match to the anchor', () => {
+  it('does not let a consignee RFC/CURP from a nearby OBSERVACIONES line win over the real agent RFC printed after the label', () => {
+    const out = parsePedimentoText(SAMPLE_AGENT_COLLISION);
+    // DOFR870512MD3 and RAOH650930HD2 are consignee identifiers from the partida observations,
+    // both within the old fixed [-300,+400] window and both BEFORE the anchor; SOVB680214FT4 is
+    // the real agente RFC, printed right after the "NOMBRE O RAZ. SOC.:" / "RFC:" labels. The
+    // closest-to-anchor match must win regardless of document order within the window.
+    expect(out.header.agentRfc).toBe('SOVB680214FT4');
+    expect(out.header.agencyRfc).toBe('SAA240115LK2');
   });
 });
 

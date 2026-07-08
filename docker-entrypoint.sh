@@ -17,6 +17,14 @@ until node_modules/.bin/node-pg-migrate up --tsx -m migrations; do
   sleep 3
 done
 
+# Optional one-shot data reset. Runs only when RESET_DATA_KEEP_USERS=true:
+# truncates every table except users (+ pgmigrations) and clears file storage.
+# UNSET the variable right after the reset — it re-runs on every container start.
+if [ "$RESET_DATA_KEEP_USERS" = "true" ]; then
+  echo "[entrypoint] RESET_DATA_KEEP_USERS=true — wiping data (keeping users)..."
+  node_modules/.bin/tsx scripts/resetData.ts
+fi
+
 # Optional one-shot user seed. Runs only when SEED_USERS_B64 is set (base64 of a
 # JSON array of [username, password, role]); idempotent upsert. Unset after seeding.
 if [ -n "$SEED_USERS_B64" ]; then

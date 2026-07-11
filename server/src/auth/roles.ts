@@ -17,3 +17,12 @@ export function getMfaEnforcement(): 'enforce' | 'warn' {
   if (val === 'warn') return 'warn';
   return 'enforce'; // default
 }
+
+/**
+ * DEMO_MODE gates the one-click demo-reset feature. Enabled only when the env var
+ * is the exact string 'true' (same string-compare convention as MFA_ENFORCEMENT).
+ * When false/unset the reset endpoint 404s and the UI renders nothing.
+ */
+export function isDemoMode(): boolean {
+  return process.env.DEMO_MODE === 'true';
+}

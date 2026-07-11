@@ -1,7 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { apiGet, apiPost } from '../api';
 
-interface User { id: string; username: string; role: 'capturista' | 'admin' | 'autoridad' | 'super_admin'; }
+interface User {
+  id: string;
+  username: string;
+  role: 'capturista' | 'admin' | 'autoridad' | 'super_admin';
+  /** True only on DEMO_MODE deployments; sourced from GET /api/auth/me. Gates the demo-reset UI. */
+  demoMode?: boolean;
+}
 
 interface AuthValue {
   user: User | null;
@@ -52,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(username: string, password: string, code?: string) {
     const body: Record<string, string> = { username, password };
     if (code) body.code = code;
+    // The login response carries demoMode directly, so no follow-up /me fetch is needed.
     const { token, user } = await apiPost<{ token: string; user: User }>('/api/auth/login', body);
     localStorage.setItem('token', token);
     setUser(user);

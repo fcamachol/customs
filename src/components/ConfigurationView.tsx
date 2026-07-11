@@ -31,6 +31,7 @@ import {
   Search,
   Landmark,
   UserCheck,
+  RotateCcw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
@@ -118,6 +119,8 @@ export default function ConfigurationView({ domain, onToast }: Props) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const isSuperAdmin = user?.role === 'super_admin';
+  // Demo-reset card renders only on a DEMO_MODE deployment for an admin/super_admin.
+  const demoMode = user?.demoMode === true;
 
   const [saving, setSaving] = useState(false);
 
@@ -199,6 +202,13 @@ export default function ConfigurationView({ domain, onToast }: Props) {
   }
   function refreshImportadores() {
     apiGet<Importador[]>('/api/catalogs/importadores').then((r) => { if (Array.isArray(r)) setImportadores(r); }).catch(() => {});
+  }
+  // Re-pull the config catalogs after a demo reset so the current view reflects fresh data.
+  function refreshAll() {
+    refreshClients();
+    refreshRfcs();
+    refreshAgentes();
+    refreshImportadores();
   }
 
   // --- Catálogos save handlers ---
@@ -353,7 +363,100 @@ export default function ConfigurationView({ domain, onToast }: Props) {
           onToast={onToast}
         />
       )}
+
+      {/* Demo-reset lives at the bottom of every Configuración pane, gated to DEMO_MODE admins. */}
+      {demoMode && isAdmin && (
+        <DemoResetCard onToast={onToast} onReset={refreshAll} />
+      )}
     </div>
+  );
+}
+
+/* ---------- Modo demostración (DEMO_MODE-gated data reset) ---------- */
+
+interface DeleteCounts {
+  manifests: number;
+  pedimentos: number;
+  shipments: number;
+  files: number;
+}
+
+function DemoResetCard({ onToast, onReset }: { onToast: (msg: string) => void; onReset: () => void }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // The destructive action stays disabled until the operator types the exact word.
+  const canConfirm = confirmText === 'BORRAR';
+
+  function closeModal() {
+    setModalOpen(false);
+    setConfirmText('');
+  }
+
+  async function handleReset() {
+    if (!canConfirm || busy) return;
+    setBusy(true);
+    try {
+      const { deleted } = await apiPost<{ deleted: DeleteCounts }>('/api/admin/demo-reset', {});
+      const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+      onToast(`🔄 ${plural(deleted.manifests, 'manifiesto')} y ${plural(deleted.pedimentos, 'pedimento')} eliminados.`);
+      closeModal();
+      onReset();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="border-amber-300 bg-amber-50/60 p-6 shadow-sm">
+      <SectionHeader icon={RotateCcw}>Modo demostración</SectionHeader>
+      <p className="mb-4 max-w-2xl text-sm text-amber-900">
+        Restablece la base de datos a un estado limpio: elimina <strong>todos los manifiestos y pedimentos</strong> y
+        sus archivos asociados para iniciar una demostración desde cero. Los usuarios, clientes, plataformas,
+        catálogos y la bitácora de auditoría se conservan. Esta acción no se puede deshacer.
+      </p>
+      <button
+        type="button"
+        onClick={() => setModalOpen(true)}
+        className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700"
+      >
+        <Trash2 className="h-4 w-4" /> Restablecer datos de demostración
+      </button>
+
+      <Modal open={modalOpen} onClose={closeModal} title="Restablecer datos de demostración">
+        <p className="text-sm text-slate-700">
+          Se eliminarán de forma permanente <strong>todos los manifiestos y pedimentos</strong> junto con sus
+          envíos, escaneos y archivos. Los usuarios, clientes, catálogos y la bitácora de auditoría se conservan.
+        </p>
+        <p className="mt-3 text-sm text-slate-700">
+          Escriba <strong>BORRAR</strong> para confirmar.
+        </p>
+        <Input
+          className="mt-2 font-mono"
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder="BORRAR"
+          aria-label="Confirmar escribiendo BORRAR"
+          autoFocus
+        />
+        <div className="mt-5 flex items-center justify-end gap-2 border-t border-slate-200 pt-4">
+          <Button variant="secondary" type="button" onClick={closeModal} disabled={busy}>
+            Cancelar
+          </Button>
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={!canConfirm || busy}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" /> Eliminar todo
+          </button>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 

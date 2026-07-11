@@ -19,6 +19,7 @@ import { pedimentoLifecycleRouter } from './routes/pedimentoLifecycle';
 import { catalogsRouter } from './routes/catalogs';
 import { headerMappingsRouter } from './routes/headerMappings';
 import { consolidatedRouter } from './routes/consolidated';
+import { adminRouter } from './routes/admin';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -65,6 +66,7 @@ export function createApp(): Express {
   app.use('/api/pedimentos', pedimentoLifecycleRouter);
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api/header-mappings', headerMappingsRouter);
+  app.use('/api/admin', adminRouter);
   app.use('/api', consolidatedRouter);
   // Serve the built frontend when running as a combined single-container deploy.
   // SERVE_STATIC_DIR points at the Vite `dist` output; static assets are served

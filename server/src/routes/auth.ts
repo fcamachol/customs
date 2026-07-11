@@ -6,7 +6,7 @@ import { requireAuth, requireAuthAllowEnrollment, rejectEnrollmentScope } from '
 import { recordAudit } from '../services/audit';
 import { generateSecret, keyUri, verifyTotp } from '../auth/mfa';
 import { loginLimiter } from '../middleware/rateLimit';
-import { isPrivilegedRole, getMfaEnforcement } from '../auth/roles';
+import { isPrivilegedRole, getMfaEnforcement, isDemoMode } from '../auth/roles';
 import { validate } from '../validation/middleware';
 import { mfaEnableBody } from '../validation/schemas';
 
@@ -43,12 +43,15 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   }
   await recordAudit({ userId: user.id, action: 'LOGIN', entity: 'session', ip: req.ip });
   const token = signToken({ userId: user.id, role: user.role, tv: user.token_version });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role, demoMode: isDemoMode() } });
 });
 
 authRouter.get('/me', requireAuth, rejectEnrollmentScope, async (req, res) => {
   const { rows } = await query(`SELECT id, username, role, created_at FROM users WHERE id=$1`, [req.user!.userId]);
-  res.json(rows[0]);
+  // Narrow TOCTOU: the user can be deleted between requireAuth's lookup and this query.
+  if (!rows[0]) { res.status(401).json({ error: 'User not found' }); return; }
+  // demoMode tells the client whether the DEMO_MODE-gated reset UI should render.
+  res.json({ ...rows[0], demoMode: isDemoMode() });
 });
 
 // POST /api/auth/logout — bumps token_version, invalidating all outstanding tokens (logout-all).

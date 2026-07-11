@@ -261,3 +261,109 @@ describe('ConfigurationView — cfg_entidades (Agentes aduanales / Importadores)
     expect(screen.queryByRole('button', { name: /editar/i })).toBeNull();
   });
 });
+
+/** apiGet mock for the demo-reset card: /me carries { role, demoMode } per test; catalogs are inert. */
+function mockDemoApi(me: { role: string; demoMode?: boolean }) {
+  return async (path: string) => {
+    if (path.includes('/api/auth/me')) return { id: '1', username: 'u', ...me };
+    if (path.includes('prohibited')) return { key: 'prohibited', value: [] };
+    if (path.includes('piracy_brands')) return { key: 'piracy_brands', value: [] };
+    if (path.includes('branding')) return { key: 'branding', value: null };
+    if (path.includes('validation_params')) return { key: 'validation_params', value: null };
+    if (path.includes('tasa_vigencias')) return { key: 'tasa_vigencias', value: null };
+    if (path.includes('/clients')) return [];
+    if (path.includes('/validated-rfcs')) return [];
+    if (path.includes('/agentes-aduanales')) return [];
+    if (path.includes('/importadores')) return [];
+    return { key: '', value: null };
+  };
+}
+
+describe('ConfigurationView — Modo demostración (demo-reset card)', () => {
+  // A token in localStorage triggers AuthProvider to restore the user from /api/auth/me.
+  beforeEach(() => {
+    localStorage.setItem('token', 'mock-token');
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    localStorage.removeItem('token');
+  });
+
+  it('hides the card when demoMode is false, even for an admin', async () => {
+    const { apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'admin', demoMode: false }));
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={() => {}} />
+      </Wrapper>,
+    );
+    // Wait for the admin restore to complete (params section is admin-editable).
+    await waitFor(() => expect(screen.getByText(/Parámetros de validación/)).toBeTruthy());
+    expect(screen.queryByText('Modo demostración')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Restablecer datos de demostración/i })).toBeNull();
+  });
+
+  it('hides the card when demoMode is true but the user is a capturista', async () => {
+    const { apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'capturista', demoMode: true }));
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={() => {}} />
+      </Wrapper>,
+    );
+    // capturista sees the restricted banner; the demo card must still be absent.
+    await waitFor(() => expect(screen.getByText(/restringid/i)).toBeTruthy());
+    expect(screen.queryByText('Modo demostración')).toBeNull();
+  });
+
+  it('shows the card for an admin in demo mode; the confirm button is gated on typing BORRAR', async () => {
+    const { apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'admin', demoMode: true }));
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={() => {}} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(screen.getByText('Modo demostración')).toBeTruthy());
+
+    // Open the confirm modal.
+    fireEvent.click(screen.getByRole('button', { name: /Restablecer datos de demostración/i }));
+
+    const confirmBtn = screen.getByRole('button', { name: /Eliminar todo/i }) as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+
+    // Wrong text keeps it disabled.
+    const input = screen.getByLabelText(/Confirmar escribiendo BORRAR/i);
+    fireEvent.change(input, { target: { value: 'borrar' } });
+    expect(confirmBtn.disabled).toBe(true);
+
+    // Exact word enables it.
+    fireEvent.change(input, { target: { value: 'BORRAR' } });
+    expect(confirmBtn.disabled).toBe(false);
+  });
+
+  it('success path fires the API call and a toast with the deleted counts', async () => {
+    const { apiGet, apiPost } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'super_admin', demoMode: true }));
+    vi.mocked(apiPost).mockResolvedValue({ deleted: { manifests: 3, pedimentos: 5, shipments: 7, files: 9 } });
+    const onToast = vi.fn();
+
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={onToast} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(screen.getByText('Modo demostración')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /Restablecer datos de demostración/i }));
+    fireEvent.change(screen.getByLabelText(/Confirmar escribiendo BORRAR/i), { target: { value: 'BORRAR' } });
+    fireEvent.click(screen.getByRole('button', { name: /Eliminar todo/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/api/admin/demo-reset', {});
+    });
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith('🔄 3 manifiestos y 5 pedimentos eliminados.');
+    });
+  });
+});

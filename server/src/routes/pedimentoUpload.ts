@@ -69,7 +69,9 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
 
   // RF-08/RF-10: scan for active content and QR trojans before persisting.
   const policy = await loadScanPolicy();
+  const tScan = performance.now();
   const scan = await scanPedimentoPdf(req.file.buffer, policy);
+  console.log(`[pedimento-upload] scan ${(req.file.size / 1024 / 1024).toFixed(1)}MB in ${((performance.now() - tScan) / 1000).toFixed(1)}s (manifest ${req.params.id})`);
   const scanSummary = { verdict: scan.verdict, motors: scan.motors, codes: scan.findings.map((f) => f.code) };
 
   if (scan.verdict === 'blocked') {
@@ -90,8 +92,10 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   // Collected non-blocking warnings surfaced in the 201 body (best-effort attach still proceeds).
   const warnings: string[] = [];
   let extracted: ExtractedPedimento;
+  const tExtract = performance.now();
   try {
     extracted = await extractPedimento(req.file.buffer);
+    console.log(`[pedimento-upload] extract in ${((performance.now() - tExtract) / 1000).toFixed(1)}s (manifest ${req.params.id})`);
   } catch {
     extracted = EMPTY_EXTRACTED;
     // Signal that extraction yielded nothing, so the masterGuide/duplicate gates were skipped and
@@ -131,8 +135,13 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   if (numeroPedimento) {
     const norm = normPedimentoNumero(numeroPedimento);
     if (norm) {
-      const dup = await query<{ numero_pedimento: string | null }>('SELECT numero_pedimento FROM pedimentos');
-      if (dup.rows.some((r) => normPedimentoNumero(r.numero_pedimento ?? '') === norm)) {
+      // Same expression as the pedimentos_numero_global_uq index, so this stays an
+      // index lookup instead of scanning every pedimento on each upload.
+      const dup = await query(
+        `SELECT 1 FROM pedimentos WHERE regexp_replace(numero_pedimento, '\\D', '', 'g') = $1 LIMIT 1`,
+        [norm],
+      );
+      if (dup.rows.length > 0) {
         res.status(409).json({ error: 'Ya existe un pedimento con este número', numeroPedimento });
         return;
       }

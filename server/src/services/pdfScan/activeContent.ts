@@ -38,35 +38,38 @@ const EXE_MAGICS: { magic: Buffer; label: string }[] = [
 
 const STREAM_RE = /stream\r?\n?/g;
 
-// Collect the raw bytes plus every successfully-inflated FlateDecode stream so
-// keyword/magic checks see the decompressed content too.
-function gatherSearchBuffers(pdf: Buffer): Buffer[] {
-  const buffers: Buffer[] = [pdf];
+// Pedimentos run 40-80MB with hundreds of streams: the whole-file string must be
+// built exactly once, and each inflated stream must be scanned and discarded —
+// holding them all (or re-stringifying the file per stream) blocks the event
+// loop for minutes and can OOM the container.
+const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
+
+export function scanActiveContent(pdf: Buffer): ScanFinding[] {
+  const pdfText = pdf.toString('latin1');
+  const found = new Map<string, ScanFinding>(); // dedupe by code
+  const present = new Set<string>(); // which keywords were seen anywhere
+
+  const checkKeywords = (text: string) => {
+    for (const rule of KEYWORD_RULES) {
+      if (text.includes(rule.keyword)) present.add(rule.keyword);
+    }
+  };
+
+  // Raw bytes first, then every successfully-inflated FlateDecode stream, so
+  // keyword checks see compressed content too (action dictionaries are
+  // frequently hidden inside compressed object streams).
+  checkKeywords(pdfText);
   STREAM_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = STREAM_RE.exec(pdf.toString('latin1'))) !== null) {
+  while ((m = STREAM_RE.exec(pdfText)) !== null) {
     const start = m.index + m[0].length;
     const endIdx = pdf.indexOf('endstream', start, 'latin1');
     const slice = endIdx === -1 ? pdf.subarray(start) : pdf.subarray(start, endIdx);
     try {
-      buffers.push(inflateSync(slice));
+      checkKeywords(inflateSync(slice, { maxOutputLength: MAX_INFLATED_BYTES }).toString('latin1'));
     } catch {
-      // Not a (valid) FlateDecode stream — the raw bytes are already covered
-      // by buffers[0], so nothing extra to do here.
-    }
-  }
-  return buffers;
-}
-
-export function scanActiveContent(pdf: Buffer): ScanFinding[] {
-  const buffers = gatherSearchBuffers(pdf);
-  const found = new Map<string, ScanFinding>(); // dedupe by code
-  const present = new Set<string>(); // which keywords were seen anywhere
-
-  for (const buf of buffers) {
-    const text = buf.toString('latin1');
-    for (const rule of KEYWORD_RULES) {
-      if (text.includes(rule.keyword)) present.add(rule.keyword);
+      // Not a (valid) FlateDecode stream, or larger inflated than the cap —
+      // the raw bytes are already covered by the pdfText pass above.
     }
   }
 
@@ -100,7 +103,6 @@ export function scanActiveContent(pdf: Buffer): ScanFinding[] {
   // Executable magic at the start of any stream body.
   STREAM_RE.lastIndex = 0;
   let sm: RegExpExecArray | null;
-  const pdfText = pdf.toString('latin1');
   while ((sm = STREAM_RE.exec(pdfText)) !== null) {
     const start = sm.index + sm[0].length;
     const head = pdf.subarray(start, start + 8);

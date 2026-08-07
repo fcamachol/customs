@@ -17,7 +17,15 @@ interface OperacionListItem {
   vueloArriboReal: string | null; discrepanciasCount: number; prealertaVersion: number;
 }
 
-interface Discrepancia { codigo: string; severidad: string; detalle?: string }
+interface Discrepancia {
+  codigo: string;
+  severidad: string;
+  /** Human-readable, Spanish, produced by shared/operaciones/cotejo.ts — the primary line to show. */
+  mensaje?: string;
+  /** Machine-readable evidence: what was compared and what each side said. Rendered as a definition
+   * list, never as raw JSON or String(object) — see the 2026-08 [object Object] incident. */
+  detalle?: Record<string, unknown>;
+}
 
 interface VueloObservado {
   numeroVuelo: string; callsign: string | null; aerolinea: string | null;
@@ -102,6 +110,51 @@ function fmtRoute(origen: string | null, destino: string | null): string {
 
 function humanize(v: string): string {
   return v.replace(/_/g, ' ');
+}
+
+// Parser-warning codes (shared/operaciones/prealerta.ts PrealertaWarningCode) mapped to the Spanish
+// sentence an operator should read. Unknown codes fall back to the raw code rather than disappearing.
+const WARNING_MESSAGES: Record<string, string> = {
+  etd_no_encontrado: 'No se encontró la fecha estimada de salida (ETD)',
+  eta_no_encontrado: 'No se encontró la fecha estimada de arribo (ETA)',
+  ruta_no_encontrada: 'No se encontró la ruta origen–destino',
+  cartones_no_encontrado: 'No se encontró cartones en la prealerta',
+  piezas_no_encontrado: 'No se encontró piezas en la prealerta',
+  peso_no_encontrado: 'No se encontró peso en la prealerta',
+  vuelo_no_encontrado: 'No se encontró el número de vuelo',
+  mawb_no_encontrado: 'No se encontró la guía máster',
+  mawb_multiple: 'La prealerta menciona varias guías máster',
+  fecha_ambigua: 'Fecha ambigua (día/mes)',
+  anio_inferido: 'El año de la fecha fue inferido',
+  valor_no_numerico: 'Valor no numérico',
+};
+
+function warningMessage(w: ParserWarning): string {
+  return WARNING_MESSAGES[w.code] ?? w.code;
+}
+
+// severidad values (shared/operaciones/cotejo.ts SeveridadDiscrepancia) mapped onto the shared
+// StatusPill palette: error is a hard red flag, advertencia needs a look, informativa is FYI.
+const SEVERIDAD_RESULTADO: Record<string, Resultado> = {
+  error: 'rojo', advertencia: 'amarillo', informativa: 'gris',
+};
+
+function SeveridadPill({ value }: { value: string }) {
+  return <StatusPill resultado={SEVERIDAD_RESULTADO[value] ?? 'gris'} label={value} />;
+}
+
+// Discrepancia.detalle is machine-readable evidence (PA-01..PA-10 shapes vary: numbers, strings,
+// arrays of guías, nested fuente objects). Rendered as text — NEVER via String(object), which is
+// what produced the "[object Object]" incident this view exists to fix.
+function formatDetalleValue(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'number') return v.toLocaleString('es-MX');
+  if (typeof v === 'boolean') return v ? 'sí' : 'no';
+  if (Array.isArray(v)) {
+    return v.map((x) => (x !== null && typeof x === 'object' ? JSON.stringify(x) : String(x))).join(', ');
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
 }
 
 const ADJUNTO_TIPO_LABEL: Record<Adjunto['tipo'], string> = { awb: 'AWB', manifiesto: 'Manifiesto', otro: 'Otro' };
@@ -403,7 +456,14 @@ function OperacionDetailBody({ detail }: { detail: OperacionDetail }) {
           {detail.prealertas.map((p) => (
             <div key={p.id} className="rounded-lg border border-slate-200 p-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-slate-700">Versión {p.version}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-700">Versión {p.version}</span>
+                  {p.parserVersion && (
+                    <span className="font-mono text-[10px] text-slate-400" title="Versión del parser que produjo este parse">
+                      parser {p.parserVersion}
+                    </span>
+                  )}
+                </span>
                 <span className="text-xs text-slate-400">
                   recibido {fmtDateTime(p.recibidoAt)}{p.remitente ? ` de ${p.remitente}` : ''}
                 </span>
@@ -446,8 +506,7 @@ function OperacionDetailBody({ detail }: { detail: OperacionDetail }) {
                 <div className="mt-2 space-y-1">
                   {p.parsed.warnings.map((w, i) => (
                     <div key={`${w.code}-${i}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                      <span className="font-semibold">{w.code}</span>
-                      {w.field ? ` — campo: ${w.field}` : ''}
+                      {warningMessage(w)}
                       {w.detail ? ` — ${w.detail}` : ''}
                     </div>
                   ))}
@@ -461,11 +520,28 @@ function OperacionDetailBody({ detail }: { detail: OperacionDetail }) {
       {(detail.discrepancias?.length ?? 0) > 0 && (
         <Card className="p-4">
           <h3 className="mb-3 text-sm font-semibold text-slate-800">Discrepancias</h3>
-          <ul className="space-y-1.5">
+          <ul className="space-y-2">
             {detail.discrepancias!.map((d, i) => (
-              <li key={`${d.codigo}-${i}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                <span className="font-semibold">{d.codigo}</span> — {d.severidad}
-                {d.detalle ? ` — ${d.detalle}` : ''}
+              <li key={`${d.codigo}-${i}`} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">{d.codigo}</span>
+                  <SeveridadPill value={d.severidad} />
+                </div>
+                {/* mensaje is the primary, human-readable line — a discrepancia without one falls
+                    back to its código rather than rendering nothing. */}
+                <p className="mt-1 text-slate-700">{d.mensaje ?? d.codigo}</p>
+                {d.detalle && (
+                  <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-amber-200/70 pt-1.5 sm:grid-cols-3">
+                    {Object.entries(d.detalle).map(([k, v]) => (
+                      <div key={k}>
+                        <dt className="text-[11px] font-semibold uppercase text-slate-500">{k}</dt>
+                        <dd className={`text-slate-800 ${typeof v === 'number' ? 'tabular-nums' : ''}`}>
+                          {formatDetalleValue(v)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
               </li>
             ))}
           </ul>

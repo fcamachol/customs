@@ -1,7 +1,18 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { query } from '../db/pool';
-import { requireAuth } from '../auth/middleware';
+import { withTransaction } from '../db/tx';
+import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { manifestTotales } from '../services/manifiestoIngest';
+import { parsePrealerta } from '../../../shared/operaciones/prealerta';
+import {
+  CODIGOS_MANIFIESTO,
+  COTEJO_RULESET_VERSION,
+  PESO_TOLERANCIA_PCT_DEFAULT,
+  cotejarManifiesto,
+  mergeDiscrepancias,
+  type Discrepancia,
+} from '../../../shared/operaciones/cotejo';
 
 export const operacionesRouter = Router();
 
@@ -207,3 +218,191 @@ operacionesRouter.get('/:id', requireAuth, async (req: Request, res: Response, n
     next(err);
   }
 });
+
+/**
+ * POST /api/operaciones/:id/reparse — heal a stored parse.
+ *
+ * `prealertas.parsed` and the mirrored `operaciones.*` columns are a SNAPSHOT taken at ingest time.
+ * Fixing a bug in shared/operaciones/prealerta.ts (a new PREALERTA_PARSER_VERSION) does nothing for a
+ * caso already stored under the old version — that is exactly what happened in production: two live
+ * prealertas carried a stale parse from parser 2026-08b, arrived minutes before 2026-08c deployed.
+ * This route re-runs the CURRENT parser against the LATEST stored prealerta and, where the manifest
+ * cotejo depends on the corrected fields, re-runs that too, so a parser fix can heal casos that
+ * already exist instead of only protecting future ones.
+ */
+operacionesRouter.post(
+  '/:id/reparse',
+  requireAuth,
+  requireRole('admin', 'capturista'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+
+      const op = await query<{ id: string; mawb: string }>(
+        `SELECT id, mawb FROM operaciones WHERE id = $1`,
+        [id],
+      );
+      if (!op.rows.length) {
+        res.status(404).json({ error: 'Operación no encontrada' });
+        return;
+      }
+      const operacion = op.rows[0];
+
+      const pre = await query<{
+        id: string;
+        asunto: string | null;
+        cuerpo_texto: string | null;
+        parser_version: string | null;
+        version: number;
+      }>(
+        `SELECT id, asunto, cuerpo_texto, parser_version, version
+           FROM prealertas
+          WHERE operacion_id = $1
+          ORDER BY version DESC
+          LIMIT 1`,
+        [id],
+      );
+      if (!pre.rows.length) {
+        res.status(409).json({ error: 'La operación no tiene prealertas' });
+        return;
+      }
+      const prealerta = pre.rows[0];
+
+      const parsed = parsePrealerta({ subject: prealerta.asunto, textBody: prealerta.cuerpo_texto });
+
+      // operaciones.mawb is the unique key every FK (manifest, guías, eventos) hangs off — a reparse
+      // may CORRECT fields but must never re-key an existing caso onto a different guía máster.
+      if (parsed.fields.mawb && parsed.fields.mawb !== operacion.mawb) {
+        res.status(409).json({
+          error:
+            'El reproceso produjo una guía máster distinta a la de la operación; ' +
+            'un reparse no puede re-clavar (re-key) un caso existente.',
+        });
+        return;
+      }
+
+      // Same fallback logic as prealertaIngest.ts's pesoToleranciaPct(): a positive finite override,
+      // else the shared default. Duplicated locally because that helper is not exported.
+      const pesoToleranciaRaw = Number(process.env.PESO_TOLERANCIA_PCT);
+      const pesoToleranciaPct =
+        Number.isFinite(pesoToleranciaRaw) && pesoToleranciaRaw > 0
+          ? pesoToleranciaRaw
+          : PESO_TOLERANCIA_PCT_DEFAULT;
+
+      const declarado = {
+        cartones: parsed.fields.cartones ?? null,
+        piezas: parsed.fields.piezas ?? null,
+        pesoKg: parsed.fields.pesoKg ?? null,
+      };
+
+      const { discrepancias } = await withTransaction(async (q) => {
+        await q(
+          `UPDATE prealertas SET parsed = $2::jsonb, parser_version = $3 WHERE id = $1`,
+          [
+            prealerta.id,
+            JSON.stringify({ fields: parsed.fields, provenance: parsed.provenance, warnings: parsed.warnings }),
+            parsed.parserVersion,
+          ],
+        );
+
+        // Overwrite what the new parse produced; COALESCE-keep whatever it could not read this time —
+        // the same convention the ingest's ON CONFLICT clause uses, so a reparse and a resend behave
+        // identically with respect to fields the parser missed. mawb itself is never touched here.
+        const upd = await q(
+          `UPDATE operaciones SET
+             mawb_raw           = COALESCE($2, mawb_raw),
+             origen_iata        = COALESCE($3, origen_iata),
+             destino_iata       = COALESCE($4, destino_iata),
+             numero_vuelo       = COALESCE($5, numero_vuelo),
+             etd_origen         = COALESCE($6, etd_origen),
+             eta_pais           = COALESCE($7, eta_pais),
+             cartones_prealerta = COALESCE($8, cartones_prealerta),
+             piezas_prealerta   = COALESCE($9, piezas_prealerta),
+             peso_kg_prealerta  = COALESCE($10, peso_kg_prealerta)
+           WHERE id = $1
+           RETURNING discrepancias, manifest_id`,
+          [
+            id,
+            parsed.fields.mawbRaw ?? null,
+            parsed.fields.origenIata ?? null,
+            parsed.fields.destinoIata ?? null,
+            parsed.fields.numeroVuelo ?? null,
+            parsed.fields.etdOrigen ?? null,
+            parsed.fields.etaPais ?? null,
+            parsed.fields.cartones ?? null,
+            parsed.fields.piezas ?? null,
+            parsed.fields.pesoKg ?? null,
+          ],
+        );
+        const row = upd.rows[0] as { discrepancias: Discrepancia[] | null; manifest_id: string | null };
+        let current: Discrepancia[] = row.discrepancias ?? [];
+        const manifestId = row.manifest_id;
+
+        // Only the manifest-owned codes (PA-01..PA-03) are recomputed — mergeDiscrepancias replaces
+        // exactly that family and leaves PA-04/05/07/08/10 etc. untouched, exactly like a normal
+        // cotejo cycle. With no manifest attached, discrepancias is left untouched entirely.
+        if (manifestId) {
+          const totales = await manifestTotales(manifestId);
+          const findings = cotejarManifiesto(declarado, { ...totales, lineas: totales.lineas }, { pesoToleranciaPct });
+          current = mergeDiscrepancias(current, findings, CODIGOS_MANIFIESTO);
+          await q(
+            `UPDATE operaciones SET discrepancias = $2::jsonb, cotejo_version = $3 WHERE id = $1`,
+            [id, JSON.stringify(current), COTEJO_RULESET_VERSION],
+          );
+        }
+
+        // Reuses the COTEJO_EJECUTADO event type deliberately: shared/operaciones/estados.ts's
+        // TIPOS_EVENTO vocabulary is owned by another agent concurrently, and semantically a reparse
+        // IS another cotejo run — payload.reproceso is what distinguishes it from an ingest-time one.
+        await q(
+          `INSERT INTO operacion_eventos (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+           VALUES ($1, $2, 'COTEJO_EJECUTADO', 'sistema', now(), $3)`,
+          [
+            id,
+            operacion.mawb,
+            JSON.stringify({
+              reproceso: true,
+              parserVersionAntes: prealerta.parser_version,
+              parserVersionDespues: parsed.parserVersion,
+              prealertaVersion: prealerta.version,
+              fields: parsed.fields,
+              warnings: parsed.warnings,
+              discrepancias: current,
+            }),
+          ],
+        );
+
+        return { discrepancias: current };
+      });
+
+      // recordAudit runs its own transaction (advisory-locked hash chain), so it must sit outside
+      // withTransaction — same house rule every other writer in this codebase follows.
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'PREALERTA_REPROCESADA',
+        entity: 'operacion',
+        entityId: id,
+        after: {
+          mawb: operacion.mawb,
+          prealertaId: prealerta.id,
+          prealertaVersion: prealerta.version,
+          parserVersionAntes: prealerta.parser_version,
+          parserVersionDespues: parsed.parserVersion,
+          warnings: parsed.warnings.length,
+          discrepancias: discrepancias.length,
+        },
+        ip: req.ip,
+      });
+
+      res.json({
+        ok: true,
+        parserVersion: parsed.parserVersion,
+        fields: parsed.fields,
+        warnings: parsed.warnings.length,
+        discrepancias: discrepancias.length,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);

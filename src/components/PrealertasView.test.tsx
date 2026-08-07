@@ -21,7 +21,17 @@ const heldItem = {
 
 const detail = {
   ...listItem,
-  discrepancias: [{ codigo: 'PESO_DIFIERE', severidad: 'media', detalle: 'Peso declarado difiere del manifiesto' }],
+  discrepancias: [
+    {
+      codigo: 'PA-03',
+      severidad: 'error',
+      mensaje: 'El peso de la prealerta (980.5 kg) difiere del manifiesto (1000 kg) en 1.95 %, sobre una tolerancia de 0.50 %.',
+      detalle: { campo: 'peso', declarado: 980.5, manifiesto: 1000, diferenciaKg: 19.5 },
+    },
+    // A discrepancia carrying an object detalle but no mensaje — guards against [object Object] and
+    // the missing-mensaje fallback simultaneously.
+    { codigo: 'PA-07', severidad: 'advertencia', detalle: { guias: ['160-05930216'], total: 1 } },
+  ],
   cotejoVersion: 'v1', arriboVueloAt: null, disponibleAt: null,
   agoraConversationId: null, manifestId: 'man-1',
   vuelo: {
@@ -55,7 +65,10 @@ const detail = {
   ],
 };
 
-const apiGetMock = vi.fn(async (url: string) => {
+// Typed `Promise<unknown>` deliberately: individual tests swap in detail/list shapes that vary in
+// their optional fields (mensaje, detalle, warnings), and pinning the mock to the first literal's
+// inferred type makes every later mockImplementation a type error unrelated to runtime behaviour.
+const apiGetMock = vi.fn(async (url: string): Promise<unknown> => {
   if (url.startsWith('/api/operaciones/')) return detail;
   if (url.startsWith('/api/operaciones')) return [listItem, heldItem];
   throw new Error(`unexpected url: ${url}`);
@@ -106,14 +119,64 @@ describe('PrealertasView', () => {
     expect(screen.getByText('Observado (feed de vuelo)')).toBeTruthy();
   });
 
-  it('shows the full SHA-256 hash and parser warnings in the evidence block', async () => {
+  it('shows the full SHA-256 hash and parser warnings (mapped to Spanish) in the evidence block', async () => {
     render(<PrealertasView />);
     await waitFor(() => expect(screen.getByText('369-94705516')).toBeTruthy());
     fireEvent.click(screen.getByText('369-94705516'));
 
     await waitFor(() => expect(screen.getByText('awb-369-94705516.pdf')).toBeTruthy());
     expect(screen.getByText('a'.repeat(64))).toBeTruthy();
-    expect(screen.getByText('piezas_no_encontrado')).toBeTruthy();
+    // Known warning code mapped to its Spanish sentence, not the raw code.
+    expect(screen.getByText(/No se encontró piezas en la prealerta/)).toBeTruthy();
+    expect(screen.queryByText('piezas_no_encontrado')).toBeNull();
+  });
+
+  it('falls back to the raw code for an unknown parser-warning code', async () => {
+    apiGetMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/operaciones/')) {
+        return {
+          ...detail,
+          prealertas: [
+            {
+              ...detail.prealertas[0],
+              parsed: { fields: {}, warnings: [{ code: 'algo_totalmente_nuevo' }] },
+            },
+          ],
+        };
+      }
+      if (url.startsWith('/api/operaciones')) return [listItem, heldItem];
+      throw new Error('unexpected');
+    });
+    render(<PrealertasView />);
+    await waitFor(() => expect(screen.getByText('369-94705516')).toBeTruthy());
+    fireEvent.click(screen.getByText('369-94705516'));
+    await waitFor(() => expect(screen.getByText('algo_totalmente_nuevo')).toBeTruthy());
+  });
+
+  it('shows the parserVersion next to each prealerta version header', async () => {
+    render(<PrealertasView />);
+    await waitFor(() => expect(screen.getByText('369-94705516')).toBeTruthy());
+    fireEvent.click(screen.getByText('369-94705516'));
+    await waitFor(() => expect(screen.getByText('Versión 1')).toBeTruthy());
+    expect(screen.getByText('parser v3')).toBeTruthy();
+  });
+
+  it('renders discrepancia mensaje as the primary line, never [object Object], and shows detalle keys', async () => {
+    render(<PrealertasView />);
+    await waitFor(() => expect(screen.getByText('369-94705516')).toBeTruthy());
+    fireEvent.click(screen.getByText('369-94705516'));
+
+    await waitFor(() => expect(screen.getByText('PA-03')).toBeTruthy());
+    // Primary line: the Spanish mensaje, not the raw detalle object.
+    expect(screen.getByText(/El peso de la prealerta \(980\.5 kg\) difiere del manifiesto/)).toBeTruthy();
+    // Detalle rendered as a definition list — keys visible, no [object Object] anywhere.
+    expect(screen.getByText('campo')).toBeTruthy();
+    expect(screen.getByText('peso')).toBeTruthy();
+    expect(screen.queryByText(/object Object/)).toBeNull();
+
+    // A discrepancia with an object detalle but no mensaje falls back to its código.
+    const pa07Items = screen.getAllByText('PA-07');
+    expect(pa07Items.length).toBeGreaterThan(0);
   });
 
   it('shows "sin verificar" when there is no observed flight data', async () => {

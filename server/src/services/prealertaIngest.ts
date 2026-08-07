@@ -13,6 +13,7 @@ import {
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
 import { refreshVueloForOperacion } from './vuelosService';
 import { ingestManifiestoFromPrealerta } from './manifiestoIngest';
+import { runRiskForManifest } from './riskService';
 import {
   CODIGOS_MANIFIESTO,
   COTEJO_RULESET_VERSION,
@@ -483,6 +484,57 @@ export async function ingestPrealerta(
         },
         ip: null,
       });
+      // Score risk immediately, on the same shipments we just promoted. This is the last link that
+      // makes the pipeline self-driving: a prealerta now arrives, is archived, cotejada, and risk-scored
+      // without anyone clicking anything. userId is null so the audit trail distinguishes an automatic
+      // score from a human-triggered one.
+      if ('manifestId' in res) {
+        try {
+          const risk = await runRiskForManifest({ manifestId: res.manifestId, userId: null });
+          if (risk) {
+            // Eje 2 of the state machine: hallazgos are anything the engine flagged rojo. Only advance
+            // from an earlier state — never walk backwards over a resolution someone already recorded.
+            const conHallazgos = risk.summary.validarEnPrevio > 0;
+            await query(
+              `UPDATE operaciones
+                  SET estado_documental = $2
+                WHERE id = $1 AND estado_documental IN ('sin_cotejar','cotejado')`,
+              [result.operacion.id, conHallazgos ? 'riesgo_con_hallazgos' : 'riesgo_ok'],
+            );
+            await query(
+              `INSERT INTO operacion_eventos
+                 (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+               VALUES ($1,$2,'RIESGO_EVALUADO','sistema',now(),$3)`,
+              [
+                result.operacion.id,
+                result.operacion.mawb,
+                JSON.stringify({
+                  manifestId: res.manifestId,
+                  summary: risk.summary,
+                  rulesetVersion: risk.rulesetVersion,
+                  riskFileId: risk.riskFileId,
+                  period: risk.period,
+                }),
+              ],
+            );
+            await recordAudit({
+              userId: null,
+              action: 'RIESGO_EVALUADO',
+              entity: 'manifest',
+              entityId: res.manifestId,
+              after: {
+                operacionId: result.operacion.id,
+                mawb: result.operacion.mawb,
+                summary: risk.summary,
+                rulesetVersion: risk.rulesetVersion,
+              },
+              ip: null,
+            });
+          }
+        } catch (err) {
+          console.warn('[prealertaIngest] no se pudo evaluar el riesgo automáticamente:', err);
+        }
+      }
     } catch (err) {
       console.warn('[prealertaIngest] no se pudo ingestar el manifiesto adjunto:', err);
     }

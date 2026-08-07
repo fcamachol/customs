@@ -177,9 +177,11 @@ describe('ingestPrealerta — happy path', () => {
     expect(op.rows[0].etapa).toBe('prealerta');
     expect(op.rows[0].agora_conversation_id).toBe('77');
 
-    // The archived email plus both attachments — evidence lives here, not only in AGORA.
+    // The archived email plus both attachments — evidence lives here, not only in AGORA. Asserted as
+    // a subset because automatic risk scoring now also persists a risk_analysis workbook.
     const files = await query<{ kind: string }>('SELECT kind FROM files ORDER BY kind');
-    expect(files.rows.map((r) => r.kind).sort()).toEqual(['awb', 'manifest', 'prealerta_email']);
+    const kinds = files.rows.map((r) => r.kind);
+    for (const k of ['awb', 'manifest', 'prealerta_email']) expect(kinds).toContain(k);
 
     const adj = await query<{ tipo: string; scan_verdict: string; content_hash: string }>(
       'SELECT tipo, scan_verdict, content_hash FROM prealerta_adjuntos ORDER BY tipo',
@@ -247,7 +249,9 @@ describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () 
       [out.operacionId],
     );
     expect(op.rows[0].manifest_id).toBe(man.rows[0].id);
-    expect(op.rows[0].estado_documental).toBe('cotejado');
+    // Advances past 'cotejado' because risk now runs in the same pass — the state machine's eje 2
+    // moving without a human is the point, so accept either post-risk state.
+    expect(['cotejado', 'riesgo_ok', 'riesgo_con_hallazgos']).toContain(op.rows[0].estado_documental);
     expect(op.rows[0].cotejo_version).toBe('2026-08a');
 
     // The email declared 1910 pieces; the manifest totals 35. That is the red flag Fernando derived
@@ -258,6 +262,61 @@ describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () 
 
     const ev = await query<{ tipo: string }>('SELECT tipo FROM operacion_eventos ORDER BY id');
     expect(ev.rows.map((e) => e.tipo)).toContain('COTEJO_EJECUTADO');
+  });
+
+  it('scores risk automatically on the shipments it just promoted', async () => {
+    // The last link that makes the pipeline self-driving: nobody clicked "run risk".
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-r', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    const ship = await query<{ risk_color: string | null; ruleset_hash: string | null }>(
+      'SELECT risk_color, ruleset_hash FROM shipments',
+    );
+    expect(ship.rows).toHaveLength(2);
+    for (const r of ship.rows) {
+      expect(r.risk_color).toBeTruthy();
+      // The ruleset hash is stamped on every row so a score can be replayed and defended later.
+      expect(r.ruleset_hash).toMatch(/^[0-9a-f]{64}$/);
+    }
+
+    // The risk XLSX artifact is produced by the same code path the manual button uses.
+    const files = await query<{ kind: string }>(
+      `SELECT kind FROM files WHERE kind = 'risk_analysis'`,
+    );
+    expect(files.rows).toHaveLength(1);
+
+    const man = await query<{ risk_stale: boolean; ruleset_version: string }>(
+      'SELECT risk_stale, ruleset_version FROM manifests',
+    );
+    expect(man.rows[0].risk_stale).toBe(false);
+    expect(man.rows[0].ruleset_version).toBeTruthy();
+
+    // Eje 2 advanced off sin_cotejar without a human touching it.
+    const op = await query<{ estado_documental: string }>(
+      'SELECT estado_documental FROM operaciones WHERE id = $1', [out.operacionId]);
+    expect(['riesgo_ok', 'riesgo_con_hallazgos']).toContain(op.rows[0].estado_documental);
+
+    const ev = await query<{ tipo: string }>('SELECT tipo FROM operacion_eventos ORDER BY id');
+    expect(ev.rows.map((e) => e.tipo)).toContain('RIESGO_EVALUADO');
+    const audit = await query(`SELECT 1 FROM audit_log WHERE action = 'RIESGO_EVALUADO'`);
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it('does not attempt scoring when no rows promoted', async () => {
+    // A manifiesto whose every row fails validation leaves nothing to score; the caso must still
+    // stand rather than erroring out.
+    downloadAttachment.mockImplementation(async (_c: unknown, url: string) =>
+      String(url).endsWith('.csv')
+        ? Buffer.from('Columna Sin Sentido,Otra\nfoo,bar\n', 'utf8')
+        : Buffer.from('%PDF-1.4 fake\n'),
+    );
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-nr', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    expect((await query('SELECT 1 FROM shipments')).rows).toHaveLength(0);
+    expect(
+      (await query(`SELECT 1 FROM files WHERE kind = 'risk_analysis'`)).rows,
+    ).toHaveLength(0);
   });
 
   it('attaches to an existing manifest for the same MAWB instead of violating the unique index', async () => {

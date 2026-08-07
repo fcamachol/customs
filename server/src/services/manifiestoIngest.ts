@@ -45,16 +45,34 @@ export type ManifiestoIngestResult =
       manifestId: string;
       counts: { total: number; valid: number; warning: number; error: number };
       promovidas: number;
+      /** House guías materialized into `operacion_guias` — the unit PA-07 and planning work on. */
+      guias: number;
       totales: ManifiestoTotales;
     };
 
 const MAX_ROWS = 20_000;
 
+/** Per-house-guía rollup of the manifest lines, the shape `operacion_guias` stores. */
+export interface GuiaAgregada {
+  guiaNorm: string;
+  /** What the manifest actually wrote — the string a human reconciles against paper. */
+  guiaRaw: string;
+  /** Null, not 0, when no line declared one: an undeclared count must not read as a declared zero. */
+  piezas: number | null;
+  cartones: number | null;
+  pesoKg: number | null;
+}
+
 /**
- * Totals from the GOLD layer (`shipments`), not from the parse, so they describe what the system
- * actually holds and will still be right when a manifest was attached rather than freshly ingested.
+ * One pass over the GOLD layer (`shipments`) producing both the manifest totals and the per-guía
+ * rollup. Read from `shipments` rather than from the parse so the figures describe what the system
+ * actually holds, and so they are still right when a manifest was ATTACHED rather than freshly
+ * ingested. Single scan because both consumers run on every prealerta and a manifest can carry 20 000
+ * lines.
  */
-export async function manifestTotales(manifestId: string): Promise<ManifiestoTotales> {
+async function scanManifestShipments(
+  manifestId: string,
+): Promise<{ totales: ManifiestoTotales; porGuia: GuiaAgregada[] }> {
   const { rows } = await query<{ data: Shipment }>(
     'SELECT data FROM shipments WHERE manifest_id = $1',
     [manifestId],
@@ -63,24 +81,111 @@ export async function manifestTotales(manifestId: string): Promise<ManifiestoTot
   let pesoKg = 0;
   const guias = new Set<string>();
   const bultos = new Set<string>();
+  // Accumulators kept per normalized guía. `piezas`/`pesoKg` stay null until a line actually declares
+  // a finite value, so "not declared" and "declared as zero" stay distinguishable.
+  const porGuia = new Map<
+    string,
+    { guiaRaw: string; piezas: number | null; pesoKg: number | null; bultos: Set<string> }
+  >();
+
   for (const r of rows) {
     const s = r.data ?? ({} as Shipment);
-    if (typeof s.quantity === 'number' && Number.isFinite(s.quantity)) piezas += s.quantity;
-    if (typeof s.weightKg === 'number' && Number.isFinite(s.weightKg)) pesoKg += s.weightKg;
-    if (s.guideId) guias.add(normGuia(String(s.guideId)));
+    const qty = typeof s.quantity === 'number' && Number.isFinite(s.quantity) ? s.quantity : null;
+    const wt = typeof s.weightKg === 'number' && Number.isFinite(s.weightKg) ? s.weightKg : null;
+    if (qty !== null) piezas += qty;
+    if (wt !== null) pesoKg += wt;
+
     // `bulto` identifies the carton a line sits in. Only when the manifest populates it can a carton
     // count be derived at all.
-    if (s.bulto !== undefined && s.bulto !== null && String(s.bulto).trim() !== '') {
-      bultos.add(String(s.bulto).trim());
+    const bulto =
+      s.bulto !== undefined && s.bulto !== null && String(s.bulto).trim() !== ''
+        ? String(s.bulto).trim()
+        : null;
+    if (bulto) bultos.add(bulto);
+
+    const raw = s.guideId ? String(s.guideId) : '';
+    const norm = normGuia(raw);
+    if (!norm) continue;
+    guias.add(norm);
+    let acc = porGuia.get(norm);
+    if (!acc) {
+      acc = { guiaRaw: raw, piezas: null, pesoKg: null, bultos: new Set<string>() };
+      porGuia.set(norm, acc);
     }
+    if (qty !== null) acc.piezas = (acc.piezas ?? 0) + qty;
+    if (wt !== null) acc.pesoKg = (acc.pesoKg ?? 0) + wt;
+    if (bulto) acc.bultos.add(bulto);
   }
+
   return {
-    piezas,
-    pesoKg: Number(pesoKg.toFixed(3)),
-    cartones: bultos.size > 0 ? bultos.size : null,
-    guias: [...guias],
-    lineas: rows.length,
+    totales: {
+      piezas,
+      pesoKg: Number(pesoKg.toFixed(3)),
+      cartones: bultos.size > 0 ? bultos.size : null,
+      guias: [...guias],
+      lineas: rows.length,
+    },
+    porGuia: [...porGuia.entries()].map(([guiaNorm, a]) => ({
+      guiaNorm,
+      guiaRaw: a.guiaRaw,
+      piezas: a.piezas,
+      cartones: a.bultos.size > 0 ? a.bultos.size : null,
+      pesoKg: a.pesoKg === null ? null : Number(a.pesoKg.toFixed(3)),
+    })),
   };
+}
+
+/** Totals only — kept for callers that do not care about the per-guía breakdown. */
+export async function manifestTotales(manifestId: string): Promise<ManifiestoTotales> {
+  return (await scanManifestShipments(manifestId)).totales;
+}
+
+/**
+ * Materialize the house guías of an operación (PRD-02 §8.5).
+ *
+ * The guía casa is the unit of planning, of partial retención and of pedimento coverage, so it needs a
+ * row of its own rather than being re-derived from manifest lines on demand — and PA-07 ("this guía is
+ * already on another open operación") is only answerable at all once the guías are queryable across
+ * operaciones.
+ *
+ * Idempotent by `(operacion_id, guia_norm)`: a prealerta resend with a corrected manifiesto refreshes
+ * the aggregates in place. `estado` is deliberately NOT part of the update — a guía already marked
+ * `retenida` or `no_transmitida` must never be walked back to `declarada` by a re-ingest — and neither
+ * is an already-attributed `client_id`, for the same reason. The client is seeded from the operación
+ * because nothing in today's manifiesto distinguishes per-guía ownership; when a guía máster carries
+ * cargo for several clients (R29) that attribution is a later, human or pedimento-driven, refinement.
+ */
+export async function syncOperacionGuias(input: {
+  operacionId: string;
+  clientId: string | null;
+  guias: GuiaAgregada[];
+}): Promise<number> {
+  const { operacionId, clientId, guias } = input;
+  if (!guias.length) return 0;
+
+  const res = await query(
+    `INSERT INTO operacion_guias
+       (operacion_id, guia_norm, guia_raw, client_id, piezas, cartones, peso_kg)
+     SELECT $1, g.guia_norm, g.guia_raw, $2, g.piezas, g.cartones, g.peso_kg
+       FROM unnest($3::text[], $4::text[], $5::int[], $6::int[], $7::numeric[])
+            AS g(guia_norm, guia_raw, piezas, cartones, peso_kg)
+     ON CONFLICT (operacion_id, guia_norm) DO UPDATE
+       SET guia_raw  = COALESCE(EXCLUDED.guia_raw, operacion_guias.guia_raw),
+           client_id = COALESCE(operacion_guias.client_id, EXCLUDED.client_id),
+           piezas    = EXCLUDED.piezas,
+           cartones  = COALESCE(EXCLUDED.cartones, operacion_guias.cartones),
+           peso_kg   = EXCLUDED.peso_kg`,
+    [
+      operacionId,
+      clientId,
+      guias.map((g) => g.guiaNorm),
+      guias.map((g) => g.guiaRaw),
+      guias.map((g) => g.piezas),
+      guias.map((g) => g.cartones),
+      guias.map((g) => g.pesoKg),
+    ],
+  );
+  return res.rowCount ?? 0;
 }
 
 export async function ingestManifiestoFromPrealerta(input: {
@@ -187,7 +292,9 @@ export async function ingestManifiestoFromPrealerta(input: {
     manifestId,
   ]);
 
-  const totales = await manifestTotales(manifestId);
+  // One scan of the gold layer feeds both the cotejo totals and the operación's house guías.
+  const { totales, porGuia } = await scanManifestShipments(manifestId);
+  const guias = await syncOperacionGuias({ operacionId, clientId, guias: porGuia });
 
   await recordAudit({
     userId: null,
@@ -199,6 +306,7 @@ export async function ingestManifiestoFromPrealerta(input: {
       mawb,
       counts: parsed.counts,
       promovidas,
+      guias,
       totales,
       sheetName: parsed.sheetName,
       unmappedHeaders: parsed.unmappedHeaders,
@@ -211,6 +319,7 @@ export async function ingestManifiestoFromPrealerta(input: {
     manifestId,
     counts: parsed.counts,
     promovidas,
+    guias,
     totales,
   };
 }

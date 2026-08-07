@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
 import type { FlightSnapshot } from '../../src/services/flightProviders';
+import { COTEJO_RULESET_VERSION } from '../../../shared/operaciones/cotejo';
 
 /**
  * Flight refresh: the behaviours that matter are (a) etapa is DERIVED from the feed and only ever
@@ -77,7 +78,9 @@ describe('refreshVueloForOperacion — etapa is derived from the feed', () => {
       'SELECT etapa, vuelo_id, cotejo_version FROM operaciones WHERE id = $1', [id]);
     expect(op.rows[0].etapa).toBe('en_vuelo');
     expect(op.rows[0].vuelo_id).toBeTruthy();
-    expect(op.rows[0].cotejo_version).toBe('2026-08a');
+    // The stamp is the ruleset the finding can be re-derived from, so assert it tracks the engine
+    // rather than a literal this test would have to chase on every rule addition.
+    expect(op.rows[0].cotejo_version).toBe(COTEJO_RULESET_VERSION);
 
     const ev = await query<{ tipo: string; origen: string }>(
       'SELECT tipo, origen FROM operacion_eventos WHERE operacion_id = $1', [id]);

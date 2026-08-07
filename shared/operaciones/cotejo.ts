@@ -12,31 +12,39 @@
 // which is the opposite of the goal — the flag is recorded, notified and fed to the contingency
 // engine (PRD-02 principle P1).
 
-export const COTEJO_RULESET_VERSION = '2026-08a';
+export const COTEJO_RULESET_VERSION = '2026-08b';
 
 /**
- * The nine rules. Only the flight rules are IMPLEMENTED so far; the manifest rules need the manifest
- * ingested and reconciled against the prealerta totals and are the next increment. They are listed
- * here so the vocabulary is fixed and the gap is explicit rather than forgotten.
+ * The rule vocabulary. Each entry states its own implementation status, so the gaps stay visible
+ * instead of being rediscovered later.
+ *
+ * PA-09 (CSA) is the one that cannot be built yet, and the reason is worth recording: detecting that
+ * cargo is consigned to a DIFFERENT agencia aduanal requires the consignee patente, and none of the
+ * artefacts we actually receive today declares it — not the prealerta subject, not the manifiesto
+ * columns the parser maps, not the AWB text we extract. It becomes implementable once the manifiesto
+ * is confirmed to carry a patente column or the AWB consignee is parsed. Guessing from the consignee
+ * NAME would produce false accusations of mis-consignment, which is the worst kind of false positive
+ * this system could emit.
  */
 export const CODIGOS_DISCREPANCIA = {
-  /** cartones del correo ≠ del manifiesto — PENDIENTE */
+  /** cartones del correo ≠ del manifiesto — IMPLEMENTADA */
   PA_01: 'PA-01',
-  /** piezas del correo ≠ del manifiesto — PENDIENTE */
+  /** piezas del correo ≠ del manifiesto — IMPLEMENTADA */
   PA_02: 'PA-02',
-  /** peso del correo ≠ del manifiesto (con tolerancia) — PENDIENTE */
+  /** peso del correo ≠ del manifiesto (con tolerancia) — IMPLEMENTADA */
   PA_03: 'PA-03',
   /** el vuelo declarado no corresponde a la ruta declarada — IMPLEMENTADA */
   PA_04: 'PA-04',
   /** el ETA declarado es inconsistente con el itinerario real — IMPLEMENTADA */
   PA_05: 'PA-05',
-  /** piezas totales ≠ suma de piezas por caja del manifiesto — PENDIENTE */
+  /** piezas totales ≠ suma por caja — NO EVALUABLE con el modelo actual, ver cotejarManifiesto */
   PA_06: 'PA-06',
-  /** la guía máster ya existe en otra operación abierta — PENDIENTE */
+  /** guía casa duplicada en otra operación abierta — IMPLEMENTADA */
   PA_07: 'PA-07',
-  /** el remitente no resuelve a ningún cliente conocido — PENDIENTE */
+  /** el remitente no resuelve a ningún cliente conocido — IMPLEMENTADA */
   PA_08: 'PA-08',
-  /** consignada a otra agencia aduanal, falta CSA — PENDIENTE */
+  /** consignada a otra agencia aduanal, falta CSA — PENDIENTE: requiere la patente consignataria,
+   *  que ningún artefacto que recibimos hoy declara. Ver la nota en el encabezado. */
   PA_09: 'PA-09',
   /** el vuelo declarado no pudo verificarse contra ninguna fuente — IMPLEMENTADA */
   PA_10: 'PA-10',
@@ -314,6 +322,78 @@ export const CODIGOS_MANIFIESTO: readonly CodigoDiscrepancia[] = [
   CODIGOS_DISCREPANCIA.PA_01,
   CODIGOS_DISCREPANCIA.PA_02,
   CODIGOS_DISCREPANCIA.PA_03,
+];
+
+// ---------------------------------------------------------------------------
+// Operation-level rules — PA-07 (duplicate cargo) and PA-08 (unknown sender).
+// ---------------------------------------------------------------------------
+
+export interface ContextoOperacion {
+  /** Resolved client, null when the sender matched nothing. */
+  clientId: string | null;
+  /** How the client was identified, so a weak match can be reported as weak. */
+  clientMatchedBy: string;
+  remitente: string | null;
+  /**
+   * House guías that already appear on a DIFFERENT open operación. The same cargo declared twice is
+   * the signal worth catching — a duplicate guía máster cannot occur, because `operaciones.mawb`
+   * carries a unique constraint, so the database prevents that case structurally rather than the
+   * cotejo detecting it after the fact.
+   */
+  guiasDuplicadas: string[];
+}
+
+/**
+ * PA-07 and PA-08.
+ *
+ * PA-07 is an ERROR: the same house guía on two open operaciones means one shipment is declared twice,
+ * which is either a clerical duplicate or an attempt to move the same cargo under two records. Either
+ * way a human must look before anything is planned.
+ *
+ * PA-08 is an ADVERTENCIA, and deliberately so. An unrecognized sender usually just means a new client
+ * or a new mailbox, not misconduct — but it must never be silent, because until the client is resolved
+ * the shipment has no tariff, no delivery address, and cannot appear in anyone's monthly report to the
+ * authority. A weak name-only match is reported too: it is not a failure, but a reviewer should know
+ * the identification rested on a subject line rather than an address.
+ */
+export function cotejarOperacion(ctx: ContextoOperacion): Discrepancia[] {
+  const out: Discrepancia[] = [];
+
+  if (ctx.guiasDuplicadas.length) {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_07,
+      severidad: 'error',
+      mensaje:
+        `${ctx.guiasDuplicadas.length} guía(s) de esta operación ya aparecen en otra operación abierta.`,
+      detalle: { guias: ctx.guiasDuplicadas.slice(0, 20), total: ctx.guiasDuplicadas.length },
+    });
+  }
+
+  if (!ctx.clientId) {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_08,
+      severidad: 'advertencia',
+      mensaje: 'El remitente no corresponde a ningún cliente registrado.',
+      detalle: { remitente: ctx.remitente },
+    });
+  } else if (ctx.clientMatchedBy === 'nombre_asunto') {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_08,
+      severidad: 'informativa',
+      mensaje:
+        'El cliente se identificó por el nombre en el asunto, no por el correo del remitente. ' +
+        'Conviene registrar el correo del remitente en la plataforma del cliente.',
+      detalle: { remitente: ctx.remitente, matchedBy: ctx.clientMatchedBy },
+    });
+  }
+
+  return out;
+}
+
+/** Codes owned by the operation-level rules. */
+export const CODIGOS_OPERACION: readonly CodigoDiscrepancia[] = [
+  CODIGOS_DISCREPANCIA.PA_07,
+  CODIGOS_DISCREPANCIA.PA_08,
 ];
 
 /** Codes owned by the flight rules. */

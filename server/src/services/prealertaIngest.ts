@@ -13,12 +13,15 @@ import {
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
 import { refreshVueloForOperacion } from './vuelosService';
 import { ingestManifiestoFromPrealerta } from './manifiestoIngest';
+import { resolveClientForPrealerta } from './clientResolution';
 import { runRiskForManifest } from './riskService';
 import {
   CODIGOS_MANIFIESTO,
+  CODIGOS_OPERACION,
   COTEJO_RULESET_VERSION,
   PESO_TOLERANCIA_PCT_DEFAULT,
   cotejarManifiesto,
+  cotejarOperacion,
   mergeDiscrepancias,
   type Discrepancia,
 } from '../../../shared/operaciones/cotejo';
@@ -201,6 +204,10 @@ export async function ingestPrealerta(
     return { status: 'ignored', reason: 'sin_guia_master' };
   }
 
+  // Resolve the client before anything is written, so client_id lands on the operación's INSERT rather
+  // than needing a follow-up UPDATE — and so the per-client parser vocabulary can be applied.
+  const cliente = await resolveClientForPrealerta({ senderEmail: senderEmail(payload), subject });
+
   // ---- Evidence first (rule R-A). Anything that throws here propagates so the caller can 5xx and
   // let AGORA/Sidekiq retry; nothing has been committed yet at this point.
   const policy = await loadScanPolicy();
@@ -265,8 +272,8 @@ export async function ingestPrealerta(
     const op = await q(
       `INSERT INTO operaciones (
          mawb, mawb_raw, origen_iata, destino_iata, numero_vuelo, etd_origen, eta_pais,
-         cartones_prealerta, piezas_prealerta, peso_kg_prealerta, agora_conversation_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         cartones_prealerta, piezas_prealerta, peso_kg_prealerta, agora_conversation_id, client_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (mawb) DO UPDATE SET
          mawb_raw           = COALESCE(EXCLUDED.mawb_raw, operaciones.mawb_raw),
          origen_iata        = COALESCE(EXCLUDED.origen_iata, operaciones.origen_iata),
@@ -277,8 +284,9 @@ export async function ingestPrealerta(
          cartones_prealerta = COALESCE(EXCLUDED.cartones_prealerta, operaciones.cartones_prealerta),
          piezas_prealerta   = COALESCE(EXCLUDED.piezas_prealerta, operaciones.piezas_prealerta),
          peso_kg_prealerta  = COALESCE(EXCLUDED.peso_kg_prealerta, operaciones.peso_kg_prealerta),
-         agora_conversation_id = COALESCE(EXCLUDED.agora_conversation_id, operaciones.agora_conversation_id)
-       RETURNING id, mawb, (xmax = 0) AS created`,
+         agora_conversation_id = COALESCE(EXCLUDED.agora_conversation_id, operaciones.agora_conversation_id),
+         client_id             = COALESCE(operaciones.client_id, EXCLUDED.client_id)
+       RETURNING id, mawb, client_id, (xmax = 0) AS created`,
       [
         mawb,
         parsed.fields.mawbRaw ?? null,
@@ -291,9 +299,15 @@ export async function ingestPrealerta(
         parsed.fields.piezas ?? null,
         parsed.fields.pesoKg ?? null,
         conversationId != null ? String(conversationId) : null,
+        cliente.clientId,
       ],
     );
-    const operacion = op.rows[0] as { id: string; mawb: string; created: boolean };
+    const operacion = op.rows[0] as {
+      id: string;
+      mawb: string;
+      client_id: string | null;
+      created: boolean;
+    };
 
     const ver = await q(
       `SELECT COALESCE(MAX(version), 0) + 1 AS next FROM prealertas WHERE operacion_id = $1`,
@@ -418,7 +432,7 @@ export async function ingestPrealerta(
         operacionId: result.operacion.id,
         mawb: result.operacion.mawb,
         mawbRaw: parsed.fields.mawbRaw ?? null,
-        clientId: null,
+        clientId: result.operacion.client_id,
         bytes: manifiesto.bytes,
         fileId: manifiesto.fileId,
         contentHash: manifiesto.contentHash,
@@ -541,6 +555,92 @@ export async function ingestPrealerta(
     } catch (err) {
       console.warn('[prealertaIngest] no se pudo ingestar el manifiesto adjunto:', err);
     }
+  }
+
+  // ---- Operation-level cotejo: PA-07 duplicate cargo, PA-08 unknown sender.
+  //
+  // ORDER: this runs AFTER the manifiesto ingest, and that is load-bearing rather than incidental.
+  // PA-07 compares this caso's house guías against every other open operación's, and the guías only
+  // exist in `operacion_guias` once the manifiesto has been ingested and promoted. Run before that
+  // step and the comparison set is empty, so PA-07 could never fire on a first ingest — the exact case
+  // it exists for. PA-08 does not care where it runs, so the later position costs nothing.
+  //
+  // Best-effort like every other post-commit step: a duplicate-cargo check that throws must not
+  // unwind a caso whose evidence is already archived.
+  try {
+    const dupes = await query<{ guia_norm: string }>(
+      `SELECT DISTINCT g.guia_norm
+         FROM operacion_guias g
+         JOIN operaciones o2 ON o2.id = g.operacion_id
+        WHERE g.operacion_id <> $1
+          AND o2.etapa NOT IN ('entregado','cerrada','cancelada')
+          AND g.guia_norm IN (SELECT guia_norm FROM operacion_guias WHERE operacion_id = $1)
+        ORDER BY g.guia_norm`,
+      [result.operacion.id],
+    );
+    const findings = cotejarOperacion({
+      clientId: result.operacion.client_id,
+      clientMatchedBy: cliente.matchedBy,
+      remitente: senderEmail(payload),
+      guiasDuplicadas: dupes.rows.map((r) => r.guia_norm),
+    });
+    const cur = await query<{ discrepancias: Discrepancia[] | null }>(
+      'SELECT discrepancias FROM operaciones WHERE id = $1',
+      [result.operacion.id],
+    );
+    await query(
+      `UPDATE operaciones SET discrepancias = $2::jsonb, cotejo_version = $3 WHERE id = $1`,
+      [
+        result.operacion.id,
+        JSON.stringify(
+          mergeDiscrepancias(cur.rows[0]?.discrepancias ?? null, findings, CODIGOS_OPERACION),
+        ),
+        COTEJO_RULESET_VERSION,
+      ],
+    );
+
+    // A red flag that lives only in a mutable jsonb column is not auditable. When PA-07/PA-08 actually
+    // fire, the finding goes in the append-only ledger and the hash chain too — otherwise a duplicate
+    // guía could be silently overwritten by the next poll with nothing left to show an auditor. Only
+    // when there is something to say, so a clean caso does not gain a noise event.
+    if (findings.length) {
+      await query(
+        `INSERT INTO operacion_eventos
+           (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+         VALUES ($1,$2,'COTEJO_EJECUTADO','sistema',now(),$3)`,
+        [
+          result.operacion.id,
+          result.operacion.mawb,
+          JSON.stringify({
+            alcance: 'operacion',
+            clienteResuelto: {
+              clientId: result.operacion.client_id,
+              matchedBy: cliente.matchedBy,
+              evidencia: cliente.evidence,
+            },
+            remitente: senderEmail(payload),
+            discrepancias: findings,
+            cotejoVersion: COTEJO_RULESET_VERSION,
+          }),
+        ],
+      );
+      await recordAudit({
+        userId: null,
+        action: 'COTEJO_EJECUTADO',
+        entity: 'operacion',
+        entityId: result.operacion.id,
+        after: {
+          mawb: result.operacion.mawb,
+          alcance: 'operacion',
+          clientId: result.operacion.client_id,
+          clientMatchedBy: cliente.matchedBy,
+          discrepancias: findings.map((d) => ({ codigo: d.codigo, severidad: d.severidad })),
+        },
+        ip: null,
+      });
+    }
+  } catch (err) {
+    console.warn('[prealertaIngest] cotejo de operación falló:', err);
   }
 
   // Resolve the flight immediately rather than waiting for the next tick. The declared ETA drives the

@@ -138,6 +138,9 @@ describe('determinism', () => {
     const a = cotejarVuelo(declarado, observado({ destinoIata: 'MEX' }));
     const b = cotejarVuelo(declarado, observado({ destinoIata: 'MEX' }));
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
-    expect(COTEJO_RULESET_VERSION).toBe('2026-08a');
+    // Pinned to a literal on purpose: the version is the handle an auditor uses to re-derive a
+    // finding, so a bump must be a deliberate edit here rather than something that drifts silently.
+    // Bumped to 2026-08b when PA-07/PA-08 (cotejarOperacion) joined the ruleset.
+    expect(COTEJO_RULESET_VERSION).toBe('2026-08b');
   });
 });

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { query } from '../../src/db/pool';
 import { truncateAll } from '../helpers/db';
+import { COTEJO_RULESET_VERSION } from '../../../shared/operaciones/cotejo';
 
 /**
  * Ingest tests. The point of most of these is ORDER and IDEMPOTENCY, not field extraction (that is
@@ -32,11 +33,31 @@ const MANIFIESTO_CSV = [
   '160-94705516-002,FUNDA PARA TELEFONO,9901000100,25,42.00,USD,CN',
 ].join('\n');
 
-const downloadAttachment = vi.fn(async (_cfg: unknown, url: string) =>
-  String(url).endsWith('.csv') || String(url).endsWith('.xlsx')
-    ? Buffer.from(MANIFIESTO_CSV, 'utf8')
-    : Buffer.from('%PDF-1.4 fake\n'),
-);
+// A second manifiesto that shares a house guía with the first (…-001) while being a different file for
+// a different guía máster. That overlap is duplicate cargo — the same shipment declared on two casos —
+// which is what PA-07 exists to catch.
+const MANIFIESTO_CSV_GUIA_COMPARTIDA = [
+  'No. de guia aerea o documento de transporte,Descripcion de la mercancia,Fraccion arancelaria,Cantidad de la mercancia,Valor en aduana declarado,Moneda,Pais de procedencia',
+  '160-94705516-001,AURICULARES INALAMBRICOS,9901000100,10,85.50,USD,CN',
+  '160-94705516-003,CABLE USB TIPO C,9901000100,5,12.00,USD,CN',
+].join('\n');
+
+/**
+ * Default attachment fetcher. Restored in beforeEach because `vi.clearAllMocks()` clears recorded
+ * CALLS but keeps any implementation a test installed — so a test that makes the download return
+ * garbage silently broke the manifest pipeline for every test that ran after it.
+ */
+async function defaultDownload(_cfg: unknown, url: string): Promise<Buffer> {
+  if (String(url).includes('manifiesto-compartido')) {
+    return Buffer.from(MANIFIESTO_CSV_GUIA_COMPARTIDA, 'utf8');
+  }
+  if (String(url).endsWith('.csv') || String(url).endsWith('.xlsx')) {
+    return Buffer.from(MANIFIESTO_CSV, 'utf8');
+  }
+  return Buffer.from('%PDF-1.4 fake\n');
+}
+
+const downloadAttachment = vi.fn(defaultDownload);
 const setConversationCustomAttributes = vi.fn(async () => {});
 const scanPedimentoPdf = vi.fn(async () => ({
   verdict: 'clean' as const,
@@ -127,6 +148,7 @@ function payload(over: Record<string, unknown> = {}) {
 beforeEach(async () => {
   await truncateAll();
   vi.clearAllMocks();
+  downloadAttachment.mockImplementation(defaultDownload);
   scanPedimentoPdf.mockResolvedValue({
     verdict: 'clean',
     findings: [],
@@ -252,7 +274,9 @@ describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () 
     // Advances past 'cotejado' because risk now runs in the same pass — the state machine's eje 2
     // moving without a human is the point, so accept either post-risk state.
     expect(['cotejado', 'riesgo_ok', 'riesgo_con_hallazgos']).toContain(op.rows[0].estado_documental);
-    expect(op.rows[0].cotejo_version).toBe('2026-08a');
+    // Tracks the engine rather than a literal, so adding a rule family does not break this test for a
+    // reason that has nothing to do with what it is asserting.
+    expect(op.rows[0].cotejo_version).toBe(COTEJO_RULESET_VERSION);
 
     // The email declared 1910 pieces; the manifest totals 35. That is the red flag Fernando derived
     // in the meeting, firing automatically.
@@ -356,6 +380,213 @@ describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () 
     await ingestPrealerta(payload(), { eventId: 'evt-blk', expectedInboxId: '21' });
     const man = await query('SELECT 1 FROM manifests');
     expect(man.rows).toHaveLength(0);
+  });
+});
+
+describe('ingestPrealerta — client resolution and the operation-level cotejo', () => {
+  /** A second prealerta for a DIFFERENT guía máster whose manifiesto repeats a house guía. */
+  function payloadCompartido() {
+    const body = BODY.replace('160-94705516', '160-11223344');
+    return payload({
+      id: 5100,
+      content: body,
+      content_attributes: {
+        email: {
+          subject: 'Prealert 160-11223344',
+          message_id: '<msg-dup@client.example>',
+          from: ['robot@shein.example'],
+          text_content: { full: body },
+        },
+      },
+      attachments: [
+        {
+          id: 21,
+          file_type: 'file',
+          data_url: 'https://agora.test/blob/manifiesto-compartido.csv',
+          extension: 'csv',
+        },
+      ],
+    });
+  }
+
+  async function discrepanciasDe(operacionId: string) {
+    const { rows } = await query<{
+      discrepancias: Array<{ codigo: string; severidad: string; detalle?: Record<string, unknown> }> | null;
+    }>('SELECT discrepancias FROM operaciones WHERE id = $1', [operacionId]);
+    return rows[0].discrepancias ?? [];
+  }
+
+  it('attaches the resolved client to the caso and stays quiet about PA-08', async () => {
+    // client_platforms.email is plaintext, so the sender address matches it directly (see the note in
+    // clientResolution.ts). Without this the caso has no tariff, no delivery address and cannot appear
+    // in anyone's monthly report — which is why an unresolved sender is a reported finding.
+    const c = await query<{ id: string }>(
+      `INSERT INTO clients (name) VALUES ('SHEIN MX') RETURNING id`,
+    );
+    await query(
+      `INSERT INTO client_platforms (client_id, commercial_name, email)
+       VALUES ($1,'SHEIN','robot@shein.example')`,
+      [c.rows[0].id],
+    );
+
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-cli', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    const op = await query<{ client_id: string }>(
+      'SELECT client_id FROM operaciones WHERE id = $1',
+      [out.operacionId],
+    );
+    expect(op.rows[0].client_id).toBe(c.rows[0].id);
+
+    // Carried into the manifest too, which is what makes the per-client header mappings apply.
+    const man = await query<{ client_id: string }>('SELECT client_id FROM manifests');
+    expect(man.rows[0].client_id).toBe(c.rows[0].id);
+
+    const codes = (await discrepanciasDe(out.operacionId)).map((d) => d.codigo);
+    expect(codes).not.toContain('PA-08');
+    // The house guías are materialized, which is the precondition for PA-07 and for planning.
+    const guias = await query<{ guia_norm: string; piezas: number; client_id: string }>(
+      'SELECT guia_norm, piezas, client_id FROM operacion_guias WHERE operacion_id = $1 ORDER BY guia_norm',
+      [out.operacionId],
+    );
+    expect(guias.rows.map((g) => g.guia_norm)).toEqual(['16094705516001', '16094705516002']);
+    expect(guias.rows.map((g) => Number(g.piezas))).toEqual([10, 25]);
+    expect(guias.rows[0].client_id).toBe(c.rows[0].id);
+  });
+
+  it('reports PA-08 for an unknown sender WITHOUT clobbering the manifest findings', async () => {
+    // The merge bug this guards against: two rule families writing the same jsonb column, where a
+    // naive full replacement makes the later one erase the earlier one's red flags. PA-02 (1910
+    // declared pieces vs 35 in the manifest) must survive PA-08 being appended.
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-pa08', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    const ds = await discrepanciasDe(out.operacionId);
+    const codes = ds.map((d) => d.codigo);
+    // Both families coexist.
+    for (const c of ['PA-01', 'PA-02', 'PA-03', 'PA-08']) expect(codes).toContain(c);
+
+    const pa08 = ds.find((d) => d.codigo === 'PA-08');
+    // A warning, not an error: an unrecognized mailbox is usually a new client, not misconduct.
+    expect(pa08?.severidad).toBe('advertencia');
+    expect(pa08?.detalle).toMatchObject({ remitente: 'robot@shein.example' });
+    expect(ds.find((d) => d.codigo === 'PA-02')?.severidad).toBe('error');
+
+    const op = await query<{ client_id: string | null; cotejo_version: string }>(
+      'SELECT client_id, cotejo_version FROM operaciones WHERE id = $1',
+      [out.operacionId],
+    );
+    expect(op.rows[0].client_id).toBeNull();
+    expect(op.rows[0].cotejo_version).toBe(COTEJO_RULESET_VERSION);
+
+    // The finding also reaches the append-only ledger and the hash chain: a red flag that lived only
+    // in a mutable column could be overwritten with nothing left to show an auditor.
+    const ev = await query<{ payload: { alcance?: string; discrepancias?: Array<{ codigo: string }> } }>(
+      `SELECT payload FROM operacion_eventos
+        WHERE tipo = 'COTEJO_EJECUTADO' AND payload->>'alcance' = 'operacion'`,
+    );
+    expect(ev.rows).toHaveLength(1);
+    expect(ev.rows[0].payload.discrepancias?.map((d) => d.codigo)).toContain('PA-08');
+  });
+
+  it('fires PA-07 as an error when a second caso repeats a house guía', async () => {
+    // Two guías máster, one house guía in common: either a clerical duplicate or the same cargo being
+    // moved under two records. Both need a human before anything is planned.
+    const first = await ingestPrealerta(payload(), { eventId: 'evt-dup-1', expectedInboxId: '21' });
+    const second = await ingestPrealerta(payloadCompartido(), {
+      eventId: 'evt-dup-2',
+      expectedInboxId: '21',
+    });
+    expect(first.status).toBe('processed');
+    expect(second.status).toBe('processed');
+    if (second.status !== 'processed') return;
+
+    // Two distinct casos, each with its own guías.
+    const ops = await query<{ mawb: string }>('SELECT mawb FROM operaciones ORDER BY mawb');
+    expect(ops.rows.map((o) => o.mawb)).toEqual(['16011223344', '16094705516']);
+
+    const ds = await discrepanciasDe(second.operacionId);
+    const pa07 = ds.find((d) => d.codigo === 'PA-07');
+    expect(pa07?.severidad).toBe('error');
+    expect(pa07?.detalle).toMatchObject({ guias: ['16094705516001'], total: 1 });
+
+    // …and only the shared guía is flagged: …-003 is unique to the second caso.
+    const guias = await query<{ guia_norm: string }>(
+      'SELECT guia_norm FROM operacion_guias WHERE operacion_id = $1 ORDER BY guia_norm',
+      [second.operacionId],
+    );
+    expect(guias.rows.map((g) => g.guia_norm)).toEqual(['16094705516001', '16094705516003']);
+
+    // The FIRST caso is not retro-flagged here: PA-07 is evaluated when a caso is ingested or
+    // re-polled, so the older operación gains the finding on its next cycle. Asserted so the
+    // asymmetry is a documented property rather than a surprise.
+    expect((await discrepanciasDe(first.status === 'processed' ? first.operacionId : '')).map((d) => d.codigo))
+      .not.toContain('PA-07');
+  });
+
+  it('does not accumulate duplicate guías when the same manifiesto is resent', async () => {
+    await ingestPrealerta(payload(), { eventId: 'evt-g1', expectedInboxId: '21' });
+    const resendBody = BODY.replace('Pieces: 1910', 'Pieces: 35');
+    await ingestPrealerta(
+      payload({
+        id: 5004,
+        content: resendBody,
+        content_attributes: {
+          email: {
+            subject: 'Prealert 160-94705516 (updated)',
+            message_id: '<msg-g2@client.example>',
+            from: ['robot@shein.example'],
+            text_content: { full: resendBody },
+          },
+        },
+      }),
+      { eventId: 'evt-g2', expectedInboxId: '21' },
+    );
+    const guias = await query<{ guia_norm: string; estado: string }>(
+      'SELECT guia_norm, estado FROM operacion_guias ORDER BY guia_norm',
+    );
+    expect(guias.rows.map((g) => g.guia_norm)).toEqual(['16094705516001', '16094705516002']);
+    expect(guias.rows.every((g) => g.estado === 'declarada')).toBe(true);
+
+    // A resend must not make the caso look like duplicate cargo against itself.
+    const ds = await query<{ discrepancias: Array<{ codigo: string }> }>(
+      'SELECT discrepancias FROM operaciones',
+    );
+    expect(ds.rows[0].discrepancias.map((d) => d.codigo)).not.toContain('PA-07');
+  });
+
+  it('leaves a guía already retenida alone when the manifiesto is re-ingested', async () => {
+    // The reason `estado` is excluded from the upsert: a re-ingest walking a retención back to
+    // `declarada` would silently release cargo the authority is holding.
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-ret', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+    await query(
+      `UPDATE operacion_guias SET estado = 'retenida' WHERE guia_norm = '16094705516001'`,
+    );
+
+    const resendBody = BODY.replace('CI5218', 'CI5300');
+    await ingestPrealerta(
+      payload({
+        id: 5005,
+        content: resendBody,
+        content_attributes: {
+          email: {
+            message_id: '<msg-ret2@client.example>',
+            from: ['robot@shein.example'],
+            text_content: { full: resendBody },
+          },
+        },
+      }),
+      { eventId: 'evt-ret2', expectedInboxId: '21' },
+    );
+
+    const g = await query<{ estado: string }>(
+      `SELECT estado FROM operacion_guias WHERE guia_norm = '16094705516001'`,
+    );
+    expect(g.rows[0].estado).toBe('retenida');
   });
 });
 

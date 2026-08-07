@@ -100,6 +100,25 @@ export const TIPOS_EVENTO = [
   'SALIDA_ROJO',
   /** A photo/PDF filed from the field. Distinct from EVIDENCIA_ARCHIVADA, which is prealerta mail. */
   'EVIDENCIA_CAPTURADA',
+  // Freeze layer — holds inhibit planning, never the physical etapa; see routes/holds.ts.
+  'HOLD_ABIERTO',
+  'HOLD_CERRADO',
+  'HOLD_GLOBAL_ABIERTO',
+  'HOLD_GLOBAL_CERRADO',
+  'RETENCION_CREADA',
+  'RETENCION_LIBERADA',
+  /**
+   * A post-commit step of the ingest failed — manifest parse, risk scoring, flight lookup, the
+   * operation-level cotejo, or the AGORA mirror.
+   *
+   * Every one of those steps is deliberately best-effort: the caso and its archived evidence must
+   * survive a malformed spreadsheet or a provider outage (PRD-02 principle P1). But "best-effort" was
+   * implemented as console.warn, which means the operational complaint that produced this event type —
+   * "no hay un log de errores claro" — was literally true: a caso could sit there missing its manifest
+   * with nothing anywhere to say why. This makes the failure a first-class, append-only timeline row
+   * mirrored into the audit chain, so the gap is visible to the same people who see the caso.
+   */
+  'INGESTA_INCIDENCIA',
 ] as const;
 export type TipoEvento = (typeof TIPOS_EVENTO)[number];
 

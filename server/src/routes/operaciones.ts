@@ -343,7 +343,14 @@ operacionesRouter.post(
         // cotejo cycle. With no manifest attached, discrepancias is left untouched entirely.
         if (manifestId) {
           const totales = await manifestTotales(manifestId);
-          const findings = cotejarManifiesto(declarado, { ...totales, lineas: totales.lineas }, { pesoToleranciaPct });
+          // The FRESH parse's provenance, not the stored one: healing a stale parse must also heal a
+          // finding the old parse made worse than it was. An inferred total can only ever produce an
+          // `informativa` — see cotejarManifiesto's doc comment on the 2026-08b incident, which is the
+          // same incident this route exists to clean up after.
+          const findings = cotejarManifiesto(declarado, { ...totales, lineas: totales.lineas }, {
+            pesoToleranciaPct,
+            provenance: parsed.provenance,
+          });
           current = mergeDiscrepancias(current, findings, CODIGOS_MANIFIESTO);
           await q(
             `UPDATE operaciones SET discrepancias = $2::jsonb, cotejo_version = $3 WHERE id = $1`,

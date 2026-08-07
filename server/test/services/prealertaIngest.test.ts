@@ -58,7 +58,17 @@ async function defaultDownload(_cfg: unknown, url: string): Promise<Buffer> {
 }
 
 const downloadAttachment = vi.fn(defaultDownload);
-const setConversationCustomAttributes = vi.fn(async () => {});
+// Typed parameters (rather than `async () => {}`) so the assertions below can read the recorded call
+// arguments without tsc rejecting an index into a zero-length tuple.
+const setConversationCustomAttributes = vi.fn(
+  async (_cfg: unknown, _conversationId: unknown, _attrs: Record<string, unknown>) => {},
+);
+/** The AGORA mirror's write path (task #24). Stubbed so these tests never touch the network. */
+const postMessage = vi.fn(
+  async (_cfg: unknown, _conversationId: unknown, _body: { content: string; private?: boolean }) => ({
+    id: 1,
+  }),
+);
 const scanPedimentoPdf = vi.fn(async () => ({
   verdict: 'clean' as const,
   findings: [],
@@ -77,7 +87,28 @@ vi.mock('../../src/services/agoraClient', async () => {
     loadAgoraConfig: () => ({ baseUrl: 'https://agora.test', accountId: '9', token: 't' }),
     downloadAttachment: (...a: unknown[]) => downloadAttachment(...(a as [unknown, string])),
     setConversationCustomAttributes: (...a: unknown[]) =>
-      setConversationCustomAttributes(...(a as [])),
+      setConversationCustomAttributes(...(a as Parameters<typeof setConversationCustomAttributes>)),
+    postMessage: (...a: unknown[]) => postMessage(...(a as Parameters<typeof postMessage>)),
+  };
+});
+
+/**
+ * The manifest step, wrapped so a test can make it fail. Defaults to the REAL implementation — the
+ * manifest pipeline genuinely running is the point of half this suite — and is restored in beforeEach
+ * because `vi.clearAllMocks()` clears calls but keeps an implementation a previous test installed.
+ */
+const manifiestoActual = await vi.importActual<typeof import('../../src/services/manifiestoIngest')>(
+  '../../src/services/manifiestoIngest',
+);
+const ingestManifiestoFromPrealerta = vi.fn(manifiestoActual.ingestManifiestoFromPrealerta);
+vi.mock('../../src/services/manifiestoIngest', async () => {
+  const actual = await vi.importActual<typeof import('../../src/services/manifiestoIngest')>(
+    '../../src/services/manifiestoIngest',
+  );
+  return {
+    ...actual,
+    ingestManifiestoFromPrealerta: (...a: unknown[]) =>
+      ingestManifiestoFromPrealerta(...(a as Parameters<typeof manifiestoActual.ingestManifiestoFromPrealerta>)),
   };
 });
 
@@ -149,6 +180,9 @@ beforeEach(async () => {
   await truncateAll();
   vi.clearAllMocks();
   downloadAttachment.mockImplementation(defaultDownload);
+  ingestManifiestoFromPrealerta.mockImplementation(manifiestoActual.ingestManifiestoFromPrealerta);
+  setConversationCustomAttributes.mockResolvedValue(undefined);
+  postMessage.mockResolvedValue({ id: 1 });
   scanPedimentoPdf.mockResolvedValue({
     verdict: 'clean',
     findings: [],
@@ -239,11 +273,120 @@ describe('ingestPrealerta — happy path', () => {
     expect(scanPedimentoPdf).toHaveBeenCalledTimes(1);
   });
 
-  it('survives AGORA rejecting the custom-attribute decoration', async () => {
+  it('survives AGORA rejecting the custom-attribute decoration, and says so in the timeline', async () => {
     setConversationCustomAttributes.mockRejectedValueOnce(new Error('boom'));
     const out = await ingestPrealerta(payload(), { eventId: 'evt-1', expectedInboxId: '21' });
     // Decoration is convenience; it must never unwind a committed caso.
     expect(out.status).toBe('processed');
+    // But it is no longer INVISIBLE: a sidebar that silently stops updating is how a coordinator ends
+    // up trusting a stale etapa.
+    const ev = await query<{ payload: { paso?: string } }>(
+      `SELECT payload FROM operacion_eventos WHERE tipo = 'INGESTA_INCIDENCIA'`,
+    );
+    expect(ev.rows.map((r) => r.payload.paso)).toEqual(['espejo_agora']);
+  });
+});
+
+describe('ingestPrealerta — the AGORA mirror (task #24)', () => {
+  it('stamps the caso state onto the conversation from the LIVE row', async () => {
+    // Composed from the row rather than hard-coded, so the sidebar shows the bandera count the cotejo
+    // just wrote instead of a fixed `etapa: prealerta`.
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-esp', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    expect(setConversationCustomAttributes).toHaveBeenCalledTimes(1);
+    const attrs = setConversationCustomAttributes.mock.calls[0][2];
+    expect(attrs).toMatchObject({
+      mawb: '16094705516',
+      operacion_id: out.operacionId,
+      etapa: 'prealerta',
+    });
+    // PA-01/PA-02/PA-03 + PA-08 all fire on this fixture; the exact number matters less than that the
+    // count is real and non-zero.
+    expect(Number(attrs.banderas)).toBeGreaterThan(0);
+  });
+
+  it('posts a PRIVATE note for the red flag the cotejo found', async () => {
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-nota', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+
+    const notas = postMessage.mock.calls.map((c) => c[2]);
+    expect(notas.length).toBeGreaterThan(0);
+    // private: internal chatter must not be emailed to the client, and a non-private note would come
+    // back through the message_created webhook looking like inbound mail.
+    expect(notas.every((n) => n.private === true)).toBe(true);
+    expect(notas.some((n) => n.content.includes('PA-02'))).toBe(true);
+  });
+
+  it('posts nothing when there is no conversation to post into', async () => {
+    // A caso recovered without conversation context must not blow up the mirror.
+    await ingestPrealerta(payload({ conversation: { inbox_id: 21 } }), {
+      eventId: 'evt-sin-conv',
+      expectedInboxId: '21',
+    });
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(setConversationCustomAttributes).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Durable ingest incidents. Every block below the commit is best-effort on purpose, but "best-effort"
+ * used to mean console.warn — i.e. invisible, which is exactly the operational complaint ("no hay un
+ * log de errores claro"). The caso must keep standing AND the failure must become a timeline row.
+ */
+describe('ingestPrealerta — a failed post-commit step is recorded, not swallowed', () => {
+  it('writes INGESTA_INCIDENCIA with paso `manifiesto` and still returns processed', async () => {
+    ingestManifiestoFromPrealerta.mockRejectedValueOnce(new Error('hoja de cálculo corrupta'));
+
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-inc', expectedInboxId: '21' });
+    // The caso stands: its evidence is archived and refusing it would have lost the shipment.
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+    expect((await query('SELECT 1 FROM operaciones')).rows).toHaveLength(1);
+    expect((await query('SELECT 1 FROM manifests')).rows).toHaveLength(0);
+
+    const ev = await query<{
+      tipo: string;
+      origen: string;
+      operacion_mawb: string;
+      payload: { paso?: string; error?: string };
+    }>(
+      `SELECT tipo, origen, operacion_mawb, payload FROM operacion_eventos
+        WHERE tipo = 'INGESTA_INCIDENCIA'`,
+    );
+    expect(ev.rows).toHaveLength(1);
+    expect(ev.rows[0].origen).toBe('sistema');
+    expect(ev.rows[0].operacion_mawb).toBe('16094705516');
+    expect(ev.rows[0].payload.paso).toBe('manifiesto');
+    expect(ev.rows[0].payload.error).toMatch(/hoja de cálculo corrupta/);
+
+    // …and in the same hash chain as everything else, so one GET /api/audit/verify covers it.
+    const audit = await query<{ after: { paso?: string }; hash: string }>(
+      `SELECT after, hash FROM audit_log WHERE action = 'INGESTA_INCIDENCIA'`,
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].after.paso).toBe('manifiesto');
+    expect(audit.rows[0].hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('reaches the AGORA thread too, so the gap is visible where humans work', async () => {
+    ingestManifiestoFromPrealerta.mockRejectedValueOnce(new Error('hoja de cálculo corrupta'));
+    await ingestPrealerta(payload(), { eventId: 'evt-inc2', expectedInboxId: '21' });
+    const notas = postMessage.mock.calls.map((c) => c[2]);
+    expect(notas.some((n) => n.content.includes('INGESTA_INCIDENCIA') && n.content.includes('manifiesto'))).toBe(
+      true,
+    );
+  });
+
+  it('records paso `vuelo` when the flight lookup fails, without touching the caso', async () => {
+    refreshVueloForOperacion.mockRejectedValueOnce(new Error('proveedor caído'));
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-inc3', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    const ev = await query<{ payload: { paso?: string } }>(
+      `SELECT payload FROM operacion_eventos WHERE tipo = 'INGESTA_INCIDENCIA'`,
+    );
+    expect(ev.rows.map((r) => r.payload.paso)).toEqual(['vuelo']);
   });
 });
 

@@ -5,6 +5,7 @@ import { query } from '../db/pool';
 import { withTransaction } from '../db/tx';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { mirrorEstadoDeOperacion, mirrorEventoToAgora } from '../services/agoraMirror';
 import { saveFile } from '../storage/files';
 import { validate } from '../validation/middleware';
 import {
@@ -107,6 +108,8 @@ type Resultado =
       etapaAnterior: Etapa;
       etapa: Etapa;
       semaforo: 'green' | 'red' | null;
+      /** Carried out of the transaction so the AGORA mirror needs no second SELECT. */
+      agoraConversationId: string | null;
       payload: Record<string, unknown>;
     };
 
@@ -164,7 +167,7 @@ campoRouter.post(
         // FOR UPDATE: two tramitadores on the same guía (or a queued retry racing the original) must
         // not both read the same etapa and both decide they are advancing it.
         const op = await q(
-          `SELECT id, mawb, etapa, semaforo, modulacion_at
+          `SELECT id, mawb, etapa, semaforo, modulacion_at, agora_conversation_id
              FROM operaciones WHERE id = $1 FOR UPDATE`,
           [id],
         );
@@ -175,6 +178,7 @@ campoRouter.post(
           etapa: Etapa;
           semaforo: 'green' | 'red' | null;
           modulacion_at: Date | null;
+          agora_conversation_id: string | null;
         };
         const etapaActual = operacion.etapa;
 
@@ -281,6 +285,7 @@ campoRouter.post(
           etapaAnterior: etapaActual,
           etapa: destino ?? etapaActual,
           semaforo: tipo === 'MODULACION' ? (semaforo ?? null) : operacion.semaforo,
+          agoraConversationId: operacion.agora_conversation_id,
           payload,
         };
       });
@@ -327,6 +332,27 @@ campoRouter.post(
         },
         ip: req.ip,
       });
+
+      // Mirror the field fact into the client's AGORA thread as a PRIVATE note (task #24). All seven
+      // buttons are mirrored: each one is the trigger for somebody else's next action, and the
+      // coordinator already has this conversation open. Best-effort by construction — agoraMirror
+      // swallows its own failures — and wrapped anyway, because a tramitador in a warehouse must never
+      // get a 500 for a fact we already committed to the ledger.
+      try {
+        // Guarded on the conversation we already read: a caso with no thread would otherwise cost two
+        // pointless round trips (the state mirror re-SELECTs the row) on every field button.
+        if (resultado.agoraConversationId) {
+          await mirrorEventoToAgora({
+            operacionId: id,
+            agoraConversationId: resultado.agoraConversationId,
+            tipo: tipoLedger(tipo),
+            payloadResumen: resultado.payload,
+          });
+          await mirrorEstadoDeOperacion(id);
+        }
+      } catch (err) {
+        console.warn('[campo] no se pudo espejar el evento en AGORA:', err);
+      }
 
       res.status(201).json({
         ok: true,

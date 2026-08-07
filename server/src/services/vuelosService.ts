@@ -1,6 +1,7 @@
 import { withTransaction } from '../db/tx';
 import { query } from '../db/pool';
 import { recordAudit } from './audit';
+import { mirrorEstadoDeOperacion, mirrorEventoToAgora } from './agoraMirror';
 import { isAeroSnapshot, lookupFlight } from './flightProviders';
 import { parseFlightNumber, type EstadoVuelo } from '../../../shared/operaciones/vuelo';
 import { canAdvanceEtapa, type Etapa } from '../../../shared/operaciones/estados';
@@ -46,6 +47,8 @@ interface OperacionRow {
   etapa: Etapa;
   vuelo_id: string | null;
   discrepancias: Discrepancia[] | null;
+  /** Where the human side of this caso lives, for the AGORA mirror. Null for a caso not born of mail. */
+  agora_conversation_id: string | null;
 }
 
 /**
@@ -77,7 +80,7 @@ function mergeFlight(existing: Discrepancia[] | null, flightFindings: Discrepanc
 export async function refreshVueloForOperacion(operacionId: string): Promise<RefreshResult> {
   const opRes = await query<OperacionRow>(
     `SELECT id, mawb, numero_vuelo, origen_iata, destino_iata, etd_origen, eta_pais,
-            etapa, vuelo_id, discrepancias
+            etapa, vuelo_id, discrepancias, agora_conversation_id
        FROM operaciones WHERE id = $1`,
     [operacionId],
   );
@@ -302,6 +305,35 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
       },
       ip: null,
     });
+
+    // Mirror into the client's AGORA thread (task #24). `esEventoEspejable` drops VUELO_ACTUALIZADO,
+    // which is what the four-minute poll emits: a thread that posts a near-identical note every cycle
+    // gets muted by humans, and a muted thread is worse than no mirror. Only a landing, a delay or a
+    // cancellation — the three facts that change somebody's plan for the day — get through.
+    //
+    // Wrapped even though agoraMirror swallows its own failures: this function is what the ops tick
+    // calls in a loop, and decoration must never be able to abort a refresh whose facts are committed.
+    if (result.tipo !== 'VUELO_ACTUALIZADO' && op.agora_conversation_id) {
+      try {
+        await mirrorEventoToAgora({
+          operacionId: op.id,
+          agoraConversationId: op.agora_conversation_id,
+          tipo: result.tipo,
+          payloadResumen: {
+            numeroVuelo: parts.iataFlight,
+            estado: snapshot.estado,
+            fuente: snapshot.fuente,
+            etaEstimado: snapshot.etaEstimado,
+            arriboReal: snapshot.arriboReal,
+          },
+        });
+        // Re-read and re-stamp the whole attribute set: the Chatwoot endpoint REPLACES it, so composing
+        // it from the live row is what keeps the field capture's `semaforo` from being erased here.
+        await mirrorEstadoDeOperacion(op.id);
+      } catch (err) {
+        console.warn('[vuelosService] no se pudo espejar el evento en AGORA:', err);
+      }
+    }
   }
 
   return {

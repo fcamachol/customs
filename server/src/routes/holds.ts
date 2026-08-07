@@ -3,6 +3,7 @@ import { query } from '../db/pool';
 import { withTransaction } from '../db/tx';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
+import { mirrorEventoToAgora } from '../services/agoraMirror';
 import { validate } from '../validation/middleware';
 import {
   holdGlobalBody,
@@ -138,11 +139,6 @@ async function materializarAbiertas(q: Q): Promise<Array<{ id: string; mawb: str
  * taken from the office (or reported from the dock and entered by the office), never facts derived by
  * the system from a feed. The `motivo` travels in the payload as well as in the row, because the
  * timeline is what gets read six weeks later and it has to be self-contained.
- *
- * TODO(orchestrator): add to TIPOS_EVENTO when estados.ts frees up —
- * 'HOLD_ABIERTO', 'HOLD_CERRADO', 'HOLD_GLOBAL_ABIERTO', 'HOLD_GLOBAL_CERRADO',
- * 'RETENCION_CREADA', 'RETENCION_LIBERADA'. `operacion_eventos.tipo` carries no DB constraint, so
- * these insert correctly today; the shared vocabulary is owned by another agent right now.
  */
 async function registrarEvento(
   q: Q,
@@ -191,6 +187,44 @@ async function registrarEventoGlobal(
     [args.tipo, JSON.stringify(args.payload), args.userId, args.operacionIds],
   );
   return rowCount ?? 0;
+}
+
+/**
+ * Echo a freeze/retención into each affected caso's AGORA conversation, as private notes.
+ *
+ * Best-effort by contract — the mirror itself filters by significance, no-ops when AGORA or the
+ * conversation is absent, and never throws — so this can run after recordAudit without ever putting
+ * the record at risk. Capped: a global freeze can touch every open caso, and hammering AGORA with
+ * hundreds of notes helps nobody; the ledger already has one row per caso, which is the authoritative
+ * per-shipment answer.
+ */
+const MAX_ESPEJOS_POR_ACCION = 20;
+
+async function espejarEnAgora(
+  operacionIds: string[],
+  tipo: string,
+  payloadResumen: Record<string, unknown>,
+): Promise<void> {
+  if (!operacionIds.length) return;
+  try {
+    const { rows } = await query<{ id: string; agora_conversation_id: string }>(
+      `SELECT id, agora_conversation_id
+         FROM operaciones
+        WHERE id = ANY($1::uuid[]) AND agora_conversation_id IS NOT NULL
+        LIMIT ${MAX_ESPEJOS_POR_ACCION}`,
+      [operacionIds],
+    );
+    for (const r of rows) {
+      await mirrorEventoToAgora({
+        operacionId: r.id,
+        agoraConversationId: r.agora_conversation_id,
+        tipo,
+        payloadResumen,
+      });
+    }
+  } catch (err) {
+    console.warn('[holds] no se pudo espejar a AGORA:', err);
+  }
 }
 
 // =================================================================================================
@@ -262,6 +296,7 @@ holdsRouter.post(
           holdId: hold.id,
           abiertoAt: hold.abiertoAt,
           afectadas: afectadas.map((o) => o.mawb),
+          afectadasIds: afectadas.map((o) => o.id),
           eventos,
         };
       });
@@ -287,6 +322,12 @@ holdsRouter.post(
           mawbsAfectadas: resultado.afectadas,
         },
         ip: req.ip,
+      });
+
+      await espejarEnAgora(resultado.afectadasIds ?? [], 'HOLD_GLOBAL_ABIERTO', {
+        tipoHold: tipo,
+        motivo,
+        efecto: 'Se suspende la solicitud de unidades; la operación no se programa.',
       });
 
       res.status(201).json({
@@ -365,6 +406,7 @@ holdsRouter.delete(
           kind: 'ok' as const,
           hold,
           afectadas: afectadas.length,
+          afectadasIds: afectadas.map((o) => o.id),
           aunBloqueadas: siguenBloqueadas.map((o) => o.mawb),
           eventos,
         };
@@ -390,6 +432,11 @@ holdsRouter.delete(
           mawbsAunBloqueadas: resultado.aunBloqueadas,
         },
         ip: req.ip,
+      });
+
+      await espejarEnAgora(resultado.afectadasIds ?? [], 'HOLD_GLOBAL_CERRADO', {
+        efecto: 'Se reanuda la solicitud de unidades salvo que persista un hold propio.',
+        operacionesAunBloqueadas: resultado.aunBloqueadas.length,
       });
 
       res.json({
@@ -854,6 +901,13 @@ holdsRouter.post(
           guiaEstado: resultado.guiaEstado,
         },
         ip: req.ip,
+      });
+
+      await espejarEnAgora([id], 'RETENCION_CREADA', {
+        alcance,
+        guia: resultado.guia?.guiaNorm ?? null,
+        oficioReferencia: oficioReferencia ?? null,
+        motivo,
       });
 
       res.status(201).json({

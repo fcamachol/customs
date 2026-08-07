@@ -12,7 +12,7 @@
 // which is the opposite of the goal — the flag is recorded, notified and fed to the contingency
 // engine (PRD-02 principle P1).
 
-export const COTEJO_RULESET_VERSION = '2026-08b';
+export const COTEJO_RULESET_VERSION = '2026-08c';
 
 /**
  * The rule vocabulary. Each entry states its own implementation status, so the gaps stay visible
@@ -209,6 +209,28 @@ export interface TotalesManifiesto {
   lineas: number;
 }
 
+/** The comparable totals, keyed as the parser's `provenance` map keys them. */
+export type CampoTotal = 'cartones' | 'piezas' | 'pesoKg';
+
+/**
+ * How each declared total was obtained, taken straight from the prealerta parser's `provenance`
+ * (shared/operaciones/prealerta.ts `FieldSource`). Typed as `string` rather than the parser's union so
+ * this module stays independent of the parser's vocabulary and tolerates a value read back from a
+ * stored `prealertas.parsed` blob written by an older parser version.
+ */
+export type ProvenanciaTotales = Partial<Record<CampoTotal, string>>;
+
+/**
+ * Whether a value was DEDUCED by the parser rather than stated by the client.
+ *
+ * Every inferring code path in the parser records a source prefixed `inferido` (`inferido_orden`,
+ * `inferido_propiedad`), so the prefix is the contract — a future inference tier inherits this
+ * behaviour without touching the cotejo.
+ */
+export function esValorInferido(fuente: string | undefined | null): boolean {
+  return typeof fuente === 'string' && fuente.startsWith('inferido');
+}
+
 /**
  * PA-01 (cartones), PA-02 (piezas), PA-03 (peso).
  *
@@ -227,11 +249,26 @@ export interface TotalesManifiesto {
  * worse than an absent one, because it looks like coverage. It becomes real only if the manifiesto
  * turns out to carry its own declared total as a separate field, which the outstanding sample (Q1)
  * will settle.
+ *
+ * ON PROVENANCE — the reason `opts.provenance` exists, and it is a real incident rather than a
+ * refinement. Parser 2026-08b read the ETD hour "06:00" out of a subject line and INFERRED it as
+ * `cartones: 6`; this function then compared 6 against the manifest's 134 and emitted PA-01 as an
+ * ERROR reading "los cartones de la prealerta (6) no coinciden con el manifiesto (134)". The client
+ * had declared no such thing. An error built on our own inference, worded as if the client had stated
+ * it, is worse than a missed check: it is the system accusing a client of a discrepancy the system
+ * invented, and PRD-02's whole claim to authority rests on a declared value never looking like a
+ * deduced one.
+ *
+ * So a field whose provenance starts with `inferido` is still COMPARED — the mismatch is real
+ * information and hiding it would be the opposite mistake — but its severity is capped at
+ * `informativa` and its mensaje says outright that the value was inferred and needs confirmation.
+ * Declared provenances (`forma`, `etiqueta`, `etiqueta_cliente`, `tabla`) and an absent provenance
+ * (back-compat, and the default for every caller that does not know) keep the previous behaviour.
  */
 export function cotejarManifiesto(
   declarado: TotalesDeclarados,
   manifiesto: TotalesManifiesto | null,
-  opts: { pesoToleranciaPct?: number } = {},
+  opts: { pesoToleranciaPct?: number; provenance?: ProvenanciaTotales } = {},
 ): Discrepancia[] {
   const out: Discrepancia[] = [];
   if (!manifiesto) {
@@ -243,7 +280,7 @@ export function cotejarManifiesto(
     return out;
   }
 
-  const exact: Array<[CodigoDiscrepancia, string, number | null, number | null]> = [
+  const exact: Array<[CodigoDiscrepancia, 'cartones' | 'piezas', number | null, number | null]> = [
     [CODIGOS_DISCREPANCIA.PA_01, 'cartones', declarado.cartones, manifiesto.cartones],
     [CODIGOS_DISCREPANCIA.PA_02, 'piezas', declarado.piezas, manifiesto.piezas],
   ];
@@ -267,11 +304,25 @@ export function cotejarManifiesto(
       continue;
     }
     if (dec !== man) {
+      const fuente = opts.provenance?.[campo];
+      const inferido = esValorInferido(fuente);
       out.push({
         codigo,
-        severidad: 'error',
-        mensaje: `Los ${campo} de la prealerta (${dec}) no coinciden con el manifiesto (${man}).`,
-        detalle: { campo, declarado: dec, manifiesto: man, diferencia: man - dec },
+        severidad: inferido ? 'informativa' : 'error',
+        mensaje: inferido
+          ? `Los ${campo} (inferidos: ${dec}) difieren del manifiesto (${man}); ` +
+            'valor inferido, no declarado — se requiere confirmación.'
+          : `Los ${campo} de la prealerta (${dec}) no coinciden con el manifiesto (${man}).`,
+        detalle: {
+          campo,
+          declarado: dec,
+          manifiesto: man,
+          diferencia: man - dec,
+          // Recorded on the finding itself, not only in the wording: whoever reads this later must be
+          // able to tell WHY it was demoted without re-deriving it from the parse.
+          inferido,
+          ...(fuente ? { provenance: fuente } : {}),
+        },
       });
     }
   }
@@ -296,19 +347,26 @@ export function cotejarManifiesto(
     const base = Math.max(Math.abs(declarado.pesoKg), Math.abs(manifiesto.pesoKg));
     const diff = Math.abs(manifiesto.pesoKg - declarado.pesoKg);
     if (diff / base > tol) {
+      const fuente = opts.provenance?.pesoKg;
+      const inferido = esValorInferido(fuente);
       out.push({
         codigo: CODIGOS_DISCREPANCIA.PA_03,
-        severidad: 'error',
-        mensaje:
-          `El peso de la prealerta (${declarado.pesoKg} kg) difiere del manifiesto ` +
-          `(${manifiesto.pesoKg} kg) en ${(100 * diff / base).toFixed(2)} %, ` +
-          `sobre una tolerancia de ${(100 * tol).toFixed(2)} %.`,
+        severidad: inferido ? 'informativa' : 'error',
+        mensaje: inferido
+          ? `El peso (inferido: ${declarado.pesoKg} kg) difiere del manifiesto ` +
+            `(${manifiesto.pesoKg} kg) en ${(100 * diff / base).toFixed(2)} %; ` +
+            'valor inferido, no declarado — se requiere confirmación.'
+          : `El peso de la prealerta (${declarado.pesoKg} kg) difiere del manifiesto ` +
+            `(${manifiesto.pesoKg} kg) en ${(100 * diff / base).toFixed(2)} %, ` +
+            `sobre una tolerancia de ${(100 * tol).toFixed(2)} %.`,
         detalle: {
           declarado: declarado.pesoKg,
           manifiesto: manifiesto.pesoKg,
           diferenciaKg: Number(diff.toFixed(3)),
           desviacionPct: Number((100 * diff / base).toFixed(4)),
           toleranciaPct: 100 * tol,
+          inferido,
+          ...(fuente ? { provenance: fuente } : {}),
         },
       });
     }

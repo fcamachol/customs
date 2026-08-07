@@ -7,9 +7,9 @@ import {
   buildEmailArchive,
   downloadAttachment,
   loadAgoraConfig,
-  setConversationCustomAttributes,
   type AgoraConfig,
 } from './agoraClient';
+import { mirrorEstadoDeOperacion, mirrorEventoToAgora } from './agoraMirror';
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
 import { refreshVueloForOperacion } from './vuelosService';
 import { ingestManifiestoFromPrealerta } from './manifiestoIngest';
@@ -34,6 +34,58 @@ import {
 function pesoToleranciaPct(): number {
   const raw = Number(process.env.PESO_TOLERANCIA_PCT);
   return Number.isFinite(raw) && raw > 0 ? raw : PESO_TOLERANCIA_PCT_DEFAULT;
+}
+
+/** The post-commit steps that are allowed to fail. Named so an incident is greppable and filterable. */
+type PasoIngesta = 'manifiesto' | 'riesgo' | 'vuelo' | 'cotejo_operacion' | 'espejo_agora';
+
+/**
+ * Turn a swallowed best-effort failure into a VISIBLE fact.
+ *
+ * Every block below the commit is deliberately best-effort — a malformed spreadsheet or a flight-feed
+ * outage must not cost us a caso whose evidence is already archived (PRD-02 principle P1). But until
+ * now "best-effort" meant `console.warn`, i.e. invisible: the operational complaint was exactly that
+ * there is "no clear error log", and it was correct — a caso could sit missing its manifest, its risk
+ * score or its guías with nothing anywhere saying why. The caso still stands; the failure now stands
+ * next to it, in the append-only ledger and in the audit hash chain, where the same people who see the
+ * caso see the gap.
+ *
+ * Wrapped in its own try/catch, and that is load-bearing: if recording the incident could throw, a DB
+ * hiccup during a failure would turn a degraded ingest into a failed one. A failure to record a failure
+ * gets a console.error and nothing more — no regress, no rethrow.
+ */
+async function registrarIncidencia(
+  operacion: { id: string; mawb: string },
+  paso: PasoIngesta,
+  err: unknown,
+  agoraConversationId: string | null,
+): Promise<void> {
+  const mensaje = err instanceof Error ? err.message : String(err);
+  console.warn(`[prealertaIngest] paso '${paso}' falló:`, err);
+  try {
+    await query(
+      `INSERT INTO operacion_eventos
+         (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+       VALUES ($1,$2,'INGESTA_INCIDENCIA','sistema',now(),$3)`,
+      [operacion.id, operacion.mawb, JSON.stringify({ paso, error: mensaje })],
+    );
+    await recordAudit({
+      userId: null,
+      action: 'INGESTA_INCIDENCIA',
+      entity: 'operacion',
+      entityId: operacion.id,
+      after: { mawb: operacion.mawb, paso, error: mensaje },
+      ip: null,
+    });
+    await mirrorEventoToAgora({
+      operacionId: operacion.id,
+      agoraConversationId,
+      tipo: 'INGESTA_INCIDENCIA',
+      payloadResumen: { paso, error: mensaje },
+    });
+  } catch (err2) {
+    console.error('[prealertaIngest] no se pudo registrar la incidencia de ingesta:', err2);
+  }
 }
 
 /**
@@ -286,7 +338,7 @@ export async function ingestPrealerta(
          peso_kg_prealerta  = COALESCE(EXCLUDED.peso_kg_prealerta, operaciones.peso_kg_prealerta),
          agora_conversation_id = COALESCE(EXCLUDED.agora_conversation_id, operaciones.agora_conversation_id),
          client_id             = COALESCE(operaciones.client_id, EXCLUDED.client_id)
-       RETURNING id, mawb, client_id, (xmax = 0) AS created`,
+       RETURNING id, mawb, client_id, agora_conversation_id, (xmax = 0) AS created`,
       [
         mawb,
         parsed.fields.mawbRaw ?? null,
@@ -306,6 +358,8 @@ export async function ingestPrealerta(
       id: string;
       mawb: string;
       client_id: string | null;
+      /** Read back rather than taken from the webhook: on a resend that omits it, the stored one wins. */
+      agora_conversation_id: string | null;
       created: boolean;
     };
 
@@ -426,6 +480,7 @@ export async function ingestPrealerta(
   // us the operación. A failure leaves the caso standing with its evidence archived, and shows up as a
   // discrepancy rather than as a lost shipment.
   const manifiesto = adjuntos.find((a) => a.tipo === 'manifiesto' && a.bytes);
+  const agoraConvId = result.operacion.agora_conversation_id;
   if (!blocked && manifiesto?.bytes) {
     try {
       const res = await ingestManifiestoFromPrealerta({
@@ -443,10 +498,13 @@ export async function ingestPrealerta(
         piezas: parsed.fields.piezas ?? null,
         pesoKg: parsed.fields.pesoKg ?? null,
       };
+      // The parse's provenance rides along so an INFERRED total cannot produce an `error` finding worded
+      // as a client declaration — the 2026-08b incident, see cotejarManifiesto's doc comment.
       const findings =
         res.status === 'ingestado' || res.status === 'adjuntado'
           ? cotejarManifiesto(declarado, { ...res.totales, lineas: res.totales.lineas }, {
               pesoToleranciaPct: pesoToleranciaPct(),
+              provenance: parsed.provenance,
             })
           : cotejarManifiesto(declarado, null);
 
@@ -501,6 +559,15 @@ export async function ingestPrealerta(
         },
         ip: null,
       });
+
+      // Mirrored only when the cotejo actually found a red flag: `esEventoEspejable` drops a clean run
+      // (and one whose only findings are informativas, including a demoted inferred value).
+      await mirrorEventoToAgora({
+        operacionId: result.operacion.id,
+        agoraConversationId: agoraConvId,
+        tipo: 'COTEJO_EJECUTADO',
+        payloadResumen: { discrepancias: findings },
+      });
       // Score risk immediately, on the same shipments we just promoted. This is the last link that
       // makes the pipeline self-driving: a prealerta now arrives, is archived, cotejada, and risk-scored
       // without anyone clicking anything. userId is null so the audit trail distinguishes an automatic
@@ -547,13 +614,20 @@ export async function ingestPrealerta(
               },
               ip: null,
             });
+            // Only when the engine demands documents before the previo — `riesgo_ok` needs no human.
+            await mirrorEventoToAgora({
+              operacionId: result.operacion.id,
+              agoraConversationId: agoraConvId,
+              tipo: 'RIESGO_EVALUADO',
+              payloadResumen: { summary: risk.summary },
+            });
           }
         } catch (err) {
-          console.warn('[prealertaIngest] no se pudo evaluar el riesgo automáticamente:', err);
+          await registrarIncidencia(result.operacion, 'riesgo', err, agoraConvId);
         }
       }
     } catch (err) {
-      console.warn('[prealertaIngest] no se pudo ingestar el manifiesto adjunto:', err);
+      await registrarIncidencia(result.operacion, 'manifiesto', err, agoraConvId);
     }
   }
 
@@ -638,9 +712,17 @@ export async function ingestPrealerta(
         },
         ip: null,
       });
+      // PA-07 (duplicate cargo) is an error and reaches the inbox; PA-08 alone (unknown sender) does
+      // not — it is an advertencia, and a new mailbox is not something to interrupt anyone about.
+      await mirrorEventoToAgora({
+        operacionId: result.operacion.id,
+        agoraConversationId: agoraConvId,
+        tipo: 'COTEJO_EJECUTADO',
+        payloadResumen: { alcance: 'operacion', discrepancias: findings },
+      });
     }
   } catch (err) {
-    console.warn('[prealertaIngest] cotejo de operación falló:', err);
+    await registrarIncidencia(result.operacion, 'cotejo_operacion', err, agoraConvId);
   }
 
   // Resolve the flight immediately rather than waiting for the next tick. The declared ETA drives the
@@ -651,20 +733,27 @@ export async function ingestPrealerta(
   try {
     await refreshVueloForOperacion(result.operacion.id);
   } catch (err) {
-    console.warn('[prealertaIngest] no se pudo resolver el vuelo en la ingesta:', err);
+    await registrarIncidencia(result.operacion, 'vuelo', err, agoraConvId);
   }
 
-  // Decorating the AGORA conversation is convenience for the human inbox, never a correctness
-  // requirement — so a failure here is logged and swallowed rather than unwinding a committed caso.
-  if (conversationId != null) {
-    try {
-      await setConversationCustomAttributes(cfg, conversationId, {
-        mawb: result.operacion.mawb,
-        operacion_id: result.operacion.id,
-        etapa: 'prealerta',
-      });
-    } catch (err) {
-      console.warn('[prealertaIngest] no se pudieron escribir custom_attributes en AGORA:', err);
+  // ---- Mirror the caso's state onto the AGORA conversation (task #24).
+  //
+  // LAST on purpose: `mirrorEstadoDeOperacion` reads the live row, so running it here means the sidebar
+  // shows the etapa the flight lookup just advanced and the bandera count the two cotejos just wrote,
+  // rather than the `etapa: 'prealerta'` this used to hard-code. Mirror, not move: customs remains the
+  // system of record and AGORA is the human workspace.
+  if (agoraConvId) {
+    const espejado = await mirrorEstadoDeOperacion(result.operacion.id);
+    // agoraMirror swallows its own errors, so a false here means AGORA was configured and a thread
+    // existed and the stamp still did not land — the one case worth a timeline row, because a sidebar
+    // that silently stops updating is how a coordinator ends up trusting a stale etapa.
+    if (!espejado) {
+      await registrarIncidencia(
+        result.operacion,
+        'espejo_agora',
+        'no se pudo escribir el estado en la conversación de AGORA',
+        agoraConvId,
+      );
     }
   }
 

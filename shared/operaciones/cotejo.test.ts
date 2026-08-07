@@ -140,7 +140,10 @@ describe('determinism', () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
     // Pinned to a literal on purpose: the version is the handle an auditor uses to re-derive a
     // finding, so a bump must be a deliberate edit here rather than something that drifts silently.
-    // Bumped to 2026-08b when PA-07/PA-08 (cotejarOperacion) joined the ruleset.
-    expect(COTEJO_RULESET_VERSION).toBe('2026-08b');
+    // Bumped to 2026-08b when PA-07/PA-08 (cotejarOperacion) joined the ruleset, and to 2026-08c when
+    // PA-01..PA-03 became provenance-aware (an inferred value can no longer produce an `error`), which
+    // CHANGES the severity a stored finding replays with — exactly the kind of change the stamp exists
+    // to make visible.
+    expect(COTEJO_RULESET_VERSION).toBe('2026-08c');
   });
 });

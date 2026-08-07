@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
@@ -8,6 +8,7 @@ import { query } from '../../src/db/pool';
 import { hashPassword } from '../../src/auth/password';
 import { signToken } from '../../src/auth/token';
 import { truncateAll } from '../helpers/db';
+import type { MirrorEventoInput } from '../../src/services/agoraMirror';
 
 /**
  * Field-capture route tests (PRD-02 R11, R30–R35, §13).
@@ -28,6 +29,26 @@ import { truncateAll } from '../helpers/db';
  */
 const scratch = mkdtempSync(join(tmpdir(), 'campo-'));
 process.env.FILE_STORAGE_DIR = scratch;
+
+/**
+ * The AGORA mirror (task #24) is stubbed at the module boundary: what these tests are about is that the
+ * route HANDS the field fact to the mirror and that a mirror failure cannot reach the tramitador.
+ * Whether the note is worded well, and which tipos are significant, belongs to agoraMirror.test.ts.
+ */
+const mirrorEventoToAgora = vi.fn(async (_input: MirrorEventoInput) => true);
+const mirrorEstadoDeOperacion = vi.fn(async (_operacionId: string) => true);
+vi.mock('../../src/services/agoraMirror', async () => {
+  const actual = await vi.importActual<typeof import('../../src/services/agoraMirror')>(
+    '../../src/services/agoraMirror',
+  );
+  return {
+    ...actual,
+    mirrorEventoToAgora: (...a: unknown[]) =>
+      mirrorEventoToAgora(...(a as Parameters<typeof mirrorEventoToAgora>)),
+    mirrorEstadoDeOperacion: (...a: unknown[]) =>
+      mirrorEstadoDeOperacion(...(a as Parameters<typeof mirrorEstadoDeOperacion>)),
+  };
+});
 
 const { createApp } = await import('../../src/app');
 const app = createApp();
@@ -91,6 +112,7 @@ async function eventos(tipo?: string) {
 
 beforeEach(async () => {
   await truncateAll();
+  vi.clearAllMocks();
   const hash = await hashPassword('p');
   const [tram, auto, adm] = await Promise.all([
     query<{ id: string }>(
@@ -111,8 +133,10 @@ beforeEach(async () => {
   adminToken = signToken({ userId: adm.rows[0].id, role: 'admin', tv: 0 });
 
   const op = await query<{ id: string }>(
-    `INSERT INTO operaciones (mawb, mawb_raw, numero_vuelo, etapa, arribo_vuelo_at)
-     VALUES ('160-94705516','160-94705516','CI5215','arribado', now() - interval '2 hours')
+    // agora_conversation_id: the caso came in as client mail, so the field facts have a thread to be
+    // mirrored into (task #24).
+    `INSERT INTO operaciones (mawb, mawb_raw, numero_vuelo, etapa, arribo_vuelo_at, agora_conversation_id)
+     VALUES ('160-94705516','160-94705516','CI5215','arribado', now() - interval '2 hours', '77')
      RETURNING id`,
   );
   opId = op.rows[0].id;
@@ -358,6 +382,43 @@ describe('monotonicity and idempotency (the two rules that keep the timeline hon
     expect(await eventos()).toHaveLength(antes.length);
     const audit = await query(`SELECT id FROM audit_log WHERE action='CARGA_DISPONIBLE'`);
     expect(audit.rows).toHaveLength(1);
+  });
+});
+
+describe('the AGORA mirror (task #24) — the coordinator sees the field fact in the thread', () => {
+  it('hands the event and the new state to the mirror, with the conversation off the locked row', async () => {
+    const ocurridoAt = iso(5 * MIN);
+    await evento({ tipo: 'MODULACION', semaforo: 'red', ocurridoAt }).expect(201);
+
+    expect(mirrorEventoToAgora).toHaveBeenCalledTimes(1);
+    expect(mirrorEventoToAgora.mock.calls[0][0]).toMatchObject({
+      operacionId: opId,
+      agoraConversationId: '77',
+      tipo: 'MODULACION',
+      payloadResumen: { semaforo: 'red', ocurridoAt },
+    });
+    // The state stamp is composed from the live row (Chatwoot REPLACES custom_attributes), so the
+    // route only names the operación.
+    expect(mirrorEstadoDeOperacion).toHaveBeenCalledWith(opId);
+  });
+
+  it('does not mirror a no-op retry', async () => {
+    await evento({ tipo: 'CARGA_DISPONIBLE' }).expect(201);
+    mirrorEventoToAgora.mockClear();
+    await evento({ tipo: 'CARGA_DISPONIBLE' }).expect(200);
+    expect(mirrorEventoToAgora).not.toHaveBeenCalled();
+  });
+
+  it('does not mirror a rejected capture', async () => {
+    await evento({ tipo: 'SALIDA_ROJO' }).expect(409); // not in reconocimiento
+    expect(mirrorEventoToAgora).not.toHaveBeenCalled();
+  });
+
+  it('still returns 201 when the mirror blows up', async () => {
+    // A tramitador in a warehouse must never get a 500 for a fact already committed to the ledger.
+    mirrorEventoToAgora.mockRejectedValueOnce(new Error('AGORA caída'));
+    await evento({ tipo: 'FIN_CARGA' }).expect(201);
+    expect(await eventos('FIN_CARGA')).toHaveLength(1);
   });
 });
 

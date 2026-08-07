@@ -14,6 +14,7 @@ import ReporteGeneralView from './components/ReporteGeneralView';
 import ConfigurationView from './components/ConfigurationView';
 import AutoridadView from './components/AutoridadView';
 import PrealertasView from './components/PrealertasView';
+import TorreControlView from './components/TorreControlView';
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   useEffect(() => {
@@ -47,6 +48,7 @@ function AuthenticatedApp() {
           {current === 'seguimiento' && <SeguimientoView />}
           {current === 'reporte' && <ReporteGeneralView />}
           {current === 'consulta' && <ConsultaView />}
+          {current === 'ops_torre' && <TorreControlView />}
           {current === 'ops_prealertas' && <PrealertasView />}
           {current.startsWith('cfg_') && <ConfigurationView domain={current as ConfigSection} onToast={setToast} />}
           {current === 'autoridad' && <AutoridadView />}

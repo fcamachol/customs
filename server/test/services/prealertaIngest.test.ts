@@ -43,6 +43,15 @@ vi.mock('../../src/services/agoraClient', async () => {
   };
 });
 
+// The ingest resolves the flight as its final step. Stubbed here so these tests stay about INGEST and
+// never touch the network — flight behaviour has its own suite in vuelosService.test.ts. Without this
+// stub the tests would make a live adsb.lol call and gain an extra VUELO_* event.
+const refreshVueloForOperacion = vi.fn(async () => undefined);
+vi.mock('../../src/services/vuelosService', () => ({
+  refreshVueloForOperacion: (...a: unknown[]) => refreshVueloForOperacion(...(a as [])),
+  refreshVuelosPendientes: async () => [],
+}));
+
 vi.mock('../../src/services/pdfScan', async () => {
   const actual = await vi.importActual<typeof import('../../src/services/pdfScan')>(
     '../../src/services/pdfScan',
@@ -125,6 +134,15 @@ describe('classifyAdjunto', () => {
 });
 
 describe('ingestPrealerta — happy path', () => {
+  it('hands the new caso straight to flight resolution', async () => {
+    // Resolving the flight at ingest rather than waiting for the tick is what lets PA-04/PA-05 fire
+    // while the cargo is still in the air, which is the whole point of the deadline mechanic.
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-f', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+    expect(refreshVueloForOperacion).toHaveBeenCalledWith(out.operacionId);
+  });
+
   it('creates the caso, archives every artifact, and writes the ledger', async () => {
     const out = await ingestPrealerta(payload(), { eventId: 'evt-1', expectedInboxId: '21' });
     expect(out.status).toBe('processed');

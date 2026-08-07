@@ -81,6 +81,10 @@ export const TIPOS_EVENTO = [
   'EVIDENCIA_ARCHIVADA',
   'COTEJO_EJECUTADO',
   'OPERACION_CREADA',
+  'VUELO_ACTUALIZADO',
+  'VUELO_DEMORADO',
+  'VUELO_CANCELADO',
+  'ARRIBO_VUELO',
 ] as const;
 export type TipoEvento = (typeof TIPOS_EVENTO)[number];
 

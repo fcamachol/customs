@@ -21,6 +21,8 @@ import { headerMappingsRouter } from './routes/headerMappings';
 import { consolidatedRouter } from './routes/consolidated';
 import { adminRouter } from './routes/admin';
 import { prealertasRouter } from './routes/prealertas';
+import { operacionesRouter } from './routes/operaciones';
+import { opsRouter } from './routes/ops';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -79,8 +81,11 @@ export function createApp(): Express {
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api/header-mappings', headerMappingsRouter);
   app.use('/api/admin', adminRouter);
-  // Machine-to-machine: authenticated by HMAC signature, not by JWT — see routes/prealertas.ts.
+  app.use('/api/operaciones', operacionesRouter);
+  // Machine-to-machine: authenticated by HMAC signature / shared secret rather than a JWT, because
+  // the callers are AGORA and the scheduler, neither of which has a session.
   app.use('/api/prealertas', prealertasRouter);
+  app.use('/api/ops', opsRouter);
   app.use('/api', consolidatedRouter);
   // Serve the built frontend when running as a combined single-container deploy.
   // SERVE_STATIC_DIR points at the Vite `dist` output; static assets are served

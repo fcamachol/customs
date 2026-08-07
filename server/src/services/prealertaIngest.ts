@@ -11,6 +11,7 @@ import {
   type AgoraConfig,
 } from './agoraClient';
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
+import { refreshVueloForOperacion } from './vuelosService';
 
 /**
  * Prealerta ingest — the entry point of the whole operations pipeline (PRD-02 R1–R6, Adenda A).
@@ -373,6 +374,17 @@ export async function ingestPrealerta(
     },
     ip: null,
   });
+
+  // Resolve the flight immediately rather than waiting for the next tick. The declared ETA drives the
+  // risk-requirement deadline and the tramitador's arrival window, so the sooner an independent
+  // source either corroborates or contradicts it, the sooner PA-04/PA-05 can fire. Best-effort: a
+  // flight-feed outage must not unwind a caso that is already committed and archived — the tick will
+  // pick it up.
+  try {
+    await refreshVueloForOperacion(result.operacion.id);
+  } catch (err) {
+    console.warn('[prealertaIngest] no se pudo resolver el vuelo en la ingesta:', err);
+  }
 
   // Decorating the AGORA conversation is convenience for the human inbox, never a correctness
   // requirement — so a failure here is logged and swallowed rather than unwinding a committed caso.

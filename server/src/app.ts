@@ -23,6 +23,7 @@ import { adminRouter } from './routes/admin';
 import { prealertasRouter } from './routes/prealertas';
 import { operacionesRouter } from './routes/operaciones';
 import { opsRouter } from './routes/ops';
+import { holdsRouter } from './routes/holds';
 import { campoRouter } from './routes/campo';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
@@ -83,6 +84,12 @@ export function createApp(): Express {
   app.use('/api/header-mappings', headerMappingsRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/operaciones', operacionesRouter);
+  // Blocking layer (PRD-02 §8.4/§8.5, CT-3…CT-6). Stacked on the SAME prefix as operacionesRouter —
+  // same pattern as the three routers on /api/manifests. The global endpoints live at
+  // /api/operaciones/holds/global, which cannot be shadowed by operacionesRouter's single-segment
+  // `GET /:id`; holds.ts additionally registers its global routes before its parameterized ones and
+  // validates every `:id` as a UUID, so the literal 'holds' can never be read as an operación id.
+  app.use('/api/operaciones', holdsRouter);
   // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
   // role can be granted exactly this prefix and nothing else (§13).
   app.use('/api/campo', campoRouter);

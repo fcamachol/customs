@@ -258,3 +258,97 @@ export const campoEvidenciaBody = z.object({
   ),
 });
 export type CampoEvidenciaBody = z.infer<typeof campoEvidenciaBody>;
+
+// ---------------------------------------------------------------------------------------------
+// holds y retenciones — the blocking layer (PRD-02 §8.4/§8.5, CT-3…CT-6)
+//
+// `motivo` is required and trimmed-nonempty EVERYWHERE. That is not input hygiene, it is the whole
+// point: a block with no stated reason cannot be defended to the authority, and `'   '` would satisfy
+// the database's notNull while telling a reader nothing.
+// ---------------------------------------------------------------------------------------------
+
+/** Trimmed, non-empty free text. Rejects the whitespace-only string a form sends for "I left it blank". */
+const motivoRequerido = z
+  .string()
+  .transform((s) => s.trim())
+  .refine((s) => s.length > 0, 'El `motivo` es obligatorio: un bloqueo sin razón no es auditable.');
+
+/** Matches the operacion_holds tipo CHECK (migration 1700004600000_holds_retenciones.ts). */
+export const holdTipos = [
+  'riesgo',
+  'csa',
+  'no_transmitida',
+  'auditoria_autoridad',
+  'documental',
+  'cliente_sin_respuesta',
+  'otro',
+] as const;
+export type HoldTipo = (typeof holdTipos)[number];
+
+/**
+ * `/api/operaciones/holds/global` sits on the same prefix as `/api/operaciones/:id`, so every
+ * parameterized route in the holds router validates its `:id` as a UUID. That is what guarantees the
+ * literal string 'holds' can never be captured as an operación id (see routes/holds.ts).
+ */
+export const holdOperacionParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+});
+
+export const holdOperacionHoldParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+  holdId: z.string().uuid('El id del hold debe ser un UUID.'),
+});
+
+export const holdGlobalIdParam = z.object({
+  holdId: z.string().uuid('El id del hold debe ser un UUID.'),
+});
+
+/**
+ * The CT-6 button. `tipo` defaults to `auditoria_autoridad` because that is what the button IS — an
+ * authority audit of the warehouse — while staying open for the other systemic freezes (a customs
+ * system outage, say) so nobody has to mislabel one as an audit.
+ */
+export const holdGlobalBody = z.object({
+  tipo: z.enum(holdTipos).default('auditoria_autoridad'),
+  motivo: motivoRequerido,
+});
+export type HoldGlobalBody = z.infer<typeof holdGlobalBody>;
+
+export const holdOperacionBody = z.object({
+  tipo: z.enum(holdTipos, {
+    errorMap: () => ({ message: `tipo debe ser uno de: ${holdTipos.join(', ')}.` }),
+  }),
+  // 'global' is deliberately NOT accepted here: a global freeze is opened through its own admin-only
+  // endpoint, never as a side effect of a per-caso call.
+  alcance: z.enum(['operacion', 'guia'], {
+    errorMap: () => ({ message: "alcance debe ser 'operacion' o 'guia' (el global tiene su propio endpoint)." }),
+  }),
+  operacionGuiaId: z.string().uuid('operacionGuiaId debe ser un UUID.').optional(),
+  motivo: motivoRequerido,
+});
+export type HoldOperacionBody = z.infer<typeof holdOperacionBody>;
+
+/** Matches the retenciones unidad CHECK. */
+export const retencionUnidades = ['pallet', 'carton', 'pieza'] as const;
+
+export const retencionBody = z.object({
+  alcance: z.enum(['total', 'parcial'], {
+    errorMap: () => ({ message: "alcance debe ser 'total' o 'parcial'." }),
+  }),
+  unidad: z.enum(retencionUnidades).optional(),
+  // Coerced and capped at ≥1: this is what the tramitador types on a phone, and a retención of zero
+  // pallets is not a retención.
+  cantidad: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? undefined : v),
+    z.coerce.number().int().positive('cantidad debe ser un entero positivo.').optional(),
+  ),
+  motivo: motivoRequerido,
+  oficioReferencia: textoOpcional,
+  operacionGuiaId: z.string().uuid('operacionGuiaId debe ser un UUID.').optional(),
+});
+export type RetencionBody = z.infer<typeof retencionBody>;
+
+export const retencionParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+  rid: z.string().uuid('El id de la retención debe ser un UUID.'),
+});

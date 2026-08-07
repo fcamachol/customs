@@ -1,7 +1,7 @@
 import { withTransaction } from '../db/tx';
 import { query } from '../db/pool';
 import { recordAudit } from './audit';
-import { lookupFlight } from './flightProviders';
+import { isAeroSnapshot, lookupFlight } from './flightProviders';
 import { parseFlightNumber, type EstadoVuelo } from '../../../shared/operaciones/vuelo';
 import { canAdvanceEtapa, type Etapa } from '../../../shared/operaciones/estados';
 import {
@@ -154,6 +154,8 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
     { etaToleranciaHoras: etaToleranciaHoras() },
   );
 
+  // Extra detail exists only when an itinerary provider answered.
+  const d = isAeroSnapshot(snapshot) ? snapshot.detalle : null;
   const estadoCambio = snapshot.estado !== previous;
   const nuevaEtapa = etapaForEstado(snapshot.estado, op.etapa);
 
@@ -174,6 +176,19 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
          ultima_lon        = COALESCE($13, ultima_lon),
          ultima_altitud_ft = COALESCE($14, ultima_altitud_ft),
          payload_fuente    = $15,
+         fa_flight_id      = COALESCE($16, fa_flight_id),
+         aeronave_tipo     = COALESCE($17, aeronave_tipo),
+         matricula         = COALESCE($18, matricula),
+         progreso_pct      = COALESCE($19, progreso_pct),
+         ruta_filed        = COALESCE($20, ruta_filed),
+         distancia_km      = COALESCE($21, distancia_km),
+         terminal_destino  = COALESCE($22, terminal_destino),
+         puerta_destino    = COALESCE($23, puerta_destino),
+         pista_salida      = COALESCE($24, pista_salida),
+         pista_llegada     = COALESCE($25, pista_llegada),
+         cancelado         = COALESCE($26, cancelado),
+         desviado          = COALESCE($27, desviado),
+         destino_real_iata = COALESCE($28, destino_real_iata),
          ultima_consulta_at = now(),
          updated_at        = now()
        WHERE id = $1`,
@@ -193,6 +208,21 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
         snapshot.posicion?.lon ?? null,
         snapshot.posicion?.altitudeFt ?? null,
         JSON.stringify(snapshot.raw ?? null),
+        // Only AeroAPI supplies these; ADS-B leaves them null and COALESCE preserves whatever a
+        // previous AeroAPI cycle already established.
+        d?.faFlightId ?? null,
+        d?.aeronaveTipo ?? null,
+        d?.matricula ?? null,
+        d?.progresoPct ?? null,
+        d?.rutaFiled ?? null,
+        d?.distanciaKm ?? null,
+        d?.terminalDestino ?? null,
+        d?.puertaDestino ?? null,
+        d?.pistaSalida ?? null,
+        d?.pistaLlegada ?? null,
+        d ? d.cancelado : null,
+        d ? d.desviado : null,
+        d?.destinoRealIata ?? null,
       ],
     );
 

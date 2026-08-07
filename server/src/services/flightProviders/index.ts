@@ -5,7 +5,7 @@ import type { FlightProvider, FlightQuery, FlightSnapshot } from './types';
 
 export type { FlightProvider, FlightQuery, FlightSnapshot } from './types';
 export { adsbLolProvider } from './adsbLol';
-export { aeroApiProvider } from './aeroApi';
+export { aeroApiProvider, isAeroSnapshot, type AeroDetail, type AeroSnapshot } from './aeroApi';
 
 /**
  * Provider chain, best-first.
@@ -22,6 +22,9 @@ export function flightProviderChain(): FlightProvider[] {
   const pinned = (process.env.FLIGHT_API_PROVIDER ?? '').toLowerCase();
   if (pinned === 'adsb' || pinned === 'adsb.lol') return [adsbLolProvider];
   if (pinned === 'aeroapi' || pinned === 'flightaware') return [aeroApiProvider];
+  // AeroAPI leads whenever a key exists: it answers the itinerary questions the cotejo needs AND, via
+  // Aireon space-based ADS-B, sees the oceanic legs community receivers cannot. ADS-B stays behind it
+  // as a free corroborating fallback, and is the whole chain when no key is configured.
   return process.env.FLIGHT_API_KEY ? [aeroApiProvider, adsbLolProvider] : [adsbLolProvider];
 }
 

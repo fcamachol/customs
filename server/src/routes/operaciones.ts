@@ -127,7 +127,20 @@ operacionesRouter.get('/:id', requireAuth, async (req: Request, res: Response, n
               v.ultima_lat        AS "ultimaLat",
               v.ultima_lon        AS "ultimaLon",
               v.ultima_altitud_ft AS "ultimaAltitudFt",
-              v.ultima_consulta_at AS "ultimaConsultaAt"
+              v.ultima_consulta_at AS "ultimaConsultaAt",
+              v.fa_flight_id      AS "faFlightId",
+              v.aeronave_tipo     AS "aeronaveTipo",
+              v.matricula,
+              v.progreso_pct      AS "progresoPct",
+              v.ruta_filed        AS "rutaFiled",
+              v.distancia_km      AS "distanciaKm",
+              v.terminal_destino  AS "terminalDestino",
+              v.puerta_destino    AS "puertaDestino",
+              v.pista_salida      AS "pistaSalida",
+              v.pista_llegada     AS "pistaLlegada",
+              v.cancelado,
+              v.desviado,
+              v.destino_real_iata AS "destinoRealIata"
          FROM vuelos v
          JOIN operaciones o ON o.vuelo_id = v.id
         WHERE o.id = $1`,

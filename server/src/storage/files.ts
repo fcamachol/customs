@@ -3,7 +3,18 @@ import { basename, join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { query } from '../db/pool';
 
-export type FileKind = 'manifest' | 'pedimento_pdf' | 'report' | 'risk_analysis';
+// Must stay in step with the files_kind_check constraint (migration 1700003700000_ops_file_kinds).
+export type FileKind =
+  | 'manifest'
+  | 'pedimento_pdf'
+  | 'report'
+  | 'risk_analysis'
+  | 'prealerta_email'
+  | 'awb'
+  | 'evidencia'
+  | 'pod'
+  | 'convenio'
+  | 'factura';
 export interface SaveFileInput { kind: FileKind; originalName: string; bytes: Buffer; uploadedBy: string | null; }
 export interface FileMeta { id: string; kind: FileKind; originalName: string; storagePath: string; sizeBytes: number; contentHash: string; }
 

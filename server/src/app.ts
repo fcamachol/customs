@@ -20,6 +20,7 @@ import { catalogsRouter } from './routes/catalogs';
 import { headerMappingsRouter } from './routes/headerMappings';
 import { consolidatedRouter } from './routes/consolidated';
 import { adminRouter } from './routes/admin';
+import { prealertasRouter } from './routes/prealertas';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -44,7 +45,18 @@ export function createApp(): Express {
     corsOrigin = true;
   }
   app.use(cors({ origin: corsOrigin }));
-  app.use(express.json({ limit: '5mb' }));
+  // `verify` stashes the exact bytes we received. The AGORA prealerta webhook signs the raw body,
+  // and re-serializing req.body would change key order/whitespace/unicode escaping, so the HMAC
+  // could never match. Capturing it here (rather than mounting a separate raw parser on one path)
+  // keeps a single JSON pipeline and leaves every existing route untouched.
+  app.use(
+    express.json({
+      limit: '5mb',
+      verify: (req, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   // Global per-IP rate limiter applied to all /api/* routes (no-op in test env).
   app.use('/api', globalLimiter);
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -67,6 +79,8 @@ export function createApp(): Express {
   app.use('/api/catalogs', catalogsRouter);
   app.use('/api/header-mappings', headerMappingsRouter);
   app.use('/api/admin', adminRouter);
+  // Machine-to-machine: authenticated by HMAC signature, not by JWT — see routes/prealertas.ts.
+  app.use('/api/prealertas', prealertasRouter);
   app.use('/api', consolidatedRouter);
   // Serve the built frontend when running as a combined single-container deploy.
   // SERVE_STATIC_DIR points at the Vite `dist` output; static assets are served

@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { timingSafeEqual } from 'node:crypto';
 import { query } from '../db/pool';
 import { refreshVuelosPendientes } from '../services/vuelosService';
+import { runAgoraSweep, type SweepSummary } from '../services/agoraSweep';
 
 export const opsRouter = Router();
 
@@ -20,6 +21,11 @@ export const opsRouter = Router();
  * Suggested cadence: every 5 minutes. `refreshVuelosPendientes` only polls casos still in motion and
  * skips any flight queried in the last 4 minutes, so a tighter cadence costs money on a metered
  * provider without buying freshness.
+ *
+ * TWO INDEPENDENT PHASES run per tick — flights, then the AGORA prealerta sweep — each with its own
+ * cursor row and its own error accounting. Neither can abort the other: they answer different
+ * questions ("did the plan move?" vs "did a webhook get dropped?") and a provider outage on one side
+ * is no reason to stop asking the other.
  */
 function authorizeTick(req: Request): boolean {
   const expected = process.env.OPS_TICK_TOKEN;
@@ -46,9 +52,17 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const startedAt = Date.now();
-    const vuelos = await refreshVuelosPendientes(
-      Math.min(Number(req.query.limit ?? 100) || 100, 500),
-    );
+
+    // ---- Phase 1: flights. Wrapped so a flight-feed outage cannot cost us the prealerta sweep,
+    // which is the phase that recovers cargo nobody would otherwise know about.
+    let vuelos: Awaited<ReturnType<typeof refreshVuelosPendientes>> = [];
+    let vuelosError: string | null = null;
+    try {
+      vuelos = await refreshVuelosPendientes(Math.min(Number(req.query.limit ?? 100) || 100, 500));
+    } catch (err) {
+      vuelosError = err instanceof Error ? err.message : String(err);
+      console.error('[ops] la fase de vuelos falló:', err);
+    }
 
     // Record the run on the cursor row so a silently dead scheduler is visible as a stale
     // `last_run_at` rather than as an absence of evidence.
@@ -63,8 +77,31 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
                                         ELSE consecutive_errors + 1 END,
               updated_at = now()
         WHERE fuente = 'vuelos'`,
-      [errores.length ? `${errores.length} operaciones con error de proveedor` : null],
+      [
+        vuelosError
+          ? `la fase de vuelos falló: ${vuelosError}`
+          : errores.length
+            ? `${errores.length} operaciones con error de proveedor`
+            : null,
+      ],
     );
+
+    // ---- Phase 2: the AGORA reconciliation sweep. The webhook is the fast path and this is the
+    // safety net for the deliveries it dropped, so it runs on the same tick — one scheduled poke,
+    // both "did the flight move?" and "did we miss a prealerta?".
+    //
+    // `runAgoraSweep` owns the `agora_prealertas` cursor (it is the only reader of the watermark, so
+    // splitting the read here from the write there would be a race waiting to happen) and does not
+    // throw for AGORA or network trouble. The try/catch is for the unexpected: a sweep bug must not
+    // turn a successful flight phase into a 500 and a scheduler alert.
+    let sweep: SweepSummary | { ok: boolean; error: string };
+    try {
+      sweep = await runAgoraSweep();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[ops] el barrido de prealertas falló:', err);
+      sweep = { ok: false, error: message };
+    }
 
     res.json({
       ok: true,
@@ -76,8 +113,10 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
         noIdentificadas: vuelos.filter((v) => v.status === 'no_identificado').length,
         sinVueloDeclarado: vuelos.filter((v) => v.status === 'sin_vuelo_declarado').length,
         errores: errores.length,
+        ...(vuelosError ? { error: vuelosError } : {}),
         detalle: vuelos,
       },
+      sweep,
     });
   } catch (err) {
     next(err);

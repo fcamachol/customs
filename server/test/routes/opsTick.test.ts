@@ -19,6 +19,32 @@ vi.mock('../../src/services/vuelosService', () => ({
   refreshVueloForOperacion: async () => undefined,
 }));
 
+// The prealerta sweep is the tick's second phase; its own behaviour is covered in
+// services/agoraSweep.test.ts, so here it is stubbed and the questions are only about the ROUTE:
+// does the summary reach the caller, and can one phase take the other down?
+const SWEEP_OK = {
+  ok: true,
+  omitido: null,
+  desde: '2026-08-06T00:00:00.000Z',
+  hasta: '2026-08-06T01:00:00.000Z',
+  conversaciones: 2,
+  candidatos: 1,
+  revisados: 1,
+  recuperadas: 1,
+  conocidas: 0,
+  duplicadas: 0,
+  ignoradas: 0,
+  rechazadas: 0,
+  errores: 0,
+  truncado: false,
+  detalle: [],
+  erroresDetalle: [],
+};
+const runAgoraSweep = vi.fn(async () => SWEEP_OK as unknown);
+vi.mock('../../src/services/agoraSweep', () => ({
+  runAgoraSweep: (...a: unknown[]) => runAgoraSweep(...(a as [])),
+}));
+
 const { createApp } = await import('../../src/app');
 const app = createApp();
 
@@ -29,6 +55,7 @@ beforeEach(async () => {
   await truncateAll();
   vi.clearAllMocks();
   refreshVuelosPendientes.mockResolvedValue([]);
+  runAgoraSweep.mockResolvedValue(SWEEP_OK);
   process.env.OPS_TICK_TOKEN = TOKEN;
   // truncateAll wipes the seeded cursor rows, so restore the one the route updates.
   await query(
@@ -123,5 +150,39 @@ describe('POST /api/ops/tick — behaviour', () => {
   it('caps the batch size so one tick cannot run away', async () => {
     await request(app).post('/api/ops/tick?limit=99999').set('x-ops-token', TOKEN).expect(200);
     expect(refreshVuelosPendientes).toHaveBeenCalledWith(500);
+  });
+});
+
+describe('POST /api/ops/tick — barrido de prealertas', () => {
+  it('runs the sweep and reports its summary alongside the flights', async () => {
+    const res = await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    expect(runAgoraSweep).toHaveBeenCalled();
+    expect(res.body.sweep).toMatchObject({ ok: true, recuperadas: 1, truncado: false });
+  });
+
+  it('does not 500 the tick when the sweep blows up', async () => {
+    // A dropped prealerta is bad; a scheduler that stops running because of a sweep bug is worse,
+    // because then the flight phase stops too and nothing is being polled at all.
+    runAgoraSweep.mockRejectedValue(new Error('AGORA fuera de línea'));
+    const res = await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.sweep).toEqual({ ok: false, error: 'AGORA fuera de línea' });
+    // The flight phase still ran and still reported.
+    expect(refreshVuelosPendientes).toHaveBeenCalled();
+    expect(res.body.vuelos).toMatchObject({ revisadas: 0 });
+  });
+
+  it('still sweeps when the flight phase blows up', async () => {
+    refreshVuelosPendientes.mockRejectedValue(new Error('proveedor caído'));
+    const res = await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    expect(runAgoraSweep).toHaveBeenCalled();
+    expect(res.body.sweep).toMatchObject({ ok: true });
+    expect(res.body.vuelos.error).toMatch(/proveedor caído/);
+
+    const cur = await query<{ last_error: string | null; consecutive_errors: number }>(
+      `SELECT last_error, consecutive_errors FROM integracion_cursores WHERE fuente='vuelos'`,
+    );
+    expect(cur.rows[0].last_error).toMatch(/la fase de vuelos falló/);
+    expect(Number(cur.rows[0].consecutive_errors)).toBe(1);
   });
 });

@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "migrate": "node-pg-migrate --tsx -m migrations --envPath .env",
+    "demo:e2e": "tsx scripts/demoE2e.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -15,6 +15,7 @@ import ConfigurationView from './components/ConfigurationView';
 import AutoridadView from './components/AutoridadView';
 import PrealertasView from './components/PrealertasView';
 import TorreControlView from './components/TorreControlView';
+import CampoView from './components/CampoView';
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   useEffect(() => {
@@ -33,7 +34,12 @@ function AuthenticatedApp() {
   const [section, setSection] = useState<Section>('dashboard');
   const [toast, setToast] = useState<string | null>(null);
   const allowed = visibleSectionsFor(user!.role);
-  const current = allowed.includes(section) ? section : 'dashboard';
+  // Fallback used to hardcode 'dashboard', but a role like tramitador never has 'dashboard' in
+  // its visible set (it sees ONLY ops_campo) — falling back to a section the role can't see would
+  // render nothing. Fall back to the role's own first visible section instead; 'dashboard' is kept
+  // only as a last-resort default for the (never-expected) case of an empty visible set, so the
+  // SECTION_META lookup below always has a valid key.
+  const current = allowed.includes(section) ? section : (allowed[0] ?? 'dashboard');
   const meta = SECTION_META[current];
 
   return (
@@ -50,6 +56,7 @@ function AuthenticatedApp() {
           {current === 'consulta' && <ConsultaView />}
           {current === 'ops_torre' && <TorreControlView />}
           {current === 'ops_prealertas' && <PrealertasView />}
+          {current === 'ops_campo' && <CampoView />}
           {current.startsWith('cfg_') && <ConfigurationView domain={current as ConfigSection} onToast={setToast} />}
           {current === 'autoridad' && <AutoridadView />}
           {current === 'acerca' && <AcercaDeView />}

@@ -1,8 +1,8 @@
-import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, type LucideIcon } from 'lucide-react';
 
 export type Section =
   | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
-  | 'ops_torre' | 'ops_prealertas'
+  | 'ops_torre' | 'ops_prealertas' | 'ops_campo'
   | 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
 
@@ -16,6 +16,7 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   consulta:     { title: 'Consulta', subtitle: 'Busca registros previos y descarga sus artefactos.' },
   ops_torre:    { title: 'Torre de Control', subtitle: 'Estado en vivo de todas las operaciones: etapas, vuelos, semáforo y banderas.' },
   ops_prealertas: { title: 'Prealertas', subtitle: 'Casos creados desde el correo del cliente, con su evidencia y bitácora.' },
+  ops_campo:    { title: 'Captura de Campo', subtitle: 'Registro del tramitador: disponibilidad, carga, modulación y semáforo.' },
   cfg_motor:    { title: 'Motor de riesgo', subtitle: 'Parámetros de validación y listas de exclusión (V1–V8).' },
   cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
@@ -51,6 +52,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   { label: 'Logística', items: [
     { id: 'ops_torre', label: 'Torre de Control', icon: Radar },
     { id: 'ops_prealertas', label: 'Prealertas', icon: Inbox },
+    { id: 'ops_campo', label: 'Campo', icon: Smartphone },
   ] },
   { label: 'Sistema', items: [
     {
@@ -74,13 +76,17 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
 
 // Role-based visibility:
+//  - tramitador stands in a warehouse or at the aduana on a phone: it sees ONLY the field-capture
+//    screen, nothing else — not even Dashboard, which is why App.tsx's fallback-section logic
+//    cannot hardcode 'dashboard' (see the comment there).
 //  - autoridad is read-only: dashboard, consulta, the Autoridad portal, and Acerca.
 //  - admin / super_admin get everything, including all Configuración children.
 //  - capturista runs the operative flow but not Configuración nor the Autoridad portal.
 export function visibleSectionsFor(role: string): Section[] {
+  if (role === 'tramitador') return ['ops_campo'];
   if (role === 'autoridad') return ['dashboard', 'consulta', 'ops_torre', 'ops_prealertas', 'autoridad', 'acerca'];
   if (role === 'admin' || role === 'super_admin') {
-    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
+    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
   }
-  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'acerca'];
+  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'acerca'];
 }

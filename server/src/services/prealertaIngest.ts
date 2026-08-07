@@ -320,7 +320,7 @@ export async function ingestPrealerta(
         subject,
         JSON.stringify(email),
         bodyText,
-        JSON.stringify({ fields: parsed.fields, warnings: parsed.warnings }),
+        JSON.stringify({ fields: parsed.fields, provenance: parsed.provenance, warnings: parsed.warnings }),
         parsed.parserVersion,
         archive.id,
         estado,
@@ -367,6 +367,9 @@ export async function ingestPrealerta(
           messageId,
           parserVersion: parsed.parserVersion,
           fields: parsed.fields,
+          // Recorded alongside the values so an auditor can see which fields the client DECLARED and
+          // which the parser deduced — the two must never look alike.
+          provenance: parsed.provenance,
           warnings: parsed.warnings,
           adjuntos: adjuntos.map((a) => ({
             tipo: a.tipo,

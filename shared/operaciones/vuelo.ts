@@ -33,9 +33,15 @@ export const IATA_TO_ICAO: Readonly<Record<string, string>> = {
   // Integrators and freighter specialists
   '5X': 'UPS', FX: 'FDX', PO: 'PAC', '5Y': 'GTI', K4: 'CKS', QY: 'BCS',
   CV: 'CLX', '3S': 'BOX', '7L': 'AZG',
-  // Middle East / Europe / Americas
+  // Middle East / Europe
   EK: 'UAE', QR: 'QTR', EY: 'ETD', SV: 'SVA', TK: 'THY', LH: 'DLH', AF: 'AFR',
-  KL: 'KLM', BA: 'BAW', IB: 'IBE', AM: 'AMX', AA: 'AAL', UA: 'UAL', DL: 'DAL',
+  KL: 'KLM', BA: 'BAW', IB: 'IBE',
+  // Mexico and the Americas — the arrival side. VB (VivaAerobus) appeared on a real prealerta and was
+  // missing, so the flight was never queried at all: parseFlightNumber returned a null callsign and the
+  // caso silently read as unverifiable. Domestic carriers matter as much as the long-haul ones.
+  AM: 'AMX', Y4: 'VOI', VB: 'VIV', '4O': 'AIJ', AIJ: 'AIJ', MY: 'MYI',
+  AA: 'AAL', UA: 'UAL', DL: 'DAL', AS: 'ASA', WN: 'SWA', B6: 'JBU', NK: 'NKS',
+  AC: 'ACA', CM: 'CMP', AV: 'AVA', LA: 'LAN', G3: 'GLO', AD: 'AZU',
 };
 
 export interface FlightNumberParts {

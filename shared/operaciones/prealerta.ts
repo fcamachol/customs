@@ -42,7 +42,7 @@
 import { parseManifestDate, parseNumberStrict } from '../parsing/normalize';
 import { normGuia } from '../pedimento/guia';
 
-export const PREALERTA_PARSER_VERSION = '2026-08b';
+export const PREALERTA_PARSER_VERSION = '2026-08c';
 
 export interface PrealertaFields {
   /** As printed by the client, for display and human reconciliation. */
@@ -72,7 +72,8 @@ export type PrealertaWarningCode =
   | 'cartones_no_encontrado'
   | 'piezas_no_encontrado'
   | 'peso_no_encontrado'
-  | 'valor_no_numerico';
+  | 'valor_no_numerico'
+  | 'anio_inferido';
 
 export interface PrealertaWarning {
   code: PrealertaWarningCode;
@@ -156,6 +157,84 @@ function resolveLabel(raw: string): LabelTarget | null {
     if (re.test(n) && (!best || syn.length > best.len)) best = { len: syn.length, target };
   }
   return best?.target ?? null;
+}
+
+/**
+ * Normalize the punctuation real client mail actually arrives with.
+ *
+ * Calibrated against live prealertas from the client (subject line, verbatim):
+ *   iMile// 160-05930216 //ETD：07 Ago 06:00//ETA：07Ago 09:45 ETA//64 CTNS/ 2914 PCS/ 542.86 KGS
+ *
+ * Two things in there defeat naive parsing. The colon after ETD/ETA is the FULL-WIDTH form U+FF1A
+ * (`：`), a CJK-keyboard artifact — it looks like a colon and is not one, so an ASCII `:` match finds
+ * nothing. And the whole record is one line delimited by `//`, so a line-oriented reader sees a single
+ * unsplittable blob. Normalizing width and turning the delimiters into newlines is what makes the rest
+ * of the parser work on real mail at all.
+ */
+export function normalizeInbound(text: string): string {
+  return text
+    // Full-width ASCII block U+FF01–U+FF5E maps onto ASCII 0x21–0x7E.
+    .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/　/g, ' ')       // ideographic space
+    .replace(/[​-‍]/g, '') // zero-width joiners
+    // `//` separates records, so it becomes a line break and the existing pair/table readers see each
+    // field separately. A SINGLE `/` is deliberately left alone: it separates the count triple
+    // ("60 CTNS/ 2500 PCS/ 646.86 KGS") but it is ALSO a route separator ("HKG / NLU"), and splitting
+    // on it would break route detection to fix something unitSuffixPairs already handles by regex.
+    .replace(/\s*\/\/\s*/g, '\n');
+}
+
+const MESES: Readonly<Record<string, number>> = {
+  ene: 1, jan: 1, feb: 2, mar: 3, abr: 4, apr: 4, may: 5, jun: 6, jul: 7,
+  ago: 8, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dic: 12, dec: 12,
+};
+
+/**
+ * Parse the date forms the client actually sends: `07 Ago 06:00`, `07Ago 09:45` (no space), with
+ * SPANISH month abbreviations and NO YEAR. Falls back to parseManifestDate for ISO/numeric forms.
+ *
+ * The missing year is inferred, not assumed: a bare day-and-month more than a month in the past almost
+ * certainly means next year (a prealerta describes a flight about to happen, never one from ten months
+ * ago). Both the inference and any ambiguity are reported to the caller rather than hidden.
+ */
+export function parsePrealertaDate(
+  raw: string,
+  now: Date = new Date(),
+): { ok: true; iso: string; yearInferred?: true; ambiguous?: true } | { ok: false } {
+  const m = raw.match(/\b(\d{1,2})\s*([A-Za-z]{3,4})\.?\s*(?:(\d{1,2}):(\d{2}))?/);
+  if (m) {
+    const mes = MESES[m[2].toLowerCase()];
+    if (mes) {
+      const day = Number(m[1]);
+      const hh = m[3] ? Number(m[3]) : 0;
+      const mm = m[4] ? Number(m[4]) : 0;
+      let year = now.getUTCFullYear();
+      let d = new Date(Date.UTC(year, mes - 1, day, hh, mm));
+      // More than ~31 days in the past means the year rolled over.
+      if (d.getTime() < now.getTime() - 31 * 86_400_000) {
+        year += 1;
+        d = new Date(Date.UTC(year, mes - 1, day, hh, mm));
+      }
+      if (!Number.isNaN(d.getTime())) return { ok: true, iso: d.toISOString(), yearInferred: true };
+    }
+  }
+  const fallback = parseManifestDate(raw);
+  return fallback.ok
+    ? { ok: true, iso: fallback.iso, ...(fallback.ambiguous ? { ambiguous: true as const } : {}) }
+    : { ok: false };
+}
+
+/**
+ * Values that PRECEDE their unit — `64 CTNS`, `2914 PCS`, `542.86 KGS` — which is how the real client
+ * writes them. This is deliberately a LABEL-tier reader, not an inference: the unit word states what
+ * the number is, so the result is declared data rather than something we deduced, and the cotejo can
+ * hold the client to it.
+ */
+function unitSuffixPairs(text: string): Array<{ label: string; value: string }> {
+  const out: Array<{ label: string; value: string }> = [];
+  const re = /(-?[\d.,]+)\s*(ctns?|cartons?|cajas?|bultos?|pcs?|pieces?|piezas?|kgs?|kilos?|lbs?)\b/gi;
+  for (const m of text.matchAll(re)) out.push({ label: m[2], value: `${m[1]} ${m[2]}` });
+  return out;
 }
 
 /**
@@ -373,8 +452,10 @@ export function parsePrealerta(input: {
    */
   extraMappings?: Record<string, LabelTarget>;
 }): PrealertaParseResult {
-  const subject = input.subject ?? '';
-  const body = input.textBody ?? '';
+  // Normalize BEFORE anything else: full-width punctuation and `//` delimiters otherwise defeat every
+  // reader downstream (see normalizeInbound).
+  const subject = normalizeInbound(input.subject ?? '');
+  const body = normalizeInbound(input.textBody ?? '');
   const all = `${subject}\n${body}`;
   const fields: PrealertaFields = {};
   const provenance: Partial<Record<keyof PrealertaFields, FieldSource>> = {};
@@ -405,7 +486,10 @@ export function parsePrealerta(input: {
   }
 
   // ---- Tier 2 + 2b: labels, in any layout, with per-client overrides taking precedence.
-  const pairs = labelledPairs(body || subject);
+  // The real client writes its counts as `64 CTNS` — value then unit — so unit-suffix pairs are read
+  // alongside the label pairs, across BOTH subject and body since the record often lives in the subject.
+  const scope = `${subject}\n${body}`;
+  const pairs = [...labelledPairs(scope), ...unitSuffixPairs(scope)];
   for (const { label, value } of pairs) {
     const custom = input.extraMappings?.[normLabel(label)];
     const target = custom ?? resolveLabel(label);
@@ -441,11 +525,12 @@ export function parsePrealerta(input: {
       case 'eta': {
         const key = target === 'etd' ? 'etdOrigen' : 'etaPais';
         if (fields[key] !== undefined) break;
-        const d = parseManifestDate(value);
+        const d = parsePrealertaDate(value);
         if (d.ok) {
           fields[key] = d.iso;
           provenance[key] = src;
           if (d.ambiguous) warnings.push({ code: 'fecha_ambigua', field: key, detail: value });
+          if (d.yearInferred) warnings.push({ code: 'anio_inferido', field: key, detail: value });
         }
         break;
       }
@@ -491,12 +576,12 @@ export function parsePrealerta(input: {
   }
 
   // ---- Tier 3: semantic inference for whatever labels could not reach.
-  inferDates(fields, provenance, warnings, body || subject);
+  inferDates(fields, provenance, warnings, `${subject}\n${body}`);
   // Strip the identifiers before inferring quantities. The MAWB's airline prefix (160) and a flight
   // number's digits are numerals but not amounts, and leaving them in makes the magnitude heuristic
   // pick an identifier as the piece count — which is exactly the kind of confidently-wrong answer
   // this parser must never produce.
-  let numericHaystack = (body || subject).replace(MAWB_RE, ' ');
+  let numericHaystack = `${subject}\n${body}`.replace(MAWB_RE, ' ');
   if (fields.numeroVuelo) {
     numericHaystack = numericHaystack.replace(
       new RegExp(fields.numeroVuelo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),

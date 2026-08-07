@@ -114,10 +114,12 @@ describe('Tier 3 — semantic inference when no label matched', () => {
     expect(provenance.etdOrigen).toBe('etiqueta');
   });
 
-  it('infers weight from an adjacent mass unit', () => {
+  it('reads weight from a trailing mass unit as DECLARED, not inferred', () => {
+    // `52.64 KG` states what the number is, so it is label-tier data the client can be held to — a
+    // stronger position for the cotejo than an inference would be.
     const { fields, provenance } = parsePrealerta({ textBody: 'MAWB 160-94705516\n63 / 1910 / 52.64 KG' });
     expect(fields.pesoKg).toBe(52.64);
-    expect(provenance.pesoKg).toBe('inferido_propiedad');
+    expect(provenance.pesoKg).toBe('etiqueta');
   });
 
   it('converts pounds to kilograms rather than storing the wrong unit', () => {

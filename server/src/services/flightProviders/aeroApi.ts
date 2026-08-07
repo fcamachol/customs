@@ -24,6 +24,26 @@ import { fetchWithTimeout, type FlightProvider, type FlightQuery, type FlightSna
  */
 const BASE = process.env.AEROAPI_BASE_URL ?? 'https://aeroapi.flightaware.com/aeroapi';
 
+
+/**
+ * AeroAPI's accepted query window, verified empirically against the live API: a `start` more than
+ * 2 days in the future is rejected with a 400. Returns bounds when the operating date is inside the
+ * horizon and an unbounded query when it is not.
+ */
+const FUTURE_LIMIT_DAYS = 2;
+
+function boundsFor(fechaOperacion: string, now: Date = new Date()): string {
+  const day = new Date(`${fechaOperacion}T00:00:00Z`);
+  if (Number.isNaN(day.getTime())) return 'max_pages=1';
+  const start = new Date(day.getTime() - 86_400_000);
+  const horizon = new Date(now.getTime() + FUTURE_LIMIT_DAYS * 86_400_000);
+  if (start.getTime() > horizon.getTime()) return 'max_pages=1';
+  const end = new Date(
+    Math.min(day.getTime() + 2 * 86_400_000, horizon.getTime()),
+  );
+  return `start=${start.toISOString().slice(0, 10)}&end=${end.toISOString().slice(0, 10)}&max_pages=1`;
+}
+
 interface AeroFlight {
   fa_flight_id?: string;
   ident?: string;
@@ -115,16 +135,22 @@ export const aeroApiProvider: FlightProvider = {
     if (!key) return null;
     const headers = { 'x-apikey': key, Accept: 'application/json' };
 
-    // Bound the window to the operating date so we get the right daily leg. A day either side absorbs
-    // timezone skew between the client's declared local time and UTC.
-    const day = new Date(`${q.fechaOperacion}T00:00:00Z`);
-    const start = new Date(day.getTime() - 86_400_000).toISOString().slice(0, 10);
-    const end = new Date(day.getTime() + 2 * 86_400_000).toISOString().slice(0, 10);
-
-    const url =
-      `${BASE}/flights/${encodeURIComponent(q.iataFlight)}` +
-      `?start=${start}&end=${end}&max_pages=1`;
-    const res = await fetchWithTimeout(url, { headers });
+    // Bound the window to the operating date so we get the right daily leg — but ONLY when AeroAPI will
+    // accept the bound. It rejects a start more than 2 days in the future with a 400
+    // ("Invalid start bound: time is too far in the future (limit: 2 days)"), and a prealerta routinely
+    // arrives days before the flight, so the naive bounded query fails on exactly the cases that matter
+    // most: the ones where there is still time to act. When the operating date is beyond that horizon we
+    // query UNBOUNDED — AeroAPI then returns the forward schedule, and the leg selection below picks the
+    // right day out of it.
+    const url = `${BASE}/flights/${encodeURIComponent(q.iataFlight)}?${boundsFor(q.fechaOperacion)}`;
+    let res = await fetchWithTimeout(url, { headers });
+    if (res.status === 400) {
+      // Safety net: any other bound AeroAPI dislikes degrades to unbounded rather than losing the flight.
+      res = await fetchWithTimeout(
+        `${BASE}/flights/${encodeURIComponent(q.iataFlight)}?max_pages=1`,
+        { headers },
+      );
+    }
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`AeroAPI /flights respondió ${res.status}`);
     const body = (await res.json()) as { flights?: AeroFlight[] };

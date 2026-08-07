@@ -83,11 +83,18 @@ describe('PA-05 — ETA consistency', () => {
     expect(ds.find((d) => d.codigo === 'PA-05')?.detalle).toMatchObject({ base: 'arribo_real' });
   });
 
-  it('reports itself as uncheckable, not as passing, when the source has no itinerary', () => {
-    // This is the ADS-B case. Silence here would make an unverified ETA look verified.
+  it('reports itself as uncheckable, not as passing, when the source saw the aircraft but has no itinerary', () => {
+    // The genuine ADS-B case: a position WAS observed, there is just no schedule to compare against.
+    // Silence here would make an unverified ETA look verified.
     const ds = cotejarVuelo(
       declarado,
-      observado({ tieneItinerario: false, etaProgramado: null, etaEstimado: null, fuente: 'adsb.lol' }),
+      observado({
+        tieneItinerario: false,
+        posicionVista: true,
+        etaProgramado: null,
+        etaEstimado: null,
+        fuente: 'adsb.lol',
+      }),
     );
     const pa05 = ds.find((d) => d.codigo === 'PA-05');
     expect(pa05?.severidad).toBe('informativa');
@@ -96,6 +103,26 @@ describe('PA-05 — ETA consistency', () => {
 });
 
 describe('PA-10 — unverifiable flight', () => {
+  it('fires when a position-only provider returned a snapshot but OBSERVED NOTHING', () => {
+    // The masking bug this guards against, found on live data: adsb.lol returns a snapshot even when it
+    // finds no aircraft — it is recording that it looked — and treating that as an observation made an
+    // unidentifiable flight read as perfectly clean. Which is the one case a human must be told about.
+    const ds = cotejarVuelo(
+      declarado,
+      observado({
+        tieneItinerario: false,
+        posicionVista: false,
+        etaProgramado: null,
+        etaEstimado: null,
+        origenIata: null,
+        destinoIata: null,
+        fuente: 'adsb.lol',
+      }),
+    );
+    expect(codes(ds)).toEqual(['PA-10']);
+    expect(ds[0].detalle).toMatchObject({ fuente: 'adsb.lol' });
+  });
+
   it('fires as a warning when no source could identify the flight', () => {
     const ds = cotejarVuelo(declarado, null);
     expect(codes(ds)).toEqual(['PA-10']);

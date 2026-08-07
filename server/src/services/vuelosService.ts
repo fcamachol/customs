@@ -150,6 +150,7 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
       estado: snapshot.estado,
       fuente: snapshot.fuente,
       tieneItinerario: snapshot.tieneItinerario,
+      posicionVista: snapshot.posicion !== null,
     },
     { etaToleranciaHoras: etaToleranciaHoras() },
   );

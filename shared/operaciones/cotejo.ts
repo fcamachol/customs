@@ -71,6 +71,13 @@ export interface VueloObservado {
   fuente: string | null;
   /** False when the provider could only give position, not an itinerary. */
   tieneItinerario: boolean;
+  /**
+   * Whether a position was actually SEEN. A position-only provider returns a snapshot even when it
+   * found nothing — it is recording that it looked — and without this flag that empty snapshot masks
+   * PA-10, so an unidentifiable flight reads as clean. Which is the worst possible outcome: it is
+   * exactly the case a human needs to be told about.
+   */
+  posicionVista?: boolean;
 }
 
 /** Hours of divergence between declared and real ETA before PA-05 fires. */
@@ -92,12 +99,18 @@ export function cotejarVuelo(
   const out: Discrepancia[] = [];
   const tol = opts.etaToleranciaHoras ?? ETA_TOLERANCIA_HORAS_DEFAULT;
 
-  if (!observado) {
+  // Nothing came back at all, OR something came back that observed nothing: no itinerary and no
+  // position means the flight was not identified, whatever shape the response had.
+  const nadaObservado = !observado || (!observado.tieneItinerario && !observado.posicionVista);
+  if (nadaObservado) {
     out.push({
       codigo: CODIGOS_DISCREPANCIA.PA_10,
       severidad: 'advertencia',
       mensaje: 'El vuelo declarado no pudo verificarse contra ninguna fuente externa.',
-      detalle: { numeroVueloDeclarado: declarado.numeroVuelo },
+      detalle: {
+        numeroVueloDeclarado: declarado.numeroVuelo,
+        fuente: observado?.fuente ?? null,
+      },
     });
     return out;
   }

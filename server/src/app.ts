@@ -23,6 +23,7 @@ import { adminRouter } from './routes/admin';
 import { prealertasRouter } from './routes/prealertas';
 import { operacionesRouter } from './routes/operaciones';
 import { opsRouter } from './routes/ops';
+import { campoRouter } from './routes/campo';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -82,6 +83,9 @@ export function createApp(): Express {
   app.use('/api/header-mappings', headerMappingsRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/operaciones', operacionesRouter);
+  // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
+  // role can be granted exactly this prefix and nothing else (§13).
+  app.use('/api/campo', campoRouter);
   // Machine-to-machine: authenticated by HMAC signature / shared secret rather than a JWT, because
   // the callers are AGORA and the scheduler, neither of which has a session.
   app.use('/api/prealertas', prealertasRouter);

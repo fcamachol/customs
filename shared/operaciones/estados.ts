@@ -86,6 +86,20 @@ export const TIPOS_EVENTO = [
   'VUELO_DEMORADO',
   'VUELO_CANCELADO',
   'ARRIBO_VUELO',
+  // Field capture by the tramitador (PRD-02 R11, R30–R35). These seven are the seven buttons of
+  // CampoView, in the order a real operation walks them. They exist as events and not merely as
+  // etapa changes because most of them do not move `etapa` at all: INGRESO_PATIO, INGRESO_ADUANA and
+  // FIN_CARGA are pure ledger facts whose value is the TIMESTAMP (cité 10:00, entró 10:05 — R30),
+  // and an etapa column can hold only the latest state, never the delta.
+  'CARGA_DISPONIBLE',
+  'INGRESO_PATIO',
+  'INGRESO_ADUANA',
+  'INICIO_CARGA',
+  'FIN_CARGA',
+  'MODULACION',
+  'SALIDA_ROJO',
+  /** A photo/PDF filed from the field. Distinct from EVIDENCIA_ARCHIVADA, which is prealerta mail. */
+  'EVIDENCIA_CAPTURADA',
 ] as const;
 export type TipoEvento = (typeof TIPOS_EVENTO)[number];
 

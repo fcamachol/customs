@@ -1,5 +1,10 @@
 /** F10: Single source of truth for privileged roles requiring mandatory MFA. */
 
+// `tramitador` is deliberately NOT here. PRD-02 §13: a TOTP on the loading dock is friction without
+// benefit — the role can only write field events for operaciones it is handed and reads nothing
+// (no manifiestos, no risk, no pedimentos, no billing), so a second factor buys almost nothing while
+// costing a re-prompt on a phone in a warehouse with bad signal. It is compensated with short-lived
+// session tokens and device binding instead.
 export const PRIVILEGED_ROLES = ['admin', 'super_admin', 'autoridad'] as const;
 export type PrivilegedRole = (typeof PRIVILEGED_ROLES)[number];
 

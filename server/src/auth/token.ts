@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-export type Role = 'capturista' | 'admin' | 'autoridad' | 'super_admin';
+export type Role = 'capturista' | 'admin' | 'autoridad' | 'super_admin' | 'tramitador';
 export interface Claims {
   userId: string;
   role: Role;

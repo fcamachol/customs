@@ -53,14 +53,17 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
     // Record the run on the cursor row so a silently dead scheduler is visible as a stale
     // `last_run_at` rather than as an absence of evidence.
     const errores = vuelos.filter((v) => v.status === 'error_proveedor');
+    // Every placeholder is cast explicitly: inside a CASE, Postgres cannot infer the type of a bare
+    // parameter and fails with 42P08 "could not determine data type".
     await query(
       `UPDATE integracion_cursores
           SET last_run_at = now(),
-              last_error = $2,
-              consecutive_errors = CASE WHEN $2 IS NULL THEN 0 ELSE consecutive_errors + 1 END,
+              last_error = $1::text,
+              consecutive_errors = CASE WHEN $1::text IS NULL THEN 0
+                                        ELSE consecutive_errors + 1 END,
               updated_at = now()
         WHERE fuente = 'vuelos'`,
-      [null, errores.length ? `${errores.length} operaciones con error de proveedor` : null],
+      [errores.length ? `${errores.length} operaciones con error de proveedor` : null],
     );
 
     res.json({

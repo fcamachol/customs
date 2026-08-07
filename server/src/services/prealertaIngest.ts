@@ -12,6 +12,25 @@ import {
 } from './agoraClient';
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
 import { refreshVueloForOperacion } from './vuelosService';
+import { ingestManifiestoFromPrealerta } from './manifiestoIngest';
+import {
+  CODIGOS_MANIFIESTO,
+  COTEJO_RULESET_VERSION,
+  PESO_TOLERANCIA_PCT_DEFAULT,
+  cotejarManifiesto,
+  mergeDiscrepancias,
+  type Discrepancia,
+} from '../../../shared/operaciones/cotejo';
+
+/**
+ * Weight tolerance as a fraction. Configurable because PRD-02 §16 records 0.5 % as an assumption taken
+ * to avoid blocking, not a figure anyone validated — and the sample weight in the meeting was itself
+ * ambiguous (52.64 vs 570 kg, still open as Q2).
+ */
+function pesoToleranciaPct(): number {
+  const raw = Number(process.env.PESO_TOLERANCIA_PCT);
+  return Number.isFinite(raw) && raw > 0 ? raw : PESO_TOLERANCIA_PCT_DEFAULT;
+}
 
 /**
  * Prealerta ingest — the entry point of the whole operations pipeline (PRD-02 R1–R6, Adenda A).
@@ -81,6 +100,11 @@ interface PreparedAdjunto {
   contentHash: string;
   scanVerdict: string;
   scanResult: ScanResult | null;
+  /**
+   * Retained for the manifiesto only, so it can be parsed after the caso commits without re-reading
+   * from disk. Held for one attachment rather than all of them to bound memory.
+   */
+  bytes?: Buffer;
 }
 
 function textOf(v: { full?: string } | string | undefined): string {
@@ -216,6 +240,7 @@ export async function ingestPrealerta(
       contentHash: meta.contentHash,
       scanVerdict,
       scanResult,
+      bytes: tipo === 'manifiesto' ? bytes : undefined,
     });
     // Deliberately no early break on `blocked`: rule R-A says we keep what arrived. We refuse to
     // PROCESS the prealerta, but every attachment still gets archived and hashed, so an auditor can
@@ -374,6 +399,94 @@ export async function ingestPrealerta(
     },
     ip: null,
   });
+
+  // Ingest the manifiesto attachment into the existing manifest pipeline. This is the join between the
+  // two systems: it is what lets the risk engine score on arrival, and it produces the totals the
+  // manifest cotejo rules (PA-01..PA-03) compare the email's declaration against.
+  //
+  // Best-effort and AFTER the caso is committed, deliberately: a malformed spreadsheet must not cost
+  // us the operación. A failure leaves the caso standing with its evidence archived, and shows up as a
+  // discrepancy rather than as a lost shipment.
+  const manifiesto = adjuntos.find((a) => a.tipo === 'manifiesto' && a.bytes);
+  if (!blocked && manifiesto?.bytes) {
+    try {
+      const res = await ingestManifiestoFromPrealerta({
+        operacionId: result.operacion.id,
+        mawb: result.operacion.mawb,
+        mawbRaw: parsed.fields.mawbRaw ?? null,
+        clientId: null,
+        bytes: manifiesto.bytes,
+        fileId: manifiesto.fileId,
+        contentHash: manifiesto.contentHash,
+      });
+
+      const declarado = {
+        cartones: parsed.fields.cartones ?? null,
+        piezas: parsed.fields.piezas ?? null,
+        pesoKg: parsed.fields.pesoKg ?? null,
+      };
+      const findings =
+        res.status === 'ingestado' || res.status === 'adjuntado'
+          ? cotejarManifiesto(declarado, { ...res.totales, lineas: res.totales.lineas }, {
+              pesoToleranciaPct: pesoToleranciaPct(),
+            })
+          : cotejarManifiesto(declarado, null);
+
+      // Read the stored set first: on a resend the caso may already carry flight findings from a
+      // previous cycle, and the merge must preserve them rather than replace the whole array.
+      const cur = await query<{ discrepancias: Discrepancia[] | null }>(
+        'SELECT discrepancias FROM operaciones WHERE id = $1',
+        [result.operacion.id],
+      );
+      await query(
+        `UPDATE operaciones
+            SET discrepancias  = $2::jsonb,
+                cotejo_version = $3,
+                estado_documental = CASE WHEN estado_documental = 'sin_cotejar'
+                                         THEN 'cotejado' ELSE estado_documental END
+          WHERE id = $1`,
+        [
+          result.operacion.id,
+          JSON.stringify(
+            mergeDiscrepancias(cur.rows[0]?.discrepancias ?? null, findings, CODIGOS_MANIFIESTO),
+          ),
+          COTEJO_RULESET_VERSION,
+        ],
+      );
+
+      await query(
+        `INSERT INTO operacion_eventos
+           (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+         VALUES ($1,$2,'COTEJO_EJECUTADO','sistema',now(),$3)`,
+        [
+          result.operacion.id,
+          result.operacion.mawb,
+          JSON.stringify({
+            manifiesto: res,
+            declarado,
+            discrepancias: findings,
+            cotejoVersion: COTEJO_RULESET_VERSION,
+          }),
+        ],
+      );
+
+      await recordAudit({
+        userId: null,
+        action: 'COTEJO_EJECUTADO',
+        entity: 'operacion',
+        entityId: result.operacion.id,
+        after: {
+          mawb: result.operacion.mawb,
+          manifestId: 'manifestId' in res ? res.manifestId : null,
+          estado: res.status,
+          discrepancias: findings.map((d) => ({ codigo: d.codigo, severidad: d.severidad })),
+        },
+        ip: null,
+      });
+    } catch (err) {
+      console.warn('[prealertaIngest] no se pudo ingestar el manifiesto adjunto:', err);
+    }
+  }
 
   // Resolve the flight immediately rather than waiting for the next tick. The declared ETA drives the
   // risk-requirement deadline and the tramitador's arrival window, so the sooner an independent

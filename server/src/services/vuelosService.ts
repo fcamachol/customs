@@ -5,9 +5,11 @@ import { lookupFlight } from './flightProviders';
 import { parseFlightNumber, type EstadoVuelo } from '../../../shared/operaciones/vuelo';
 import { canAdvanceEtapa, type Etapa } from '../../../shared/operaciones/estados';
 import {
+  CODIGOS_VUELO,
   COTEJO_RULESET_VERSION,
   ETA_TOLERANCIA_HORAS_DEFAULT,
   cotejarVuelo,
+  mergeDiscrepancias,
   type Discrepancia,
 } from '../../../shared/operaciones/cotejo';
 
@@ -67,11 +69,9 @@ function etaToleranciaHoras(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : ETA_TOLERANCIA_HORAS_DEFAULT;
 }
 
-/** Replace previous flight-rule findings, keep everything else. Re-running must not accumulate dupes. */
-function mergeDiscrepancias(existing: Discrepancia[] | null, flightFindings: Discrepancia[]): Discrepancia[] {
-  const flightCodes = new Set(['PA-04', 'PA-05', 'PA-10']);
-  const kept = (existing ?? []).filter((d) => !flightCodes.has(d.codigo));
-  return [...kept, ...flightFindings];
+/** Flight findings replace only their own codes; the manifest family's findings survive untouched. */
+function mergeFlight(existing: Discrepancia[] | null, flightFindings: Discrepancia[]): Discrepancia[] {
+  return mergeDiscrepancias(existing, flightFindings, CODIGOS_VUELO);
 }
 
 export async function refreshVueloForOperacion(operacionId: string): Promise<RefreshResult> {
@@ -208,7 +208,7 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
       [
         op.id,
         vuelo.id,
-        JSON.stringify(mergeDiscrepancias(op.discrepancias, findings)),
+        JSON.stringify(mergeFlight(op.discrepancias, findings)),
         COTEJO_RULESET_VERSION,
         nuevaEtapa,
         snapshot.estado === 'aterrizado' ? (snapshot.arriboReal ?? new Date().toISOString()) : null,
@@ -299,7 +299,7 @@ async function persistCotejo(op: OperacionRow, findings: Discrepancia[], vueloId
             cotejo_version = $3,
             vuelo_id       = COALESCE($4, vuelo_id)
       WHERE id = $1`,
-    [op.id, JSON.stringify(mergeDiscrepancias(op.discrepancias, findings)), COTEJO_RULESET_VERSION, vueloId ?? null],
+    [op.id, JSON.stringify(mergeFlight(op.discrepancias, findings)), COTEJO_RULESET_VERSION, vueloId ?? null],
   );
 }
 

@@ -162,3 +162,167 @@ export function cotejarVuelo(
 export function tieneError(ds: Discrepancia[]): boolean {
   return ds.some((d) => d.severidad === 'error');
 }
+
+// ---------------------------------------------------------------------------
+// Manifest rules — PA-01, PA-02, PA-03.
+//
+// These are the red flags Fernando derived live in the meeting: "si no concuerdan estos datos con el
+// manifiesto, tengo un red flag". The email states totals; the manifest states the detail; they must
+// agree.
+// ---------------------------------------------------------------------------
+
+/** Default weight tolerance, as a fraction. Weights legitimately drift with rounding and units. */
+export const PESO_TOLERANCIA_PCT_DEFAULT = 0.005;
+
+export interface TotalesDeclarados {
+  cartones: number | null;
+  piezas: number | null;
+  pesoKg: number | null;
+}
+
+export interface TotalesManifiesto {
+  /** Null when the manifest offers no basis for a carton count — then PA-01 is not evaluable. */
+  cartones: number | null;
+  piezas: number;
+  pesoKg: number;
+  lineas: number;
+}
+
+/**
+ * PA-01 (cartones), PA-02 (piezas), PA-03 (peso).
+ *
+ * Counts are compared exactly — a discrepancy of one carton is a real discrepancy. Weight gets a
+ * proportional tolerance because kilos legitimately drift with rounding and unit conversion, whereas
+ * a piece count does not.
+ *
+ * Anything the email did not declare, or the manifest cannot supply, is reported as NOT EVALUABLE
+ * rather than passed over. That matters here more than anywhere else in the system: a silent pass on
+ * PA-02 is indistinguishable from a verified match, and the whole point of the exercise is that the
+ * authority can tell those two apart.
+ *
+ * ON PA-06 — deliberately not implemented. The rule was "piezas totales ≠ suma de piezas por caja".
+ * In the data model we actually have, the manifest's piece total IS the sum of its line quantities, so
+ * the check would compare a number against itself and always pass — a rule that can never fail is
+ * worse than an absent one, because it looks like coverage. It becomes real only if the manifiesto
+ * turns out to carry its own declared total as a separate field, which the outstanding sample (Q1)
+ * will settle.
+ */
+export function cotejarManifiesto(
+  declarado: TotalesDeclarados,
+  manifiesto: TotalesManifiesto | null,
+  opts: { pesoToleranciaPct?: number } = {},
+): Discrepancia[] {
+  const out: Discrepancia[] = [];
+  if (!manifiesto) {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_01,
+      severidad: 'advertencia',
+      mensaje: 'No se pudo cotejar contra el manifiesto: no hay manifiesto asociado a la operación.',
+    });
+    return out;
+  }
+
+  const exact: Array<[CodigoDiscrepancia, string, number | null, number | null]> = [
+    [CODIGOS_DISCREPANCIA.PA_01, 'cartones', declarado.cartones, manifiesto.cartones],
+    [CODIGOS_DISCREPANCIA.PA_02, 'piezas', declarado.piezas, manifiesto.piezas],
+  ];
+  for (const [codigo, campo, dec, man] of exact) {
+    if (dec === null || dec === undefined) {
+      out.push({
+        codigo,
+        severidad: 'informativa',
+        mensaje: `No evaluable: la prealerta no declaró ${campo}.`,
+        detalle: { campo, manifiesto: man },
+      });
+      continue;
+    }
+    if (man === null || man === undefined) {
+      out.push({
+        codigo,
+        severidad: 'informativa',
+        mensaje: `No evaluable: el manifiesto no aporta ${campo}.`,
+        detalle: { campo, declarado: dec },
+      });
+      continue;
+    }
+    if (dec !== man) {
+      out.push({
+        codigo,
+        severidad: 'error',
+        mensaje: `Los ${campo} de la prealerta (${dec}) no coinciden con el manifiesto (${man}).`,
+        detalle: { campo, declarado: dec, manifiesto: man, diferencia: man - dec },
+      });
+    }
+  }
+
+  const tol = opts.pesoToleranciaPct ?? PESO_TOLERANCIA_PCT_DEFAULT;
+  if (declarado.pesoKg === null || declarado.pesoKg === undefined) {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_03,
+      severidad: 'informativa',
+      mensaje: 'No evaluable: la prealerta no declaró peso.',
+      detalle: { manifiesto: manifiesto.pesoKg },
+    });
+  } else if (manifiesto.pesoKg <= 0) {
+    out.push({
+      codigo: CODIGOS_DISCREPANCIA.PA_03,
+      severidad: 'informativa',
+      mensaje: 'No evaluable: el manifiesto no aporta peso.',
+      detalle: { declarado: declarado.pesoKg },
+    });
+  } else {
+    // Relative to the larger side, so the tolerance cannot be gamed by declaring a tiny weight.
+    const base = Math.max(Math.abs(declarado.pesoKg), Math.abs(manifiesto.pesoKg));
+    const diff = Math.abs(manifiesto.pesoKg - declarado.pesoKg);
+    if (diff / base > tol) {
+      out.push({
+        codigo: CODIGOS_DISCREPANCIA.PA_03,
+        severidad: 'error',
+        mensaje:
+          `El peso de la prealerta (${declarado.pesoKg} kg) difiere del manifiesto ` +
+          `(${manifiesto.pesoKg} kg) en ${(100 * diff / base).toFixed(2)} %, ` +
+          `sobre una tolerancia de ${(100 * tol).toFixed(2)} %.`,
+        detalle: {
+          declarado: declarado.pesoKg,
+          manifiesto: manifiesto.pesoKg,
+          diferenciaKg: Number(diff.toFixed(3)),
+          desviacionPct: Number((100 * diff / base).toFixed(4)),
+          toleranciaPct: 100 * tol,
+        },
+      });
+    }
+  }
+
+  return out;
+}
+
+/** Codes owned by the manifest rules, so a re-run replaces rather than accumulates them. */
+export const CODIGOS_MANIFIESTO: readonly CodigoDiscrepancia[] = [
+  CODIGOS_DISCREPANCIA.PA_01,
+  CODIGOS_DISCREPANCIA.PA_02,
+  CODIGOS_DISCREPANCIA.PA_03,
+];
+
+/** Codes owned by the flight rules. */
+export const CODIGOS_VUELO: readonly CodigoDiscrepancia[] = [
+  CODIGOS_DISCREPANCIA.PA_04,
+  CODIGOS_DISCREPANCIA.PA_05,
+  CODIGOS_DISCREPANCIA.PA_10,
+];
+
+/**
+ * Merge a rule family's fresh findings into the stored set.
+ *
+ * Each family owns its codes and REPLACES them, leaving other families untouched. Without this, every
+ * poll would append another copy of the same finding and the caso would slowly fill with duplicates;
+ * and a naive full replacement would let the flight refresh erase the manifest findings.
+ */
+export function mergeDiscrepancias(
+  existing: Discrepancia[] | null | undefined,
+  nuevos: Discrepancia[],
+  codigosPropios: readonly CodigoDiscrepancia[],
+): Discrepancia[] {
+  const own = new Set<string>(codigosPropios);
+  const kept = (existing ?? []).filter((d) => !own.has(d.codigo));
+  return [...kept, ...nuevos];
+}

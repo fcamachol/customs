@@ -19,7 +19,24 @@ import { truncateAll } from '../helpers/db';
 const scratch = mkdtempSync(join(tmpdir(), 'prealerta-ingest-'));
 process.env.FILE_STORAGE_DIR = scratch;
 
-const downloadAttachment = vi.fn(async () => Buffer.from('%PDF-1.4 fake\n'));
+// A real (if minimal) CSV for the manifiesto, so the manifest pipeline genuinely runs instead of
+// choking on placeholder bytes. Headers use the vocabulary shared/parsing/headerSynonyms.ts maps.
+// 10 + 25 = 35 pieces, which deliberately CONTRADICTS the 1910 the email body declares — that is what
+// makes PA-02 fire and proves the red flag works end to end.
+// Fraccion arancelaria is REQUIRED by validateManifest: without it every row is a hard error, nothing
+// promotes to shipments, and the risk engine gets nothing to score. Worth knowing operationally — a
+// real manifiesto that omits it produces a caso with no risk analysis at all.
+const MANIFIESTO_CSV = [
+  'No. de guia aerea o documento de transporte,Descripcion de la mercancia,Fraccion arancelaria,Cantidad de la mercancia,Valor en aduana declarado,Moneda,Pais de procedencia',
+  '160-94705516-001,AURICULARES INALAMBRICOS,9901000100,10,85.50,USD,CN',
+  '160-94705516-002,FUNDA PARA TELEFONO,9901000100,25,42.00,USD,CN',
+].join('\n');
+
+const downloadAttachment = vi.fn(async (_cfg: unknown, url: string) =>
+  String(url).endsWith('.csv') || String(url).endsWith('.xlsx')
+    ? Buffer.from(MANIFIESTO_CSV, 'utf8')
+    : Buffer.from('%PDF-1.4 fake\n'),
+);
 const setConversationCustomAttributes = vi.fn(async () => {});
 const scanPedimentoPdf = vi.fn(async () => ({
   verdict: 'clean' as const,
@@ -37,7 +54,7 @@ vi.mock('../../src/services/agoraClient', async () => {
   return {
     ...actual,
     loadAgoraConfig: () => ({ baseUrl: 'https://agora.test', accountId: '9', token: 't' }),
-    downloadAttachment: (...a: unknown[]) => downloadAttachment(...(a as [])),
+    downloadAttachment: (...a: unknown[]) => downloadAttachment(...(a as [unknown, string])),
     setConversationCustomAttributes: (...a: unknown[]) =>
       setConversationCustomAttributes(...(a as [])),
   };
@@ -101,7 +118,7 @@ function payload(over: Record<string, unknown> = {}) {
     sender: { id: 3, email: 'robot@shein.example' },
     attachments: [
       { id: 1, file_type: 'file', data_url: 'https://agora.test/blob/awb.pdf', extension: 'pdf' },
-      { id: 2, file_type: 'file', data_url: 'https://agora.test/blob/manifiesto.xlsx', extension: 'xlsx' },
+      { id: 2, file_type: 'file', data_url: 'https://agora.test/blob/manifiesto.csv', extension: 'csv' },
     ],
     ...over,
   };
@@ -173,8 +190,10 @@ describe('ingestPrealerta — happy path', () => {
     expect(adj.rows[1].scan_verdict).toBe('unscannable');
     expect(adj.rows[0].content_hash).toMatch(/^[0-9a-f]{64}$/);
 
+    // Filtered to the prealerta family: the cotejo now adds its own event, and asserting an exact
+    // whole-timeline array would break every time another rule family starts contributing.
     const ev = await query<{ tipo: string; origen: string; operacion_mawb: string }>(
-      'SELECT tipo, origen, operacion_mawb FROM operacion_eventos',
+      `SELECT tipo, origen, operacion_mawb FROM operacion_eventos WHERE tipo LIKE 'PREALERTA%'`,
     );
     expect(ev.rows).toHaveLength(1);
     expect(ev.rows[0].tipo).toBe('PREALERTA_RECIBIDA');
@@ -204,13 +223,92 @@ describe('ingestPrealerta — happy path', () => {
   });
 });
 
+describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () => {
+  it('creates the manifest, promotes shipments, links the caso, and fires PA-02', async () => {
+    // This is the join between the two systems. Before it, the manifiesto was archived and nothing
+    // more, so the risk engine still needed a human to upload the same file by hand.
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-m', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    const man = await query<{ id: string; mawb_reference: string; ingestion_status: string }>(
+      'SELECT id, mawb_reference, ingestion_status FROM manifests',
+    );
+    expect(man.rows).toHaveLength(1);
+    expect(man.rows[0].mawb_reference).toBe('16094705516');
+    expect(man.rows[0].ingestion_status).toBe('promoted');
+
+    // Promoted to the gold layer, so the risk engine has rows to score.
+    const ship = await query('SELECT 1 FROM shipments WHERE manifest_id = $1', [man.rows[0].id]);
+    expect(ship.rows).toHaveLength(2);
+
+    const op = await query<{ manifest_id: string; estado_documental: string; cotejo_version: string; discrepancias: Array<{ codigo: string; severidad: string; detalle?: Record<string, unknown> }> }>(
+      'SELECT manifest_id, estado_documental, cotejo_version, discrepancias FROM operaciones WHERE id = $1',
+      [out.operacionId],
+    );
+    expect(op.rows[0].manifest_id).toBe(man.rows[0].id);
+    expect(op.rows[0].estado_documental).toBe('cotejado');
+    expect(op.rows[0].cotejo_version).toBe('2026-08a');
+
+    // The email declared 1910 pieces; the manifest totals 35. That is the red flag Fernando derived
+    // in the meeting, firing automatically.
+    const pa02 = op.rows[0].discrepancias.find((d) => d.codigo === 'PA-02');
+    expect(pa02?.severidad).toBe('error');
+    expect(pa02?.detalle).toMatchObject({ declarado: 1910, manifiesto: 35 });
+
+    const ev = await query<{ tipo: string }>('SELECT tipo FROM operacion_eventos ORDER BY id');
+    expect(ev.rows.map((e) => e.tipo)).toContain('COTEJO_EJECUTADO');
+  });
+
+  it('attaches to an existing manifest for the same MAWB instead of violating the unique index', async () => {
+    // mawb_reference is globally unique, so a manual upload or a resend must be joined, not duplicated.
+    await query(
+      `INSERT INTO manifests (mawb_reference, ingestion_status) VALUES ('16094705516','draft')`,
+    );
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-a', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    if (out.status !== 'processed') return;
+
+    const man = await query('SELECT 1 FROM manifests');
+    expect(man.rows).toHaveLength(1);
+    const op = await query<{ manifest_id: string }>(
+      'SELECT manifest_id FROM operaciones WHERE id = $1', [out.operacionId]);
+    expect(op.rows[0].manifest_id).toBeTruthy();
+  });
+
+  it('keeps the caso when the manifiesto cannot be parsed', async () => {
+    // A malformed spreadsheet must not cost us the shipment; it becomes a reported gap instead.
+    downloadAttachment.mockImplementation(async () => Buffer.from('not a spreadsheet at all'));
+    const out = await ingestPrealerta(payload(), { eventId: 'evt-bad', expectedInboxId: '21' });
+    expect(out.status).toBe('processed');
+    const op = await query('SELECT 1 FROM operaciones');
+    expect(op.rows).toHaveLength(1);
+  });
+
+  it('does not touch the manifest pipeline when an attachment was blocked', async () => {
+    scanPedimentoPdf.mockResolvedValue({
+      verdict: 'blocked',
+      findings: [{ motor: 'RF08_ACTIVE_CONTENT', code: 'js', severity: 'critical', message: 'JS' }],
+      motors: { rf08: 'blocked', rf10: 'clean' },
+      scannedAt: '2026-08-06T00:00:00.000Z',
+      bytesScanned: 14,
+      policy: {} as never,
+    } as never);
+    await ingestPrealerta(payload(), { eventId: 'evt-blk', expectedInboxId: '21' });
+    const man = await query('SELECT 1 FROM manifests');
+    expect(man.rows).toHaveLength(0);
+  });
+});
+
 describe('ingestPrealerta — idempotency and resends', () => {
   it('treats a redelivered event id as a duplicate', async () => {
     await ingestPrealerta(payload(), { eventId: 'evt-1', expectedInboxId: '21' });
     const second = await ingestPrealerta(payload(), { eventId: 'evt-1', expectedInboxId: '21' });
     expect(second.status).toBe('duplicate');
     expect((await query('SELECT 1 FROM prealertas')).rows).toHaveLength(1);
-    expect((await query('SELECT 1 FROM operacion_eventos')).rows).toHaveLength(1);
+    expect(
+      (await query(`SELECT 1 FROM operacion_eventos WHERE tipo LIKE 'PREALERTA%'`)).rows,
+    ).toHaveLength(1);
   });
 
   it('treats the same Message-ID arriving with a different event id as a duplicate', async () => {
@@ -252,7 +350,9 @@ describe('ingestPrealerta — idempotency and resends', () => {
     expect(op.rows[0].numero_vuelo).toBe('CI5300');
     expect(new Date(op.rows[0].eta_pais).toISOString().slice(0, 10)).toBe('2026-08-19');
 
-    const ev = await query<{ tipo: string }>('SELECT tipo FROM operacion_eventos ORDER BY id');
+    const ev = await query<{ tipo: string }>(
+      `SELECT tipo FROM operacion_eventos WHERE tipo LIKE 'PREALERTA%' ORDER BY id`,
+    );
     expect(ev.rows.map((r) => r.tipo)).toEqual(['PREALERTA_RECIBIDA', 'PREALERTA_VERSIONADA']);
   });
 
@@ -337,7 +437,9 @@ describe('ingestPrealerta — blocked attachment', () => {
     expect(pre.rows[0].estado).toBe('rechazada');
     expect(pre.rows[0].motivo_rechazo).toMatch(/adjunto_bloqueado/);
 
-    const ev = await query<{ tipo: string }>('SELECT tipo FROM operacion_eventos');
+    const ev = await query<{ tipo: string }>(
+      `SELECT tipo FROM operacion_eventos WHERE tipo LIKE 'PREALERTA%'`,
+    );
     expect(ev.rows[0].tipo).toBe('PREALERTA_ADJUNTO_BLOQUEADO');
 
     // Every artifact is still archived — rule R-A keeps what arrived even when we refuse to act on

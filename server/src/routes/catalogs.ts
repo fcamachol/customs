@@ -6,7 +6,7 @@ import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
-import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema, clientDireccionBody, clientDireccionUpdateBody, clientDireccionParam, type ClientDireccionBody, type ClientDireccionUpdateBody } from '../validation/schemas';
+import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema, clientDireccionBody, clientDireccionUpdateBody, clientDireccionParam, clientTarifaBody, clientTarifaUpdateBody, clientTarifaParam, type ClientDireccionBody, type ClientDireccionUpdateBody, type ClientTarifaBody, type ClientTarifaUpdateBody } from '../validation/schemas';
 import { decryptField, encryptField } from '../crypto/fieldCrypto';
 import { listAgentes, listImportadores, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
 
@@ -607,5 +607,135 @@ catalogsRouter.put(
       if (isUniqueViolation(err)) { res.status(409).json({ error: 'Ya existe un importador con ese RFC' }); return; }
       throw err;
     }
+  },
+);
+
+// ─── Client rate card (R46 / D17) ───────────────────────────────────────────
+//
+// The revenue mirror of `transportista_tarifas`: what a CLIENT pays, per pieza (Alfonso's example
+// was $0.05, Q9), per guía, per kg, per cartón or per despacho. It lives with the client catalog for
+// the same reason the delivery addresses do — it is a property of the counterparty, not of a trip.
+//
+// ADMIN ONLY, INCLUDING THE READ. The addresses above are readable by any authenticated role because
+// the planner needs the destination; a price is not operational data. A capturista's job is cargo,
+// and a rate card visible to everyone is a rate card that leaks into a conversation it should not be
+// in. The billing endpoints (`/api/facturacion`) resolve rates server-side, so nothing operational
+// needs this list.
+//
+// RATES ARE DEACTIVATED, NEVER DELETED. `factura_partidas.client_tarifa_id` points at them, and a
+// deleted rate would leave a historical invoice line unable to say what agreement it was priced
+// under — which is precisely the question R45 exists to answer.
+
+const TARIFA_RETURNING = `
+  id, client_id AS "clientId", concepto, unidad, precio, moneda,
+  vigencia_desde::text AS "vigenciaDesde", vigencia_hasta::text AS "vigenciaHasta",
+  contrato_file_id AS "contratoFileId", activo, created_at AS "createdAt"`;
+
+catalogsRouter.get(
+  '/clients/:id/tarifas',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { rows } = await query(
+      `SELECT ${TARIFA_RETURNING} FROM client_tarifas WHERE client_id = $1
+        ORDER BY activo DESC, concepto, vigencia_desde DESC NULLS LAST`,
+      [req.params.id],
+    );
+    res.json(rows);
+  },
+);
+
+catalogsRouter.post(
+  '/clients/:id/tarifas',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam, body: clientTarifaBody }),
+  async (req, res) => {
+    const { id } = req.params;
+    const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    const b = req.body as ClientTarifaBody;
+    const { rows } = await query(
+      `INSERT INTO client_tarifas
+         (client_id, concepto, unidad, precio, moneda, vigencia_desde, vigencia_hasta,
+          contrato_file_id, activo, created_by)
+       VALUES ($1,$2,$3,$4,COALESCE($5,'MXN'),$6,$7,$8,COALESCE($9,true),$10)
+       RETURNING ${TARIFA_RETURNING}`,
+      [
+        id, b.concepto, b.unidad, b.precio, b.moneda ?? null,
+        b.vigenciaDesde ?? null, b.vigenciaHasta ?? null,
+        b.contratoFileId ?? null, b.activo ?? null, req.user!.userId,
+      ],
+    );
+    await recordAudit({
+      userId: req.user!.userId, action: 'CREATE_CLIENT_TARIFA', entity: 'client_tarifa',
+      entityId: rows[0].id as string,
+      after: { clientId: id, concepto: b.concepto, unidad: b.unidad, precio: b.precio, moneda: rows[0].moneda },
+      ip: req.ip,
+    });
+    res.status(201).json(rows[0]);
+  },
+);
+
+catalogsRouter.put(
+  '/clients/:id/tarifas/:tid',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: clientTarifaParam, body: clientTarifaUpdateBody }),
+  async (req, res) => {
+    const { id, tid } = req.params;
+    const b = req.body as ClientTarifaUpdateBody;
+    const sets: string[] = [];
+    const params: unknown[] = [tid, id];
+    const set = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (b.concepto !== undefined) set('concepto', b.concepto);
+    if (b.unidad !== undefined) set('unidad', b.unidad);
+    if (b.precio !== undefined) set('precio', b.precio);
+    if (b.moneda !== undefined) set('moneda', b.moneda);
+    if (b.vigenciaDesde !== undefined) set('vigencia_desde', b.vigenciaDesde ?? null);
+    if (b.vigenciaHasta !== undefined) set('vigencia_hasta', b.vigenciaHasta ?? null);
+    if (b.contratoFileId !== undefined) set('contrato_file_id', b.contratoFileId ?? null);
+    if (b.activo !== undefined) set('activo', b.activo);
+    if (!sets.length) { res.status(400).json({ error: 'No hay nada que actualizar.' }); return; }
+
+    const before = await query('SELECT precio, unidad, concepto FROM client_tarifas WHERE id=$1 AND client_id=$2', [tid, id]);
+    const { rows } = await query(
+      `UPDATE client_tarifas SET ${sets.join(', ')}
+        WHERE id = $1 AND client_id = $2 RETURNING ${TARIFA_RETURNING}`,
+      params,
+    );
+    if (!rows.length) { res.status(404).json({ error: 'Tarifa no encontrada' }); return; }
+    await recordAudit({
+      userId: req.user!.userId, action: 'UPDATE_CLIENT_TARIFA', entity: 'client_tarifa',
+      entityId: tid,
+      // A price change is exactly the kind of edit somebody asks about six months later, so both
+      // sides of it are in the permanent record.
+      before: before.rows[0], after: { clientId: id, concepto: rows[0].concepto, unidad: rows[0].unidad, precio: rows[0].precio, activo: rows[0].activo },
+      ip: req.ip,
+    });
+    res.json(rows[0]);
+  },
+);
+
+// DELETE = deactivate. See the section header for why the row survives.
+catalogsRouter.delete(
+  '/clients/:id/tarifas/:tid',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: clientTarifaParam }),
+  async (req, res) => {
+    const { id, tid } = req.params;
+    const { rows } = await query(
+      `UPDATE client_tarifas SET activo = false WHERE id = $1 AND client_id = $2
+       RETURNING id, concepto, unidad, precio, activo`,
+      [tid, id],
+    );
+    if (!rows.length) { res.status(404).json({ error: 'Tarifa no encontrada' }); return; }
+    await recordAudit({
+      userId: req.user!.userId, action: 'DESACTIVAR_CLIENT_TARIFA', entity: 'client_tarifa',
+      entityId: tid, after: { clientId: id, ...rows[0] }, ip: req.ip,
+    });
+    res.json({ ok: true, ...rows[0] });
   },
 );

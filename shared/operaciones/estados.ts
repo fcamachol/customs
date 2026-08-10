@@ -158,6 +158,36 @@ export const TIPOS_EVENTO = [
   /** R19 / P4: a new version of the day's plan went out, with its diff. */
   'PLAN_PUBLICADO',
   /**
+   * Proof of delivery (R28/R39) — the events that close the physical chain.
+   *
+   * POD_FIRMADO is the ONLY event in this vocabulary produced by somebody outside this organisation:
+   * a client's employee signing for the cargo. That is why it, and not ARRIBO_DESTINO, is what moves
+   * `etapa` to `entregado`. A unit can arrive and be turned away; arrival is our observation of a
+   * truck, delivery is their acceptance of the goods, and a system that conflated them would let a
+   * refused delivery read as a completed one — and then bill it (R43).
+   *
+   * POD_RECHAZADO exists for exactly that case and is deliberately NOT a delivery: the trip stays
+   * short of `entregado`, the guías stay un-billable, and the client's stated reason is on the
+   * record. Recording a refusal as "not yet signed" would make the most expensive outcome in the
+   * process the one the ledger has no word for.
+   */
+  'POD_GENERADO',
+  'POD_ENVIADO',
+  'POD_FIRMADO',
+  'POD_RECHAZADO',
+  /**
+   * Financial traceability (R43–R48, D17). These land on the caso's timeline, not only in the
+   * invoice's own history, because ANAM's question arrives from the cargo end: "this guía — what was
+   * it charged, on which invoice?". A shipment whose timeline ends at delivery leaves that question
+   * to a spreadsheet, which is the whole thing this replaces.
+   *
+   * FACTURA_LIGADA is the D17 moment made explicit: the CFDI exists, and the link between it and the
+   * guía-piezas-importe detail is written HERE rather than inside the fiscal document.
+   */
+  'FACTURA_CREADA',
+  'FACTURA_LIGADA',
+  'FACTURA_CANCELADA',
+  /**
    * A post-commit step of the ingest failed — manifest parse, risk scoring, flight lookup, the
    * operation-level cotejo, or the AGORA mirror.
    *

@@ -5,6 +5,7 @@ import {
   ESTADOS_TRANSPORTISTA,
   TIPOS_UNIDAD_IDS,
 } from '../../../shared/operaciones/catalogos';
+import { UNIDADES_TARIFA } from '../../../shared/operaciones/facturacion';
 
 // Shared role enum. `tramitador` is creatable through the users API (PRD-02 §13): it is the field
 // role, so somebody has to be able to hand out accounts for it. `super_admin` stays out on purpose —
@@ -695,7 +696,28 @@ export const despachoListQuery = z.object({
   fecha: fechaOpcional,
   estado: estadoDespachoEnum.optional(),
   transportistaId: z.string().uuid('transportistaId debe ser un UUID.').optional(),
+  /**
+   * Trazabilidad, the cargo→carrier direction. Without it the only way to ask "which trips carried
+   * this caso?" was to pull every despacho and open each one, which is the N+1 that made the
+   * question effectively unanswerable from a phone.
+   */
+  operacionId: z.string().uuid('operacionId debe ser un UUID.').optional(),
 });
+
+/**
+ * Trazabilidad, the carrier→cargo direction: every partida a transportista ever carried.
+ *
+ * The window is a date RANGE over `fecha_operacion` rather than a single day, because the question
+ * this answers ("what did we send with them, and did it arrive?") is asked about a period — a
+ * fortnight, a month, the life of a convenio — and answering it one day at a time is the same N+1
+ * with extra steps.
+ */
+export const transportistaPaquetesQuery = z.object({
+  desde: fechaOpcional,
+  hasta: fechaOpcional,
+  estado: estadoDespachoEnum.optional(),
+});
+export type TransportistaPaquetesQuery = z.infer<typeof transportistaPaquetesQuery>;
 
 export const despachoCrearBody = z.object({
   fechaOperacion: fechaISO,
@@ -817,3 +839,207 @@ export type PlanPublicarBody = z.infer<typeof planPublicarBody>;
 export const planPublicacionParam = z.object({
   id: z.string().uuid('El id de la publicación debe ser un UUID.'),
 });
+
+// ── POD — prueba de entrega (R28, R39) ───────────────────────────────────────────────────────
+//
+// Everything here has to survive a phone in a warehouse doorway, same as `campo`: the signed sheet
+// arrives as multipart, so numbers and booleans come in as strings and a cleared input arrives as ''.
+
+export const podParam = z.object({
+  id: z.string().uuid('El id del POD debe ser un UUID.'),
+});
+
+export const podListQuery = z.object({
+  estado: z.enum(['generado', 'enviado', 'firmado', 'rechazado'] as const).optional(),
+  fecha: fechaOpcional,
+  despachoId: z.string().uuid('despachoId debe ser un UUID.').optional(),
+});
+
+/** Generate (or regenerate) the delivery sheet from the current assignment. */
+export const podGenerarBody = z.object({
+  observaciones: textoOpcional,
+});
+export type PodGenerarBody = z.infer<typeof podGenerarBody>;
+
+export const podEnviadoBody = z.object({
+  enviadoAt: fechaHoraOpcional,
+  /** Who it went to, in whatever handle the operation used (a WhatsApp, an email, a driver's name). */
+  destinatario: textoOpcional,
+  observaciones: textoOpcional,
+});
+export type PodEnviadoBody = z.infer<typeof podEnviadoBody>;
+
+/**
+ * The signature coming back.
+ *
+ * `firmadoPor` is REQUIRED and free text: it is the receiving warehouse's employee, a person this
+ * system has no catalog of and must not invent one for. A POD marked signed by nobody is the exact
+ * shape of the Excel cell this replaces.
+ */
+export const podFirmadoBody = z.object({
+  firmadoPor: textoRequerido,
+  firmadoAt: fechaHoraOpcional,
+  observaciones: textoOpcional,
+});
+export type PodFirmadoBody = z.infer<typeof podFirmadoBody>;
+
+/** The client refused the cargo at the door. A real outcome, and it must state its reason (R40). */
+export const podRechazadoBody = z.object({
+  motivo: motivoRequerido,
+  ocurridoAt: fechaHoraOpcional,
+});
+export type PodRechazadoBody = z.infer<typeof podRechazadoBody>;
+
+// ── trazabilidad financiera (R43–R48, D17/D18) ───────────────────────────────────────────────
+
+const unidadTarifaEnum = z.enum(UNIDADES_TARIFA as unknown as [string, ...string[]], {
+  errorMap: () => ({ message: `unidad debe ser una de: ${UNIDADES_TARIFA.join(', ')}.` }),
+});
+
+/** YYYY-MM. The billing month — what the monthly report and the authority ask by. */
+const periodoISO = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'El periodo debe tener el formato YYYY-MM.');
+
+const periodoOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  periodoISO.optional(),
+);
+
+/** Money that must be present. Non-negative for the same reason a negative tariff is a slip. */
+const montoRequerido = z.coerce.number().nonnegative('El importe no puede ser negativo.');
+
+export const clientTarifaParam = z.object({
+  id: z.string().uuid('El id del cliente debe ser un UUID.'),
+  tid: z.string().uuid('El id de la tarifa debe ser un UUID.'),
+});
+
+/** R46 — what a client pays, per unit. */
+export const clientTarifaBody = z.object({
+  concepto: textoRequerido,
+  unidad: unidadTarifaEnum,
+  precio: montoRequerido,
+  moneda: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined),
+    z.string().length(3, 'La moneda es un código ISO de 3 letras.').optional(),
+  ),
+  vigenciaDesde: fechaOpcional,
+  vigenciaHasta: fechaOpcional,
+  contratoFileId: z.string().uuid('contratoFileId debe ser un UUID.').optional(),
+  activo: z.boolean().optional(),
+});
+export type ClientTarifaBody = z.infer<typeof clientTarifaBody>;
+
+export const clientTarifaUpdateBody = clientTarifaBody.partial();
+export type ClientTarifaUpdateBody = z.infer<typeof clientTarifaUpdateBody>;
+
+/** R43/R44/R46 — what a client owes for a month, before anybody commits to an invoice. */
+export const preliquidacionQuery = z.object({
+  clientId: z.string().uuid('clientId debe ser un UUID.'),
+  periodo: periodoISO,
+  /** Which document type the "already billed" check runs against; see routes/facturacion.ts. */
+  tipo: z.enum(['proforma', 'cfdi'] as const).optional(),
+});
+export type PreliquidacionQuery = z.infer<typeof preliquidacionQuery>;
+
+/**
+ * One invoice line, when the caller writes it explicitly rather than taking the preliquidación.
+ *
+ * `precioContratado` is accepted so a deliberate departure from the tariff can be recorded AS a
+ * departure (R45) instead of quietly redefining the contract. Omitted, the route fills it from the
+ * client's rate — the comparison is the control, so it is never simply skipped.
+ */
+export const facturaPartidaBody = z.object({
+  operacionId: z.string().uuid('operacionId debe ser un UUID.').optional(),
+  operacionGuiaId: z.string().uuid('operacionGuiaId debe ser un UUID.').optional(),
+  despachoId: z.string().uuid('despachoId debe ser un UUID.').optional(),
+  concepto: textoRequerido,
+  unidad: unidadTarifaEnum,
+  cantidad: montoRequerido,
+  piezas: enteroOpcional,
+  precioUnitario: montoRequerido,
+  precioContratado: montoOpcional,
+  clientTarifaId: z.string().uuid('clientTarifaId debe ser un UUID.').optional(),
+});
+export type FacturaPartidaBody = z.infer<typeof facturaPartidaBody>;
+
+/** R43/R44 — create the proforma or the CFDI shell with its lines. */
+export const facturaCrearBody = z.object({
+  clientId: z.string().uuid('clientId debe ser un UUID.'),
+  tipo: z.enum(['proforma', 'cfdi'] as const),
+  periodo: periodoISO,
+  folio: textoOpcional,
+  moneda: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined),
+    z.string().length(3, 'La moneda es un código ISO de 3 letras.').optional(),
+  ),
+  /** Absent = build the lines from the preliquidación, which is the normal month-end path. */
+  partidas: z.array(facturaPartidaBody).optional(),
+  receptorRfc: textoOpcional,
+  receptorRazonSocial: textoOpcional,
+  receptorCorreo: textoOpcional,
+  observaciones: textoOpcional,
+});
+export type FacturaCrearBody = z.infer<typeof facturaCrearBody>;
+
+export const facturaParam = z.object({
+  id: z.string().uuid('El id de la factura debe ser un UUID.'),
+});
+
+export const facturaListQuery = z.object({
+  clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
+  periodo: periodoOpcional,
+  estado: z.enum(['borrador', 'emitida', 'timbrada', 'cancelada', 'pagada'] as const).optional(),
+  tipo: z.enum(['proforma', 'cfdi'] as const).optional(),
+});
+
+/**
+ * R48 — attach the stamp. `timbradoPrueba` defaults to TRUE in the route, not here: the T1-specific
+ * stamping is not enabled yet, so a caller who says nothing is producing a test stamp and the record
+ * must say so. Claiming a fiscal stamp requires saying it out loud.
+ */
+export const facturaTimbradoBody = z.object({
+  uuidCfdi: textoRequerido,
+  folio: textoOpcional,
+  timbradoAt: fechaHoraOpcional,
+  timbradoPrueba: z.boolean().optional(),
+});
+export type FacturaTimbradoBody = z.infer<typeof facturaTimbradoBody>;
+
+/**
+ * The two states nothing else reaches: `emitida` (the document went to the client) and `pagada`.
+ * `timbrada` and `cancelada` are deliberately NOT accepted here — each has its own endpoint that
+ * records what makes the claim true (a SAT uuid, a stated reason). A state a caller can simply
+ * declare is a state that means nothing.
+ */
+export const facturaEstadoBody = z.object({
+  estado: z.enum(['emitida', 'pagada'] as const),
+  motivo: textoOpcional,
+});
+export type FacturaEstadoBody = z.infer<typeof facturaEstadoBody>;
+
+export const facturaCancelarBody = z.object({
+  motivo: motivoRequerido,
+});
+export type FacturaCancelarBody = z.infer<typeof facturaCancelarBody>;
+
+/** R43 — the monthly report the authority asks for, per client. */
+export const reporteMensualQuery = z.object({
+  clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
+  periodo: periodoISO,
+});
+export type ReporteMensualQuery = z.infer<typeof reporteMensualQuery>;
+
+/** R44 — guía → piezas → factura, asked with the number written on a piece of paper. */
+export const trazabilidadQuery = z.object({
+  guia: textoOpcional,
+  mawb: textoOpcional,
+});
+
+// ── reportes operativos (punto 6 y 7 del requerimiento; Fase C) ──────────────────────────────
+export const reporteOperativoQuery = z.object({
+  desde: fechaOpcional,
+  hasta: fechaOpcional,
+  clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
+});
+export type ReporteOperativoQuery = z.infer<typeof reporteOperativoQuery>;

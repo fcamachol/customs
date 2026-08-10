@@ -87,6 +87,12 @@ const TIPOS_ESPEJO_SIEMPRE = new Set<string>([
   'OPERACION_EXCLUIDA_DEL_PLAN',
   'OPERACION_REPROGRAMADA',
   'REASIGNACION_PROPUESTA',
+  // Delivery, signed or refused (R39). This is the answer to the question the thread was opened
+  // with — "did my cargo arrive?" — and it is the one fact in the whole chain produced by somebody
+  // OUTSIDE this organisation. POD_GENERADO and POD_ENVIADO are deliberately absent: producing a
+  // document is our own housekeeping, and a regeneration would post a note saying nothing changed.
+  'POD_FIRMADO',
+  'POD_RECHAZADO',
   // a best-effort ingest step that failed — the whole point is that it stops being invisible
   'INGESTA_INCIDENCIA',
 ]);
@@ -222,6 +228,14 @@ const FORMATEADORES: Record<string, (p: Record<string, unknown>) => string> = {
     const vuelo = typeof p.numeroVuelo === 'string' ? p.numeroVuelo : 'el vuelo';
     return `⛔ VUELO_CANCELADO — ${vuelo} cancelado${p.fuente ? ` (fuente ${String(p.fuente)})` : ''}`;
   },
+  // R39. The POD folio is quoted because it is what the client's warehouse writes on the paper, and
+  // a coordinator chasing a signature asks for it by that string.
+  POD_FIRMADO: (p) => {
+    const quien = typeof p.firmadoPor === 'string' && p.firmadoPor ? ` por ${p.firmadoPor}` : '';
+    return conFecha(`📝 POD FIRMADO ${String(p.folio ?? '')}${quien} — entrega completada`, p.firmadoAt ?? p.ocurridoAt);
+  },
+  POD_RECHAZADO: (p) =>
+    `⛔ POD RECHAZADO ${String(p.folio ?? '')} — el cliente NO recibió: ${String(p.motivo ?? 'sin motivo')}`,
   COTEJO_EJECUTADO: lineaCotejo,
   RIESGO_EVALUADO: (p) => {
     const s = (p.summary ?? {}) as Record<string, unknown>;

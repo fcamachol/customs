@@ -18,6 +18,7 @@ import {
   despachoPartidaCargaBody,
   despachoPartidaParam,
   despachoReasignarBody,
+  operacionIdParam,
   type DespachoActualizarBody,
   type DespachoArriboBody,
   type DespachoCrearBody,
@@ -129,12 +130,16 @@ async function siguienteFolio(q: Q, fechaOperacion: string): Promise<string> {
 /**
  * One ledger row per caso currently riding on this unit.
  *
+ * Exported for `routes/pods.ts`: a signed POD is a fact about the same trip and has to land on the
+ * same set of timelines, and a second implementation of "write one event per caso on this truck"
+ * would eventually disagree with this one about which casos those are.
+ *
  * Returns the affected operación ids so the caller can report the blast radius. A despacho with no
  * partidas produces NO events, and that is correct rather than a gap: an empty trip has not touched
  * anybody's cargo, and the `audit_log` row (which every action writes regardless) is where its
  * existence is recorded.
  */
-async function registrarEventoDespacho(
+export async function registrarEventoDespacho(
   q: Q,
   args: {
     despachoId: string;
@@ -356,7 +361,7 @@ despachosRouter.get(
   validate({ query: despachoListQuery }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { fecha, estado, transportistaId } = req.query as Record<string, string | undefined>;
+      const { fecha, estado, transportistaId, operacionId } = req.query as Record<string, string | undefined>;
       const { rows } = await query(
         `SELECT ${SELECT_DESPACHO},
                 (SELECT count(*)::int FROM despacho_partidas p WHERE p.despacho_id = d.id) AS "partidas"
@@ -364,9 +369,12 @@ despachosRouter.get(
           WHERE ($1::date IS NULL OR d.fecha_operacion = $1::date)
             AND ($2::text IS NULL OR d.estado = $2)
             AND ($3::uuid IS NULL OR d.transportista_id = $3::uuid)
+            AND ($4::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM despacho_partidas dp
+                   WHERE dp.despacho_id = d.id AND dp.operacion_id = $4::uuid))
           ORDER BY d.fecha_operacion DESC, d.folio
           LIMIT 500`,
-        [fecha ?? null, estado ?? null, transportistaId ?? null],
+        [fecha ?? null, estado ?? null, transportistaId ?? null, operacionId ?? null],
       );
       res.json(rows);
     } catch (err) {
@@ -1787,6 +1795,105 @@ despachosRouter.post(
       });
 
       res.status(201).json({ ok: true, despachoId: id, ...resultado.payload, eventosRegistrados: resultado.eventos });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// =================================================================================================
+// Trazabilidad — la dirección carga → transportista (R29)
+// =================================================================================================
+
+/**
+ * A SECOND ROUTER, mounted on `/api/operaciones` (see app.ts).
+ *
+ * The despacho endpoints live under their own prefix precisely because a trip is NOT a property of
+ * one caso: one unit carries several clients' cargo (R29), and nesting it under a single operación
+ * would have made the multi-client truck impossible to express. But the reverse question — "which
+ * unit took MY guías out, and with whom?" — is asked FROM a caso, one shipment at a time, by the
+ * same person reading its timeline. Same reasoning as the ledger events landing on every caso riding
+ * on the unit: six weeks later nobody knows which folio to look up, they know their MAWB.
+ */
+export const operacionDespachosRouter = Router();
+
+/**
+ * GET /api/operaciones/:id/despachos — every trip that carried any guía of this caso.
+ *
+ * ONE AGGREGATE QUERY. `partidas` is built with `json_agg` filtered to THIS operación, so a truck
+ * shared with two other clients shows only this caso's guías — the others are somebody else's cargo
+ * and this is a per-caso read. `partidasTotales` counts the whole load beside it, because "your two
+ * guías travelled on a truck that carried nine" is the fact that explains a delay at the dock, and
+ * hiding it would leave the reader with a number that does not match what they saw leave.
+ *
+ * A caso whose guías went out on two different trips (a split load, or a reschedule after CT-7)
+ * returns both, newest operating day first. An empty array is a real answer — "nothing of this caso
+ * has been loaded onto a unit yet" — not a 404.
+ */
+operacionDespachosRouter.get(
+  '/:id/despachos',
+  requireAuth,
+  validate({ params: operacionIdParam }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+
+      const op = await query<{ mawb: string }>('SELECT mawb FROM operaciones WHERE id = $1', [id]);
+      if (!op.rows.length) {
+        res.status(404).json({ error: 'Operación no encontrada' });
+        return;
+      }
+
+      const { rows } = await query<{
+        id: string;
+        tipoUnidad: string;
+        transportistaId: string | null;
+        etaCalculado: Date | null;
+        arriboReal: Date | null;
+        partidas: Array<Record<string, unknown>>;
+      }>(
+        `SELECT ${SELECT_DESPACHO},
+                (SELECT count(*)::int FROM despacho_partidas dp WHERE dp.despacho_id = d.id)
+                  AS "partidasTotales",
+                json_agg(
+                  json_build_object(
+                    'id', p.id,
+                    'operacionGuiaId', p.operacion_guia_id,
+                    'guia', g.guia_norm,
+                    'guiaEstado', g.estado,
+                    'cliente', c.name,
+                    'pedimentoId', p.pedimento_id,
+                    'piezas', p.piezas,
+                    'cartonesPlaneados', p.cartones_planeados,
+                    'cartonesCargados', p.cartones_cargados,
+                    'ordenCarga', p.orden_carga
+                  ) ORDER BY p.orden_carga NULLS LAST, p.created_at
+                ) AS partidas
+         ${FROM_DESPACHO}
+           JOIN despacho_partidas p ON p.despacho_id = d.id AND p.operacion_id = $1
+           JOIN operaciones o ON o.id = p.operacion_id
+           LEFT JOIN operacion_guias g ON g.id = p.operacion_guia_id
+           LEFT JOIN clients c ON c.id = COALESCE(g.client_id, o.client_id)
+          GROUP BY d.id, t.id, cd.id
+          ORDER BY d.fecha_operacion DESC, d.folio`,
+        [id],
+      );
+
+      const transportistas = new Set(rows.map((r) => r.transportistaId).filter(Boolean));
+      res.json({
+        operacionId: id,
+        mawb: op.rows[0].mawb,
+        totales: {
+          despachos: rows.length,
+          transportistas: transportistas.size,
+          partidas: rows.reduce((acc, r) => acc + r.partidas.length, 0),
+        },
+        despachos: rows.map((r) => ({
+          ...r,
+          tipoUnidadLabel: etiquetaTipoUnidad(r.tipoUnidad),
+          desviacionArriboMin: desviacionArriboMin(r.etaCalculado, r.arriboReal),
+        })),
+      });
     } catch (err) {
       next(err);
     }

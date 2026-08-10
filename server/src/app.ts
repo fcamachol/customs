@@ -30,9 +30,12 @@ import {
 } from './routes/riesgoRequerimientos';
 import { replanRouter } from './routes/replan';
 import { campoRouter } from './routes/campo';
-import { despachosRouter } from './routes/despachos';
+import { despachosRouter, operacionDespachosRouter } from './routes/despachos';
 import { planeacionRouter } from './routes/planeacion';
 import { transportistasRouter } from './routes/transportistas';
+import { despachoPodRouter, podsRouter } from './routes/pods';
+import { facturacionRouter } from './routes/facturacion';
+import { reportesOperativosRouter } from './routes/reportesOperativos';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -117,7 +120,21 @@ export function createApp(): Express {
   // make either the truck or the cargo invisible.
   app.use('/api/transportistas', transportistasRouter);
   app.use('/api/despachos', despachosRouter);
+  // …with ONE exception, and it is a read: `GET /api/operaciones/:id/despachos` answers the reverse
+  // question ("which unit took my guías out, and with whom?"), which is always asked from a caso.
+  // Multi-segment with a UUID-validated `:id`, so operacionesRouter's `GET /:id` cannot shadow it.
+  app.use('/api/operaciones', operacionDespachosRouter);
+  // POD generation hangs off the trip it is generated FROM (R28), so it shares the /api/despachos
+  // prefix; despachosRouter's own '/:id' only ever matches a single segment, so neither shadows the
+  // other. The POD lifecycle (enviado / firmado / rechazado) lives on its own prefix.
+  app.use('/api/despachos', despachoPodRouter);
+  app.use('/api/pods', podsRouter);
   app.use('/api/planeacion', planeacionRouter);
+  // Financial traceability (R43–R48) and the operational reports of Fase C. Separate prefixes: one
+  // answers "what was charged for this cargo", the other "how long did it take" — and only the
+  // second is readable by `autoridad`, which has no business inside the billing endpoints.
+  app.use('/api/facturacion', facturacionRouter);
+  app.use('/api/reportes', reportesOperativosRouter);
   // Machine-to-machine: authenticated by HMAC signature / shared secret rather than a JWT, because
   // the callers are AGORA and the scheduler, neither of which has a session.
   app.use('/api/prealertas', prealertasRouter);

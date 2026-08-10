@@ -6,7 +6,8 @@ import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
-import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema } from '../validation/schemas';
+import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema, clientDireccionBody, clientDireccionUpdateBody, clientDireccionParam, type ClientDireccionBody, type ClientDireccionUpdateBody } from '../validation/schemas';
+import { decryptField, encryptField } from '../crypto/fieldCrypto';
 import { listAgentes, listImportadores, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
 
 export const catalogsRouter = Router();
@@ -219,6 +220,172 @@ catalogsRouter.delete(
       entityId: pid, before: before.rows[0], ip: req.ip,
     });
     res.json({ ok: true });
+  },
+);
+
+// ─── Client delivery addresses (R38 / D15) ──────────────────────────────────
+//
+// The destination catalog decision D15 asked for, and a hard dependency of two things that do not
+// look related: a despacho carries ONE destination for N clients' cargo (R29), and the R36 arrival
+// estimate cannot run at all without `lat`/`lng` — with no coordinates it returns nothing rather
+// than a plausible-looking time (shared/operaciones/eta.ts).
+//
+// `alias` is what the operation says out loud ("IMILE Cuautitlán") and is unique per client, because
+// the published plan, the tariff and the POD all refer to the destination by that string; two
+// addresses sharing one alias would make a published plan ambiguous about where a truck went.
+//
+// Addresses are DEACTIVATED, never deleted: despachos and published plans name them, and a deleted
+// row would leave old trips pointing at nothing.
+//
+// The contact fields are encrypted at rest — they are personal data of the receiving warehouse's
+// staff, who never contracted with us. decryptField passes plaintext through unchanged.
+
+const DIRECCION_RETURNING = `
+  id, alias, direccion, ciudad, estado, cp, lat, lng,
+  contacto_nombre AS "contactoNombre", contacto_telefono AS "contactoTelefono",
+  horario, activo`;
+
+interface FilaDireccion {
+  contactoNombre: string | null;
+  contactoTelefono: string | null;
+  [k: string]: unknown;
+}
+
+const descifrarDireccion = (d: FilaDireccion): FilaDireccion => ({
+  ...d,
+  contactoNombre: d.contactoNombre ? decryptField(d.contactoNombre) : null,
+  contactoTelefono: d.contactoTelefono ? decryptField(d.contactoTelefono) : null,
+});
+
+const cifrarOrNull = (v: unknown): string | null => {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s ? encryptField(s) : null;
+};
+
+// GET /api/catalogs/clients/:id/direcciones — any authenticated role (the planner needs it).
+catalogsRouter.get(
+  '/clients/:id/direcciones',
+  requireAuth,
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { rows } = await query(
+      `SELECT ${DIRECCION_RETURNING} FROM client_direcciones WHERE client_id = $1
+        ORDER BY activo DESC, alias`,
+      [req.params.id],
+    );
+    res.json((rows as unknown as FilaDireccion[]).map(descifrarDireccion));
+  },
+);
+
+catalogsRouter.post(
+  '/clients/:id/direcciones',
+  requireAuth,
+  requireRole('admin', 'capturista'),
+  validate({ params: idParam, body: clientDireccionBody }),
+  async (req, res) => {
+    const { id } = req.params;
+    const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    const b = req.body as ClientDireccionBody;
+    try {
+      const { rows } = await query(
+        `INSERT INTO client_direcciones
+           (client_id, alias, direccion, ciudad, estado, cp, lat, lng,
+            contacto_nombre, contacto_telefono, horario, activo, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12,true),$13)
+         RETURNING ${DIRECCION_RETURNING}`,
+        [
+          id, b.alias, orNull(b.direccion), orNull(b.ciudad), orNull(b.estado), orNull(b.cp),
+          b.lat ?? null, b.lng ?? null,
+          cifrarOrNull(b.contactoNombre), cifrarOrNull(b.contactoTelefono),
+          orNull(b.horario), b.activo ?? null, req.user!.userId,
+        ],
+      );
+      const creada = descifrarDireccion(rows[0] as unknown as FilaDireccion);
+      await recordAudit({
+        userId: req.user!.userId, action: 'CREATE_CLIENT_DIRECCION', entity: 'client_direccion',
+        // Contact details deliberately left out of the permanent hash-chained record.
+        entityId: rows[0].id as string,
+        after: { clientId: id, alias: b.alias, ciudad: b.ciudad ?? null, lat: b.lat ?? null, lng: b.lng ?? null },
+        ip: req.ip,
+      });
+      res.status(201).json(creada);
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        res.status(409).json({ error: 'Ese cliente ya tiene una dirección con ese alias.' });
+        return;
+      }
+      throw err;
+    }
+  },
+);
+
+catalogsRouter.put(
+  '/clients/:id/direcciones/:did',
+  requireAuth,
+  requireRole('admin', 'capturista'),
+  validate({ params: clientDireccionParam, body: clientDireccionUpdateBody }),
+  async (req, res) => {
+    const { id, did } = req.params;
+    const b = req.body as ClientDireccionUpdateBody;
+    const sets: string[] = [];
+    const params: unknown[] = [did, id];
+    const set = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+    if (b.alias !== undefined) set('alias', b.alias);
+    if (b.direccion !== undefined) set('direccion', orNull(b.direccion));
+    if (b.ciudad !== undefined) set('ciudad', orNull(b.ciudad));
+    if (b.estado !== undefined) set('estado', orNull(b.estado));
+    if (b.cp !== undefined) set('cp', orNull(b.cp));
+    if (b.lat !== undefined) set('lat', b.lat ?? null);
+    if (b.lng !== undefined) set('lng', b.lng ?? null);
+    if (b.contactoNombre !== undefined) set('contacto_nombre', cifrarOrNull(b.contactoNombre));
+    if (b.contactoTelefono !== undefined) set('contacto_telefono', cifrarOrNull(b.contactoTelefono));
+    if (b.horario !== undefined) set('horario', orNull(b.horario));
+    if (b.activo !== undefined) set('activo', b.activo);
+    if (!sets.length) { res.status(400).json({ error: 'No hay nada que actualizar.' }); return; }
+
+    try {
+      const { rows } = await query(
+        `UPDATE client_direcciones SET ${sets.join(', ')}
+          WHERE id = $1 AND client_id = $2 RETURNING ${DIRECCION_RETURNING}`,
+        params,
+      );
+      if (!rows.length) { res.status(404).json({ error: 'Dirección no encontrada' }); return; }
+      await recordAudit({
+        userId: req.user!.userId, action: 'UPDATE_CLIENT_DIRECCION', entity: 'client_direccion',
+        entityId: did, after: { clientId: id, alias: rows[0].alias, activo: rows[0].activo },
+        ip: req.ip,
+      });
+      res.json(descifrarDireccion(rows[0] as unknown as FilaDireccion));
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        res.status(409).json({ error: 'Ese cliente ya tiene una dirección con ese alias.' });
+        return;
+      }
+      throw err;
+    }
+  },
+);
+
+// DELETE = deactivate. See the section header for why the row survives.
+catalogsRouter.delete(
+  '/clients/:id/direcciones/:did',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: clientDireccionParam }),
+  async (req, res) => {
+    const { id, did } = req.params;
+    const { rows } = await query(
+      `UPDATE client_direcciones SET activo = false WHERE id = $1 AND client_id = $2
+       RETURNING id, alias, activo`,
+      [did, id],
+    );
+    if (!rows.length) { res.status(404).json({ error: 'Dirección no encontrada' }); return; }
+    await recordAudit({
+      userId: req.user!.userId, action: 'DESACTIVAR_CLIENT_DIRECCION', entity: 'client_direccion',
+      entityId: did, after: { clientId: id, ...rows[0] }, ip: req.ip,
+    });
+    res.json({ ok: true, ...rows[0] });
   },
 );
 

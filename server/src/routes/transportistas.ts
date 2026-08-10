@@ -11,18 +11,25 @@ import { validate } from '../validation/middleware';
 import {
   convenioBody,
   convenioFirmaBody,
+  convenioRenovarBody,
+  convenioUpdateBody,
   tarifaBody,
+  tarifaUpdateBody,
   transportistaBody,
   transportistaConvenioParam,
   transportistaParam,
   transportistaPaquetesQuery,
+  transportistaTarifaParam,
   transportistaUnidadParam,
   transportistaUpdateBody,
   unidadBody,
   unidadUpdateBody,
   type ConvenioBody,
   type ConvenioFirmaBody,
+  type ConvenioRenovarBody,
+  type ConvenioUpdateBody,
   type TarifaBody,
+  type TarifaUpdateBody,
   type TransportistaBody,
   type TransportistaPaquetesQuery,
   type TransportistaUpdateBody,
@@ -191,6 +198,19 @@ transportistasRouter.get(
         [id],
       );
 
+      /**
+       * The rates come back WITH THEIR DESTINATION'S LABEL, not only its uuid.
+       *
+       * `direccion_entrega_id` is a pointer into another client's catalog, so a caller holding a
+       * carrier had no way to name it: the screen either printed a uuid or asked every client for its
+       * address list and searched the union — one request per client, on every open, to resolve one
+       * string. The join is two LEFT JOINs here and none anywhere else, and it makes the response
+       * self-describing: `destinoAlias` + `clienteNombre` say what the price is for.
+       *
+       * `renovadoPorConvenioId` is the successor side of the renewal chain (the predecessor side is
+       * the stored column). It is what lets a signed, expired convenio show "already renewed" instead
+       * of inviting somebody to edit its vigencia — which is exactly what must never happen.
+       */
       const convenios = await query(
         `SELECT c.id,
                 c.file_id                 AS "fileId",
@@ -201,6 +221,11 @@ transportistasRouter.get(
                 c.firma_proveedor         AS "firmaProveedor",
                 c.firma_referencia        AS "firmaReferencia",
                 c.firma_evidencia_file_id AS "firmaEvidenciaFileId",
+                c.notas,
+                c.renovado_de_convenio_id AS "renovadoDeConvenioId",
+                (SELECT s.id FROM transportista_convenios s
+                  WHERE s.renovado_de_convenio_id = c.id
+                  ORDER BY s.created_at LIMIT 1) AS "renovadoPorConvenioId",
                 c.created_at              AS "createdAt",
                 (c.estado_firma = 'firmado'
                   AND (c.vigencia_desde IS NULL OR c.vigencia_desde <= current_date)
@@ -211,16 +236,21 @@ transportistasRouter.get(
                       'id', tf.id,
                       'tipoUnidad', tf.tipo_unidad,
                       'direccionEntregaId', tf.direccion_entrega_id,
+                      'destinoAlias', cd.alias,
+                      'clienteNombre', cl.name,
                       'tarifa', tf.tarifa,
                       'moneda', tf.moneda,
                       'vigenciaDesde', tf.vigencia_desde,
-                      'vigenciaHasta', tf.vigencia_hasta
-                    ) ORDER BY tf.tipo_unidad, tf.created_at
+                      'vigenciaHasta', tf.vigencia_hasta,
+                      'activo', tf.activo
+                    ) ORDER BY tf.activo DESC, tf.tipo_unidad, tf.created_at
                   ) FILTER (WHERE tf.id IS NOT NULL),
                   '[]'
                 ) AS tarifas
            FROM transportista_convenios c
            LEFT JOIN transportista_tarifas tf ON tf.convenio_id = c.id
+           LEFT JOIN client_direcciones cd ON cd.id = tf.direccion_entrega_id
+           LEFT JOIN clients cl ON cl.id = cd.client_id
           WHERE c.transportista_id = $1
           GROUP BY c.id
           ORDER BY c.created_at DESC`,
@@ -658,17 +688,19 @@ transportistasRouter.post(
 
       const { rows } = await query(
         `INSERT INTO transportista_convenios
-           (transportista_id, file_id, vigencia_desde, vigencia_hasta, estado_firma, created_by)
-         VALUES ($1,$2,$3,$4,COALESCE($5,'borrador'),$6)
+           (transportista_id, file_id, vigencia_desde, vigencia_hasta, estado_firma, notas, created_by)
+         VALUES ($1,$2,$3,$4,COALESCE($5,'borrador'),$6,$7)
          RETURNING id, file_id AS "fileId", vigencia_desde AS "vigenciaDesde",
                    vigencia_hasta AS "vigenciaHasta", estado_firma AS "estadoFirma",
-                   firmado_at AS "firmadoAt", created_at AS "createdAt"`,
+                   firmado_at AS "firmadoAt", notas,
+                   renovado_de_convenio_id AS "renovadoDeConvenioId", created_at AS "createdAt"`,
         [
           id,
           b.fileId ?? null,
           b.vigenciaDesde ?? null,
           b.vigenciaHasta ?? null,
           b.estadoFirma ?? null,
+          b.notas ? b.notas : null,
           req.user!.userId,
         ],
       );
@@ -683,6 +715,244 @@ transportistasRouter.post(
       });
 
       res.status(201).json(rows[0]);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * PUT /api/transportistas/:id/convenios/:cid — edit the TERMS, and only before signature.
+ *
+ * THE RULE THIS ENDPOINT EXISTS TO STATE. A convenio in `borrador`/`enviado` is a draft: its dates
+ * and its notes are somebody's working copy, and correcting a typo in them costs nothing. A convenio
+ * in `firmado` is a DOCUMENT — the row is the claim that these terms were signed on that date — and
+ * moving its `vigencia_hasta` afterwards would make the system assert something was signed that was
+ * not. That is the same argument that makes a POD non-reprintable once it carries a signature: the
+ * artifact stops being ours to edit the moment somebody else's name is on it.
+ *
+ * So the refusal is a 409 that names the alternative rather than a 403 that just says no: extending
+ * a signed agreement means a SUCCESSOR (`POST .../renovar`), which carries the terms forward, gets
+ * its own vigencia and its own signature, and leaves the signed one intact and readable.
+ *
+ * `vencido` is refused too, and for the same reason — it is a signed convenio whose window closed.
+ */
+transportistasRouter.put(
+  '/:id/convenios/:cid',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: transportistaConvenioParam, body: convenioUpdateBody }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, cid } = req.params;
+      const b = req.body as ConvenioUpdateBody;
+
+      const sets: string[] = [];
+      const params: unknown[] = [cid, id];
+      const set = (col: string, val: unknown): void => {
+        params.push(val);
+        sets.push(`${col} = $${params.length}`);
+      };
+      if (b.vigenciaDesde !== undefined) set('vigencia_desde', b.vigenciaDesde);
+      if (b.vigenciaHasta !== undefined) set('vigencia_hasta', b.vigenciaHasta);
+      if (b.fileId !== undefined) set('file_id', b.fileId);
+      // '' clears the note; `undefined` never reaches here, so "leave it alone" stays distinguishable.
+      if (b.notas !== undefined) set('notas', b.notas ? b.notas : null);
+      if (b.estadoFirma !== undefined) set('estado_firma', b.estadoFirma);
+      if (!sets.length) {
+        res.status(400).json({ error: 'No hay nada que actualizar.' });
+        return;
+      }
+
+      const resultado = await withTransaction(async (q: Q) => {
+        const c = await q(
+          `SELECT id, estado_firma, vigencia_desde, vigencia_hasta, notas
+             FROM transportista_convenios
+            WHERE id = $1 AND transportista_id = $2 FOR UPDATE`,
+          [cid, id],
+        );
+        if (!c.rows.length) return { kind: 'no_encontrado' as const };
+        const estadoActual = String(c.rows[0].estado_firma);
+        if (estadoActual === 'firmado' || estadoActual === 'vencido') {
+          return { kind: 'firmado' as const, estado: estadoActual };
+        }
+
+        const upd = await q(
+          `UPDATE transportista_convenios SET ${sets.join(', ')}
+            WHERE id = $1 AND transportista_id = $2
+            RETURNING id, file_id AS "fileId", vigencia_desde AS "vigenciaDesde",
+                      vigencia_hasta AS "vigenciaHasta", estado_firma AS "estadoFirma",
+                      firmado_at AS "firmadoAt", notas,
+                      renovado_de_convenio_id AS "renovadoDeConvenioId", created_at AS "createdAt"`,
+          params,
+        );
+        return { kind: 'ok' as const, antes: c.rows[0], convenio: upd.rows[0] };
+      });
+
+      if (resultado.kind === 'no_encontrado') {
+        res.status(404).json({ error: 'Convenio no encontrado para este transportista' });
+        return;
+      }
+      if (resultado.kind === 'firmado') {
+        res.status(409).json({
+          error:
+            `El convenio está '${resultado.estado}': sus términos son lo que se firmó y no pueden editarse. ` +
+            'Editar la vigencia de un convenio firmado haría que el sistema afirmara algo distinto de lo que se firmó. ' +
+            'Para extenderlo, renuévalo (POST .../convenios/:cid/renovar): se crea un convenio sucesor con las mismas ' +
+            'tarifas y una vigencia nueva, y el firmado queda intacto.',
+          estadoFirma: resultado.estado,
+        });
+        return;
+      }
+
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'CONVENIO_ACTUALIZADO',
+        entity: 'transportista_convenio',
+        entityId: cid,
+        before: {
+          vigenciaDesde: resultado.antes.vigencia_desde,
+          vigenciaHasta: resultado.antes.vigencia_hasta,
+          estadoFirma: resultado.antes.estado_firma,
+        },
+        after: { transportistaId: id, ...resultado.convenio },
+        ip: req.ip,
+      });
+
+      res.json(resultado.convenio);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * POST /api/transportistas/:id/convenios/:cid/renovar — extend a signed agreement the only honest way.
+ *
+ * WHAT IT CREATES: a NEW convenio in `borrador`, pointing back at its predecessor through
+ * `renovado_de_convenio_id`, carrying the predecessor's notes and (by default) its ACTIVE rates. The
+ * predecessor is not touched: not its vigencia, not its `firmado_at`, not its rates. Two rows, two
+ * documents, one chain — which is what actually happened, and what a signed record has to say.
+ *
+ * ONLY FROM A SIGNED (or expired-signed) CONVENIO. Renewing a draft would be theatre: a draft can
+ * simply be edited (PUT above), and producing a second draft for the same lane would leave two
+ * unsigned candidate agreements with nothing to distinguish them.
+ *
+ * THE SUCCESSOR STARTS UNSIGNED, and there is no way to make it otherwise here — `estado_firma`
+ * follows the D9 path through `/firmar`, exactly like any other convenio. Until it is signed, its
+ * rates are visible and never resolve, so a renewal cannot quietly reprice a trip.
+ *
+ * COPIED RATES LOSE THEIR OWN VIGENCIA WINDOW. A rate's window was scoped to the agreement it lived
+ * in; carrying `2026-01-01 → 2026-12-31` into an agreement that runs through 2027 would produce a
+ * price that can never resolve — dead on arrival and invisible about it. The successor's rates
+ * inherit the successor's window, which is the same thing the predecessor's unwindowed rates did.
+ * DEACTIVATED rates are NOT copied: a rate somebody switched off is a rate that was wrong, and a
+ * renewal must not resurrect it.
+ *
+ * COMPATIBILITY WITH THE PLANNED CINCEL UNIFICATION (services/cincel.ts, lines ~30–91): renewal is
+ * deliberately orthogonal to signing. It creates a row in `borrador` and stops; whichever signature
+ * path that row later takes — today's "record an external signature", or the `/firmar/cincel`
+ * sibling the design note reserves — is unchanged by how the row came into being. No signature state,
+ * no dispatch-tracking column and no vocabulary is touched here.
+ */
+transportistasRouter.post(
+  '/:id/convenios/:cid/renovar',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: transportistaConvenioParam, body: convenioRenovarBody }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, cid } = req.params;
+      const b = req.body as ConvenioRenovarBody;
+
+      const resultado = await withTransaction(async (q: Q) => {
+        const c = await q(
+          `SELECT id, estado_firma, vigencia_desde, vigencia_hasta, notas, file_id
+             FROM transportista_convenios
+            WHERE id = $1 AND transportista_id = $2 FOR UPDATE`,
+          [cid, id],
+        );
+        if (!c.rows.length) return { kind: 'no_encontrado' as const };
+        const origen = c.rows[0];
+        const estadoActual = String(origen.estado_firma);
+        if (estadoActual !== 'firmado' && estadoActual !== 'vencido') {
+          return { kind: 'no_firmado' as const, estado: estadoActual };
+        }
+
+        const ins = await q(
+          `INSERT INTO transportista_convenios
+             (transportista_id, vigencia_desde, vigencia_hasta, estado_firma, notas,
+              renovado_de_convenio_id, created_by)
+           VALUES ($1,$2,$3,'borrador',$4,$5,$6)
+           RETURNING id, file_id AS "fileId", vigencia_desde AS "vigenciaDesde",
+                     vigencia_hasta AS "vigenciaHasta", estado_firma AS "estadoFirma",
+                     firmado_at AS "firmadoAt", notas,
+                     renovado_de_convenio_id AS "renovadoDeConvenioId", created_at AS "createdAt"`,
+          [
+            id,
+            b.vigenciaDesde,
+            b.vigenciaHasta ?? null,
+            // The successor's own note wins; absent, it inherits what the predecessor said.
+            b.notas !== undefined ? (b.notas ? b.notas : null) : (origen.notas ?? null),
+            cid,
+            req.user!.userId,
+          ],
+        );
+        const nuevo = ins.rows[0];
+
+        let tarifasCopiadas = 0;
+        if (b.copiarTarifas !== false) {
+          const cop = await q(
+            `INSERT INTO transportista_tarifas
+               (convenio_id, tipo_unidad, direccion_entrega_id, tarifa, moneda)
+             SELECT $1, tipo_unidad, direccion_entrega_id, tarifa, moneda
+               FROM transportista_tarifas
+              WHERE convenio_id = $2 AND activo`,
+            [nuevo.id, cid],
+          );
+          tarifasCopiadas = cop.rowCount ?? 0;
+        }
+
+        return { kind: 'ok' as const, convenio: nuevo, tarifasCopiadas, origen };
+      });
+
+      if (resultado.kind === 'no_encontrado') {
+        res.status(404).json({ error: 'Convenio no encontrado para este transportista' });
+        return;
+      }
+      if (resultado.kind === 'no_firmado') {
+        res.status(409).json({
+          error:
+            `El convenio está en '${resultado.estado}': todavía no hay nada firmado que renovar. ` +
+            'Un convenio sin firmar se edita directamente (PUT .../convenios/:cid); la renovación existe ' +
+            'sólo para no tocar los términos de un convenio ya firmado.',
+          estadoFirma: resultado.estado,
+        });
+        return;
+      }
+
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'CONVENIO_RENOVADO',
+        entity: 'transportista_convenio',
+        // The audited entity is the NEW row: it is the one that came into existence. The predecessor
+        // is named in `before`, unchanged, so the chain reads in both directions.
+        entityId: resultado.convenio.id as string,
+        before: {
+          convenioOrigenId: cid,
+          estadoFirma: resultado.origen.estado_firma,
+          vigenciaDesde: resultado.origen.vigencia_desde,
+          vigenciaHasta: resultado.origen.vigencia_hasta,
+        },
+        after: {
+          transportistaId: id,
+          ...resultado.convenio,
+          tarifasCopiadas: resultado.tarifasCopiadas,
+        },
+        ip: req.ip,
+      });
+
+      res.status(201).json({ ...resultado.convenio, tarifasCopiadas: resultado.tarifasCopiadas });
     } catch (err) {
       next(err);
     }
@@ -914,6 +1184,160 @@ transportistasRouter.post(
       });
 
       res.status(201).json(rows[0]);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const TARIFA_RETURNING = `id, tipo_unidad AS "tipoUnidad", direccion_entrega_id AS "direccionEntregaId",
+                          tarifa, moneda, vigencia_desde AS "vigenciaDesde",
+                          vigencia_hasta AS "vigenciaHasta", activo`;
+
+/**
+ * PUT /api/transportistas/:id/convenios/:cid/tarifas/:tid — correct a rate.
+ *
+ * WHY THIS IS NOT "JUST" AN UPDATE. Until now a mispriced rate could only be SUPERSEDED by adding a
+ * second row, and the resolver breaks ties by the lowest price (`resolverTarifa`, routes/despachos.ts
+ * — deliberately: a cheaper truck is unambiguously better for us, and the reasoning is spelled out in
+ * shared/operaciones/facturacion.ts, which takes the opposite tiebreak for revenue). So a correction
+ * UPWARDS could never take effect: the wrong, cheaper row kept winning. Correcting the row is the
+ * only remedy that reaches the resolver, and deactivating (below) is the only one that removes a rate
+ * from it without deleting history.
+ *
+ * WHAT IT CANNOT REACH: despachos already contracted. `despachos` stores `tarifa_monto` beside
+ * `tarifa_id` precisely so a later correction cannot restate what a past trip was priced at (see the
+ * comment above the insert in routes/despachos.ts). A trip keeps the number that was agreed on its
+ * day; only future resolutions see the corrected one.
+ *
+ * `before` IS AUDITED, not just `after`. "The rate changed" is not a useful record; "it went from
+ * 8,500 to 9,200 on the 3rd, by this user" is. This is money.
+ */
+transportistasRouter.put(
+  '/:id/convenios/:cid/tarifas/:tid',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: transportistaTarifaParam, body: tarifaUpdateBody }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, cid, tid } = req.params;
+      const b = req.body as TarifaUpdateBody;
+
+      const sets: string[] = [];
+      const params: unknown[] = [tid, cid];
+      const set = (col: string, val: unknown): void => {
+        params.push(val);
+        sets.push(`${col} = $${params.length}`);
+      };
+      if (b.tipoUnidad !== undefined) set('tipo_unidad', b.tipoUnidad);
+      // null is meaningful here: "this rate stops being destination-specific".
+      if (b.direccionEntregaId !== undefined) set('direccion_entrega_id', b.direccionEntregaId);
+      if (b.tarifa !== undefined) set('tarifa', b.tarifa);
+      if (b.moneda !== undefined) set('moneda', b.moneda);
+      if (b.vigenciaDesde !== undefined) set('vigencia_desde', b.vigenciaDesde);
+      if (b.vigenciaHasta !== undefined) set('vigencia_hasta', b.vigenciaHasta);
+      if (b.activo !== undefined) set('activo', b.activo);
+      if (!sets.length) {
+        res.status(400).json({ error: 'No hay nada que actualizar.' });
+        return;
+      }
+
+      const c = await query(
+        'SELECT id FROM transportista_convenios WHERE id = $1 AND transportista_id = $2',
+        [cid, id],
+      );
+      if (!c.rows.length) {
+        res.status(404).json({ error: 'Convenio no encontrado para este transportista' });
+        return;
+      }
+      if (b.direccionEntregaId) {
+        const d = await query('SELECT id FROM client_direcciones WHERE id = $1', [b.direccionEntregaId]);
+        if (!d.rows.length) {
+          res.status(400).json({ error: 'La `direccionEntregaId` indicada no existe.' });
+          return;
+        }
+      }
+
+      const resultado = await withTransaction(async (q: Q) => {
+        const antes = await q(
+          `SELECT ${TARIFA_RETURNING} FROM transportista_tarifas
+            WHERE id = $1 AND convenio_id = $2 FOR UPDATE`,
+          [tid, cid],
+        );
+        if (!antes.rows.length) return { kind: 'no_encontrada' as const };
+        const upd = await q(
+          `UPDATE transportista_tarifas SET ${sets.join(', ')}
+            WHERE id = $1 AND convenio_id = $2
+            RETURNING ${TARIFA_RETURNING}`,
+          params,
+        );
+        return { kind: 'ok' as const, antes: antes.rows[0], tarifa: upd.rows[0] };
+      });
+
+      if (resultado.kind === 'no_encontrada') {
+        res.status(404).json({ error: 'Tarifa no encontrada en este convenio' });
+        return;
+      }
+
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'TARIFA_ACTUALIZADA',
+        entity: 'transportista_tarifa',
+        entityId: tid,
+        before: resultado.antes,
+        after: { transportistaId: id, convenioId: cid, ...resultado.tarifa },
+        ip: req.ip,
+      });
+
+      res.json(resultado.tarifa);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * DELETE /api/transportistas/:id/convenios/:cid/tarifas/:tid — retire a rate.
+ *
+ * Deactivates, never deletes, exactly like a unit and a delivery address: `despachos.tarifa_id`
+ * points at this row, and "at what agreed price was this trip contracted?" has to stay answerable
+ * after the price stops being offered. A deactivated rate NEVER resolves again — both the D7 options
+ * query and `resolverTarifa` filter on `activo` — which is what makes this the honest remedy for a
+ * mispriced row, as opposed to burying it under a cheaper one and hoping.
+ *
+ * Idempotent-ish by design: retiring an already-retired rate answers 200 with `activo: false`, the
+ * same posture the unit endpoint takes. Reactivating is `PUT { activo: true }`.
+ */
+transportistasRouter.delete(
+  '/:id/convenios/:cid/tarifas/:tid',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: transportistaTarifaParam }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, cid, tid } = req.params;
+      const { rows } = await query(
+        `UPDATE transportista_tarifas tf SET activo = false
+           FROM transportista_convenios c
+          WHERE tf.id = $1 AND tf.convenio_id = $2 AND c.id = tf.convenio_id AND c.transportista_id = $3
+          RETURNING tf.id, tf.tipo_unidad AS "tipoUnidad", tf.tarifa, tf.moneda, tf.activo`,
+        [tid, cid, id],
+      );
+      if (!rows.length) {
+        res.status(404).json({ error: 'Tarifa no encontrada en este convenio' });
+        return;
+      }
+
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'TARIFA_DESACTIVADA',
+        entity: 'transportista_tarifa',
+        entityId: tid,
+        after: { transportistaId: id, convenioId: cid, ...rows[0] },
+        ip: req.ip,
+      });
+
+      res.json({ ok: true, ...rows[0] });
     } catch (err) {
       next(err);
     }

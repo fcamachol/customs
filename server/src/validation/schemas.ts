@@ -583,6 +583,16 @@ const fechaOpcional = z.preprocess(
   fechaISO.optional(),
 );
 
+/**
+ * A date an EDIT may erase. `fechaOpcional` folds '' into undefined, which a PATCH-shaped route reads
+ * as "leave this alone" — right for creation, wrong for correction, where "this rate no longer
+ * expires" is a legitimate thing to say and silence would keep the old expiry.
+ */
+const fechaOpcionalNullable = z.preprocess(
+  (v) => (v === '' || v === null ? null : v),
+  fechaISO.nullable().optional(),
+);
+
 /** Money. Coerced (forms send strings) and non-negative — a negative tariff is a data-entry slip. */
 const montoOpcional = z.preprocess(
   (v) => (v === '' || v === null || v === undefined ? undefined : v),
@@ -626,6 +636,12 @@ export const transportistaUnidadParam = z.object({
 export const transportistaConvenioParam = z.object({
   id: z.string().uuid('El id del transportista debe ser un UUID.'),
   cid: z.string().uuid('El id del convenio debe ser un UUID.'),
+});
+
+export const transportistaTarifaParam = z.object({
+  id: z.string().uuid('El id del transportista debe ser un UUID.'),
+  cid: z.string().uuid('El id del convenio debe ser un UUID.'),
+  tid: z.string().uuid('El id de la tarifa debe ser un UUID.'),
 });
 
 export const clientDireccionParam = z.object({
@@ -672,16 +688,53 @@ export const unidadUpdateBody = unidadBody.partial();
 export type UnidadUpdateBody = z.infer<typeof unidadUpdateBody>;
 
 // ── convenios y tarifas (R25 / D9) ───────────────────────────────────────────────────────────
+/**
+ * Free text that can be CLEARED. `textoOpcional` folds '' into undefined, which is right for a name
+ * or an RFC — an empty string is not a value — but wrong for notes, where erasing what was typed is
+ * a legitimate edit and `undefined` would silently keep the old text.
+ */
+const notasOpcional = z.preprocess(
+  (v) => (v === null ? '' : v),
+  z.string().max(4000, 'Las notas no pueden exceder 4000 caracteres.').transform((s) => s.trim()).optional(),
+);
+
 export const convenioBody = z.object({
   vigenciaDesde: fechaOpcional,
   vigenciaHasta: fechaOpcional,
   fileId: z.string().uuid('fileId debe ser un UUID.').optional(),
+  notas: notasOpcional,
   // Deliberately NOT accepting 'firmado' here: a convenio becomes signed through /firmar, which is
   // the only path that records who signed it and under what reference (D9). Letting a POST declare
   // itself signed would make the signature a word somebody typed.
   estadoFirma: z.enum(['borrador', 'enviado'] as const).optional(),
 });
 export type ConvenioBody = z.infer<typeof convenioBody>;
+
+/**
+ * Editing a convenio's terms — accepted by the schema, refused by the route once the agreement is
+ * signed (409). The gate lives in the route rather than here because it depends on the STORED
+ * `estado_firma`, which a body can neither state nor be trusted about; `estadoFirma` is still
+ * restricted to the two pre-signature values so an edit can never be the path to `firmado`.
+ */
+export const convenioUpdateBody = convenioBody.partial().extend({
+  vigenciaDesde: fechaOpcionalNullable,
+  vigenciaHasta: fechaOpcionalNullable,
+});
+export type ConvenioUpdateBody = z.infer<typeof convenioUpdateBody>;
+
+/**
+ * Renewing a signed convenio (the successor's terms). `vigenciaDesde` is REQUIRED: a renewal exists
+ * to say from when the new agreement runs, and one that did not name a start date would be an
+ * open-ended second agreement overlapping the one it succeeds — two live prices for the same lane.
+ */
+export const convenioRenovarBody = z.object({
+  vigenciaDesde: fechaISO,
+  vigenciaHasta: fechaOpcional,
+  notas: notasOpcional,
+  /** Carry the predecessor's ACTIVE rates into the successor. Default true: that is what renewal means. */
+  copiarTarifas: z.boolean().optional(),
+});
+export type ConvenioRenovarBody = z.infer<typeof convenioRenovarBody>;
 
 export const convenioFirmaBody = z.object({
   firmaProveedor: textoRequerido,
@@ -704,6 +757,20 @@ export const tarifaBody = z.object({
   vigenciaHasta: fechaOpcional,
 });
 export type TarifaBody = z.infer<typeof tarifaBody>;
+
+/**
+ * Correcting a rate. Everything optional, plus `activo` — the same shape `unidadUpdateBody` takes,
+ * and for the same reason: a deactivated row is how this catalog retires anything a despacho already
+ * points at. `direccionEntregaId` is nullable here (and only here) because "this rate stops being
+ * destination-specific" is a real correction, and `undefined` already means "leave it alone".
+ */
+export const tarifaUpdateBody = tarifaBody.partial().extend({
+  direccionEntregaId: z.string().uuid('direccionEntregaId debe ser un UUID.').nullable().optional(),
+  vigenciaDesde: fechaOpcionalNullable,
+  vigenciaHasta: fechaOpcionalNullable,
+  activo: z.boolean().optional(),
+});
+export type TarifaUpdateBody = z.infer<typeof tarifaUpdateBody>;
 
 // ── direcciones de entrega del cliente (R38 / D15) ───────────────────────────────────────────
 export const clientDireccionBody = z.object({

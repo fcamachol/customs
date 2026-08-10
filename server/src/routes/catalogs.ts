@@ -262,6 +262,44 @@ const cifrarOrNull = (v: unknown): string | null => {
   return s ? encryptField(s) : null;
 };
 
+/**
+ * GET /api/catalogs/direcciones — the flat destination catalog, across every client.
+ *
+ * WHY A SECOND ENDPOINT AND NOT A FAN-OUT. The per-client list answers "where does THIS client
+ * receive?", which is the question the client screen asks. The rate picker in Transportistas asks a
+ * different one — "which destination is this price for?" — and the answer spans clients, because a
+ * carrier's lane is priced to a warehouse regardless of whose cargo rides in it (R29: one truck,
+ * one address, N clients). Assembling it in the browser meant one request per client on every open;
+ * the join belongs here, where it is one query.
+ *
+ * CONTACT FIELDS ARE NOT RETURNED. A picker needs an id and a label; the receiving warehouse
+ * contact's name and phone are personal data (§8.5) and shipping them to a screen that never renders
+ * them would be spending encryption on the database and nothing on the wire.
+ *
+ * Inactive addresses come back too, flagged, in the same order as the per-client list. A tarifa
+ * already pointing at a retired destination must still resolve to its label — dropping the row would
+ * put the uuid back on screen, which is the whole problem this endpoint exists to remove.
+ *
+ * `requireAuth` with no role gate, exactly like the per-client list it generalizes.
+ */
+catalogsRouter.get('/direcciones', requireAuth, async (_req, res) => {
+  const { rows } = await query(
+    `SELECT d.id,
+            d.client_id AS "clientId",
+            c.name      AS cliente,
+            d.alias,
+            d.ciudad,
+            d.estado,
+            d.lat,
+            d.lng,
+            d.activo
+       FROM client_direcciones d
+       JOIN clients c ON c.id = d.client_id
+      ORDER BY d.activo DESC, c.name, d.alias`,
+  );
+  res.json(rows);
+});
+
 // GET /api/catalogs/clients/:id/direcciones — any authenticated role (the planner needs it).
 catalogsRouter.get(
   '/clients/:id/direcciones',

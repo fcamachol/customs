@@ -29,6 +29,14 @@ const TRANSPORTISTAS = [
   },
 ];
 
+/**
+ * What a DATE column actually looks like on the wire: node-pg parses it to LOCAL midnight and
+ * `JSON.stringify` writes that instant in UTC. A bare 'YYYY-MM-DD' in a fixture would be parsed as
+ * UTC midnight instead and read back one day early west of Greenwich — the exact bug `diaDe` exists
+ * to avoid, so the fixture has to be faithful or the test proves the opposite of what it claims.
+ */
+const fechaWire = (dia: string): string => new Date(`${dia}T00:00:00`).toISOString();
+
 /** t-1 in full: a fleet, and a DRAFT convenio that nonetheless already carries a negotiated rate. */
 const DETALLE_T1 = {
   ...TRANSPORTISTAS[0],
@@ -41,17 +49,30 @@ const DETALLE_T1 = {
   ],
   convenios: [
     {
-      id: 'c-1', fileId: null, vigenciaDesde: '2026-01-01', vigenciaHasta: '2026-12-31',
+      id: 'c-1', fileId: null, vigenciaDesde: fechaWire('2026-01-01'), vigenciaHasta: fechaWire('2026-12-31'),
       estadoFirma: 'borrador', firmadoAt: null, firmaProveedor: null, firmaReferencia: null,
-      firmaEvidenciaFileId: null, createdAt: '2026-01-02T00:00:00Z', vigente: false,
+      firmaEvidenciaFileId: null, notas: null, renovadoDeConvenioId: null, renovadoPorConvenioId: null,
+      createdAt: '2026-01-02T00:00:00Z', vigente: false,
       tarifas: [
         {
           id: 'tf-1', tipoUnidad: 'tracto', direccionEntregaId: 'dir-1',
-          tarifa: 18500, moneda: 'MXN', vigenciaDesde: null, vigenciaHasta: null,
+          // Joined server-side: the screen no longer fans out over every client to name a destination.
+          destinoAlias: 'IMILE Cuautitlán', clienteNombre: 'ACME',
+          tarifa: 18500, moneda: 'MXN', vigenciaDesde: null, vigenciaHasta: null, activo: true,
         },
       ],
     },
   ],
+};
+
+/** The same carrier with the convenio SIGNED — the state in which its terms are frozen. */
+const DETALLE_T1_FIRMADO = {
+  ...DETALLE_T1,
+  convenios: [{
+    ...DETALLE_T1.convenios[0],
+    estadoFirma: 'firmado', vigente: true,
+    firmadoAt: '2026-01-03T00:00:00Z', firmaProveedor: 'Mifiel', firmaReferencia: 'REF-9',
+  }],
 };
 
 interface MockOpts {
@@ -67,7 +88,10 @@ function mockApi(o: MockOpts = {}) {
     if (path === '/api/transportistas') return o.transportistas ?? TRANSPORTISTAS;
     if (path === '/api/transportistas/t-1') return o.detalle ?? DETALLE_T1;
     if (path === '/api/catalogs/clients') return [{ id: 'cl-1', name: 'ACME' }];
-    if (path === '/api/catalogs/clients/cl-1/direcciones') return [{ id: 'dir-1', alias: 'IMILE Cuautitlán', activo: true }];
+    // One flat catalog for the rate picker. The old per-client fan-out is gone.
+    if (path === '/api/catalogs/direcciones') {
+      return [{ id: 'dir-1', clientId: 'cl-1', cliente: 'ACME', alias: 'IMILE Cuautitlán', activo: true }];
+    }
     if (path.includes('prohibited')) return { key: 'prohibited', value: [] };
     if (path.includes('piracy_brands')) return { key: 'piracy_brands', value: [] };
     if (path.includes('branding')) return { key: 'branding', value: null };
@@ -205,15 +229,7 @@ describe('TransportistasTab', () => {
   });
 
   it('drops the warning, and the signing affordance, once the convenio is firmado y vigente', async () => {
-    const firmado = {
-      ...DETALLE_T1,
-      convenios: [{
-        ...DETALLE_T1.convenios[0],
-        estadoFirma: 'firmado', vigente: true,
-        firmadoAt: '2026-01-03T00:00:00Z', firmaProveedor: 'Mifiel', firmaReferencia: 'REF-9',
-      }],
-    };
-    await renderPane({ detalle: firmado });
+    await renderPane({ detalle: DETALLE_T1_FIRMADO });
     await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
     fireEvent.click(screen.getByText('Transportes del Bajío'));
 
@@ -240,6 +256,144 @@ describe('TransportistasTab', () => {
         firmaReferencia: 'REF-9',
       }),
     );
+  });
+
+  /**
+   * The three API gaps this screen surfaced, from the consumer's side.
+   */
+  it('reads the destination catalog ONCE and flat, never client by client', async () => {
+    const { apiGet } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    await waitFor(() => expect(screen.getByText('ACME · IMILE Cuautitlán')).toBeTruthy());
+    const rutas = vi.mocked(apiGet).mock.calls.map((c) => String(c[0]));
+    expect(rutas).toContain('/api/catalogs/direcciones');
+    // The fan-out is gone: no per-client address request, and the label came off the tarifa itself.
+    expect(rutas.some((r) => /\/clients\/.+\/direcciones/.test(r))).toBe(false);
+  });
+
+  it('corrects a rate in place, sending the empty fields as null so an edit can erase', async () => {
+    const { apiPut } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /editar la tarifa de tracto/i })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /editar la tarifa de tracto/i }));
+    // The form opens pre-filled with what the rate says today.
+    expect((screen.getByLabelText('Tarifa *') as HTMLInputElement).value).toBe('18500');
+    fireEvent.change(screen.getByLabelText('Tarifa *'), { target: { value: '19900' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar tarifa/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith('/api/transportistas/t-1/convenios/c-1/tarifas/tf-1', {
+        tipoUnidad: 'tracto',
+        direccionEntregaId: 'dir-1',
+        tarifa: 19900,
+        moneda: 'MXN',
+        vigenciaDesde: null,
+        vigenciaHasta: null,
+      }),
+    );
+  });
+
+  it('retires a rate instead of deleting it', async () => {
+    const { apiDelete } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /desactivar la tarifa de tracto/i })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /desactivar la tarifa de tracto/i }));
+    await waitFor(() =>
+      expect(vi.mocked(apiDelete)).toHaveBeenCalledWith('/api/transportistas/t-1/convenios/c-1/tarifas/tf-1'),
+    );
+  });
+
+  it('keeps a retired rate on screen, flagged, and offers to bring it back', async () => {
+    const { apiPut } = await import('../api');
+    const conRetirada = {
+      ...DETALLE_T1,
+      convenios: [{ ...DETALLE_T1.convenios[0], tarifas: [{ ...DETALLE_T1.convenios[0].tarifas[0], activo: false }] }],
+    };
+    await renderPane({ detalle: conRetirada });
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    // It stays visible — a despacho already points at it — and cannot be edited, only reactivated.
+    await waitFor(() => expect(screen.getByText('Desactivada')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /editar la tarifa de tracto/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /reactivar la tarifa de tracto/i }));
+    await waitFor(() =>
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith('/api/transportistas/t-1/convenios/c-1/tarifas/tf-1', { activo: true }),
+    );
+  });
+
+  it('edits a pre-signature convenio: vigencia, estado and notas', async () => {
+    const { apiPut } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^editar convenio$/i })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^editar convenio$/i }));
+    fireEvent.change(screen.getByLabelText('Vigencia hasta'), { target: { value: '2027-06-30' } });
+    fireEvent.change(screen.getByLabelText('Notas'), { target: { value: 'Renegociado el 3 de junio' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar convenio/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith('/api/transportistas/t-1/convenios/c-1', {
+        vigenciaDesde: '2026-01-01',
+        vigenciaHasta: '2027-06-30',
+        estadoFirma: 'borrador',
+        notas: 'Renegociado el 3 de junio',
+      }),
+    );
+  });
+
+  it('offers Renovar — never Editar — on a signed convenio, and says why the terms are locked', async () => {
+    const { apiPost } = await import('../api');
+    await renderPane({ detalle: DETALLE_T1_FIRMADO });
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /renovar convenio/i })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /^editar convenio$/i })).toBeNull();
+    // The reason is stated on the card, not discovered as a 409.
+    expect(screen.getByText(/no se editan/i)).toBeTruthy();
+    expect(screen.getByText(/convenio sucesor/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /renovar convenio/i }));
+    fireEvent.change(screen.getByLabelText('Vigencia desde *'), { target: { value: '2027-01-01' } });
+    fireEvent.change(screen.getByLabelText('Vigencia hasta'), { target: { value: '2027-12-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /crear convenio sucesor/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/api/transportistas/t-1/convenios/c-1/renovar', {
+        vigenciaDesde: '2027-01-01',
+        vigenciaHasta: '2027-12-31',
+        copiarTarifas: true,
+      }),
+    );
+  });
+
+  it('shows the renewal chain in both directions', async () => {
+    const encadenado = {
+      ...DETALLE_T1,
+      convenios: [{
+        ...DETALLE_T1_FIRMADO.convenios[0],
+        renovadoDeConvenioId: 'c-0',
+        renovadoPorConvenioId: 'c-2',
+      }],
+    };
+    await renderPane({ detalle: encadenado });
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    await waitFor(() => expect(screen.getByText(/Renovación de un convenio anterior/i)).toBeTruthy());
+    expect(screen.getByText(/Ya renovado/i)).toBeTruthy();
   });
 
   it('adds a unit against the TIPOS_UNIDAD glossary', async () => {
@@ -288,6 +442,10 @@ describe('TransportistasTab', () => {
     expect(screen.queryByRole('button', { name: /agregar convenio/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /registrar firma/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^suspender$/i })).toBeNull();
+    // The three new affordances are writes too, and the server would answer all three with a 403.
+    expect(screen.queryByRole('button', { name: /^editar convenio$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /renovar convenio/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /desactivar la tarifa/i })).toBeNull();
   });
 
   it('hands the carrier over to Trazabilidad when the host offers the affordance', async () => {

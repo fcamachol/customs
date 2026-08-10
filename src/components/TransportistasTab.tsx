@@ -20,6 +20,14 @@
  * banner, which names the specific reason (unsigned / expired / not yet in force) rather than a
  * generic warning.
  *
+ * WHAT MAY BE CORRECTED, AND WHAT MAY NOT. Rates are editable and retirable: a mispriced rate that
+ * could only be superseded was a rate that could never be raised, because the resolver breaks ties by
+ * the lowest price. Convenios are editable ONLY before signature. After `firmado` the row is the
+ * signed document, so the card offers "Renovar" instead of "Editar" — a successor convenio carrying
+ * the same rates with a new vigencia, leaving the signed one intact — and says why in as many words.
+ * Nothing here can delete: despachos point at rates and convenios, and "at what agreed price was this
+ * trip contracted?" has to stay answerable.
+ *
  * CONTACT DETAILS are encrypted at rest server-side (fieldCrypto, §8.5) and arrive decrypted; the UI
  * simply shows them and posts them back in the clear over TLS. There is nothing to do here beyond
  * not copying them anywhere else.
@@ -38,10 +46,11 @@ import {
   Upload,
   Route,
   Power,
+  RefreshCw,
   X,
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, apiDownload } from '../api';
-import { Card, Button, Field, Input, Modal, StatusPill, EmptyState, type Resultado } from './ui';
+import { Card, Button, Field, Input, Textarea, Modal, StatusPill, EmptyState, type Resultado } from './ui';
 import { TIPOS_UNIDAD, ESTADOS_TRANSPORTISTA, etiquetaTipoUnidad } from '../../shared/operaciones/catalogos';
 
 // ---- API contract types ------------------------------------------------------------------------
@@ -76,11 +85,19 @@ interface Tarifa {
   id: string;
   tipoUnidad: string;
   direccionEntregaId: string | null;
+  /**
+   * The destination's label, joined server-side. The uuid alone is a pointer into another client's
+   * catalog, and resolving it in the browser used to mean asking every client for its address list.
+   */
+  destinoAlias?: string | null;
+  clienteNombre?: string | null;
   /** numeric column: a JSON number through json_build_object, a string on a bare RETURNING. */
   tarifa: number | string;
   moneda: string;
   vigenciaDesde: string | null;
   vigenciaHasta: string | null;
+  /** A retired rate never resolves onto a despacho again; it stays because past trips point at it. */
+  activo: boolean;
 }
 
 interface Convenio {
@@ -93,6 +110,10 @@ interface Convenio {
   firmaProveedor: string | null;
   firmaReferencia: string | null;
   firmaEvidenciaFileId: string | null;
+  notas?: string | null;
+  /** Provenance of a renewal, both directions: what this one succeeds, and what succeeded it. */
+  renovadoDeConvenioId?: string | null;
+  renovadoPorConvenioId?: string | null;
   createdAt: string;
   /** Computed by the server: `firmado` AND within its vigencia, asked of the DB's clock. */
   vigente: boolean;
@@ -104,11 +125,12 @@ interface TransportistaDetalle extends Transportista {
   convenios: Convenio[];
 }
 
-/** A delivery address, flattened across clients — see `cargarDestinos` for why it is assembled here. */
+/** A delivery address across every client — `GET /api/catalogs/direcciones`, one request. */
 interface Destino {
   id: string;
   alias: string;
   cliente: string;
+  activo?: boolean;
 }
 
 // ---- Formatting --------------------------------------------------------------------------------
@@ -479,34 +501,22 @@ function TransportistaDetalleModal({ transportistaId, isAdmin, onClose, onToast,
   useEffect(() => { void recargar(); }, [recargar]);
 
   /**
-   * Delivery addresses, assembled client by client.
+   * The destination catalog, for the rate picker only.
    *
-   * API GAP, worked around rather than papered over: there is no `GET /api/catalogs/direcciones`, only
-   * the per-client `GET /api/catalogs/clients/:id/direcciones`, and a tarifa's `direccionEntregaId`
-   * comes back as a bare uuid with no alias. Without this fan-out a destination-specific rate would
-   * read as a uuid on screen and could only be created by pasting one. The clients catalog is small
-   * (tens of rows) and this runs once, lazily, when a carrier is opened — never on the list.
+   * ONE REQUEST. This used to fan out over `/api/catalogs/clients` and then one
+   * `/clients/:id/direcciones` per client, because no flat endpoint existed and a tarifa's
+   * `direccionEntregaId` arrived as a bare uuid. Both halves are gone: `GET /api/catalogs/direcciones`
+   * returns the union, and the rates already carry their destination's label from the server, so this
+   * list is now needed only to CHOOSE a destination when creating or correcting a rate.
    */
   useEffect(() => {
-    let activo = true;
-    async function cargarDestinos() {
-      try {
-        const clientes = await apiGet<{ id: string; name: string }[]>('/api/catalogs/clients');
-        if (!Array.isArray(clientes)) return;
-        const listas = await Promise.all(
-          clientes.map((c) =>
-            apiGet<{ id: string; alias: string; activo: boolean }[]>(`/api/catalogs/clients/${c.id}/direcciones`)
-              .then((ds) => (Array.isArray(ds) ? ds.map((d) => ({ id: d.id, alias: d.alias, cliente: c.name })) : []))
-              .catch(() => [] as Destino[]),
-          ),
-        );
-        if (activo) setDestinos(listas.flat());
-      } catch {
+    let vivo = true;
+    apiGet<{ id: string; alias: string; cliente: string; activo: boolean }[]>('/api/catalogs/direcciones')
+      .then((ds) => { if (vivo && Array.isArray(ds)) setDestinos(ds); })
+      .catch(() => {
         // A carrier can still be administered without the destination catalog; rates just stay general.
-      }
-    }
-    void cargarDestinos();
-    return () => { activo = false; };
+      });
+    return () => { vivo = false; };
   }, []);
 
   async function cambiarEstado(estado: string) {
@@ -1016,7 +1026,14 @@ function ConvenioCard({ transportistaId, convenio, destinos, isAdmin, onToast, o
   onChanged: () => void | Promise<void>;
 }) {
   const motivo = motivoSinVigencia(convenio);
-  const puedeFirmar = convenio.estadoFirma === 'borrador' || convenio.estadoFirma === 'enviado';
+  /**
+   * The one line that decides what this card offers. Before signature a convenio is a working copy
+   * and everything about it is editable; after it, the row IS the signed document and its terms are
+   * frozen — extending it means a successor, never an edit. Same shape as the server's 409.
+   */
+  const preFirma = convenio.estadoFirma === 'borrador' || convenio.estadoFirma === 'enviado';
+  const [editando, setEditando] = useState(false);
+  const [renovando, setRenovando] = useState(false);
 
   return (
     <div className="rounded-lg border border-slate-200 p-4">
@@ -1041,7 +1058,52 @@ function ConvenioCard({ transportistaId, convenio, destinos, isAdmin, onToast, o
             {convenio.firmaReferencia ? ` · ref. ${convenio.firmaReferencia}` : ''}
           </span>
         )}
+        {convenio.renovadoDeConvenioId && (
+          <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-600/20">
+            Renovación de un convenio anterior
+          </span>
+        )}
+        {convenio.renovadoPorConvenioId && (
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-inset ring-slate-500/20">
+            Ya renovado
+          </span>
+        )}
+
+        {isAdmin && !editando && !renovando && (
+          <span className="ml-auto flex gap-3">
+            {preFirma ? (
+              <button
+                type="button"
+                onClick={() => setEditando(true)}
+                aria-label="Editar convenio"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-navy-700 hover:underline"
+              >
+                <PenLine className="h-3.5 w-3.5" /> Editar
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setRenovando(true)}
+                aria-label="Renovar convenio"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-navy-700 hover:underline"
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Renovar
+              </button>
+            )}
+          </span>
+        )}
       </div>
+
+      {convenio.notas && <p className="mt-2 whitespace-pre-line text-xs text-slate-600">{convenio.notas}</p>}
+
+      {/* WHY the terms are read-only here. Stated on the card, not only in the API's refusal. */}
+      {!preFirma && (
+        <p className="mt-2 text-[11px] text-slate-500">
+          Los términos de un convenio firmado no se editan: la fila <em>es</em> el documento, y mover su
+          vigencia haría que el sistema afirmara algo distinto de lo que se firmó. Para extenderlo,
+          renuévalo: se crea un convenio sucesor con las mismas tarifas y una vigencia nueva, y éste queda intacto.
+        </p>
+      )}
 
       {/* D9 made visible: a rate under a convenio that is not signed-and-in-force is not a price. */}
       {motivo && convenio.tarifas.length > 0 && (
@@ -1054,9 +1116,29 @@ function ConvenioCard({ transportistaId, convenio, destinos, isAdmin, onToast, o
         </div>
       )}
 
+      {isAdmin && editando && (
+        <EditarConvenio
+          transportistaId={transportistaId}
+          convenio={convenio}
+          onToast={onToast}
+          onCerrar={() => setEditando(false)}
+          onChanged={onChanged}
+        />
+      )}
+
+      {isAdmin && renovando && (
+        <RenovarConvenio
+          transportistaId={transportistaId}
+          convenio={convenio}
+          onToast={onToast}
+          onCerrar={() => setRenovando(false)}
+          onChanged={onChanged}
+        />
+      )}
+
       <ArchivoConvenio transportistaId={transportistaId} convenio={convenio} isAdmin={isAdmin} onToast={onToast} onChanged={onChanged} />
 
-      {isAdmin && puedeFirmar && (
+      {isAdmin && preFirma && (
         <FirmarConvenio transportistaId={transportistaId} convenioId={convenio.id} onToast={onToast} onChanged={onChanged} />
       )}
 
@@ -1068,6 +1150,181 @@ function ConvenioCard({ transportistaId, convenio, destinos, isAdmin, onToast, o
         onToast={onToast}
         onChanged={onChanged}
       />
+    </div>
+  );
+}
+
+/**
+ * Editing a convenio's terms — offered ONLY before signature, because that is the only time the
+ * server will accept it (409 otherwise, with the same explanation this form's sibling copy gives).
+ */
+function EditarConvenio({ transportistaId, convenio, onToast, onCerrar, onChanged }: {
+  transportistaId: string;
+  convenio: Convenio;
+  onToast: (msg: string) => void;
+  onCerrar: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    vigenciaDesde: diaDe(convenio.vigenciaDesde),
+    vigenciaHasta: diaDe(convenio.vigenciaHasta),
+    estadoFirma: convenio.estadoFirma,
+    notas: convenio.notas ?? '',
+  });
+  const [guardando, setGuardando] = useState(false);
+
+  async function guardar() {
+    setGuardando(true);
+    try {
+      // Empty dates are sent as null, not omitted: on an edit, "clear the expiry" is a real intent
+      // and omission would be read as "leave it alone".
+      await apiPut(`/api/transportistas/${transportistaId}/convenios/${convenio.id}`, {
+        vigenciaDesde: form.vigenciaDesde || null,
+        vigenciaHasta: form.vigenciaHasta || null,
+        estadoFirma: form.estadoFirma,
+        notas: form.notas.trim(),
+      });
+      onToast('Convenio actualizado');
+      onCerrar();
+      await onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-600">Editar convenio</p>
+        <button type="button" onClick={onCerrar} aria-label="Cancelar edición del convenio" className="text-slate-400 hover:text-slate-700">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <p className="mb-3 text-[11px] text-slate-500">
+        Sólo se puede editar mientras el convenio no está firmado. Una vez firmado, sus términos quedan fijos.
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Field label="Vigencia desde" htmlFor={`ec-desde-${convenio.id}`}>
+          <Input id={`ec-desde-${convenio.id}`} type="date" value={form.vigenciaDesde} onChange={(e) => setForm({ ...form, vigenciaDesde: e.target.value })} />
+        </Field>
+        <Field label="Vigencia hasta" htmlFor={`ec-hasta-${convenio.id}`}>
+          <Input id={`ec-hasta-${convenio.id}`} type="date" value={form.vigenciaHasta} onChange={(e) => setForm({ ...form, vigenciaHasta: e.target.value })} />
+        </Field>
+        <Field label="Estado" htmlFor={`ec-estado-${convenio.id}`}>
+          <select id={`ec-estado-${convenio.id}`} className={SELECT_CLS} value={form.estadoFirma} onChange={(e) => setForm({ ...form, estadoFirma: e.target.value })}>
+            <option value="borrador">Borrador</option>
+            <option value="enviado">Enviado</option>
+          </select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Notas" htmlFor={`ec-notas-${convenio.id}`}>
+          <Textarea
+            id={`ec-notas-${convenio.id}`}
+            className="min-h-[72px]"
+            value={form.notas}
+            onChange={(e) => setForm({ ...form, notas: e.target.value })}
+            placeholder="Términos acordados, anexos, con quién se negoció…"
+          />
+        </Field>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Button onClick={guardar} disabled={guardando}>Guardar convenio</Button>
+        <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * RENOVAR — the only way to extend a signed agreement.
+ *
+ * It creates a SUCCESSOR: a new convenio in borrador, linked to this one, carrying its active rates
+ * forward with a new vigencia. The signed one is not touched. The copy says so plainly, because the
+ * question a user arrives with ("why can't I just change the date?") has an answer that is worth
+ * stating once rather than being discovered as a refusal.
+ */
+function RenovarConvenio({ transportistaId, convenio, onToast, onCerrar, onChanged }: {
+  transportistaId: string;
+  convenio: Convenio;
+  onToast: (msg: string) => void;
+  onCerrar: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [form, setForm] = useState({ vigenciaDesde: '', vigenciaHasta: '', notas: convenio.notas ?? '', copiarTarifas: true });
+  const [guardando, setGuardando] = useState(false);
+
+  const tarifasActivas = convenio.tarifas.filter((t) => t.activo !== false).length;
+
+  async function renovar() {
+    if (!form.vigenciaDesde) { onToast('Error: la vigencia desde del convenio nuevo es obligatoria.'); return; }
+    setGuardando(true);
+    try {
+      const body: Record<string, unknown> = {
+        vigenciaDesde: form.vigenciaDesde,
+        copiarTarifas: form.copiarTarifas,
+      };
+      if (form.vigenciaHasta) body.vigenciaHasta = form.vigenciaHasta;
+      if (form.notas.trim() !== (convenio.notas ?? '')) body.notas = form.notas.trim();
+      await apiPost(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/renovar`, body);
+      onToast('Convenio renovado: se creó un convenio sucesor en borrador');
+      onCerrar();
+      await onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-navy-200 bg-navy-50/40 p-3">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-600">Renovar convenio</p>
+        <button type="button" onClick={onCerrar} aria-label="Cancelar renovación del convenio" className="text-slate-400 hover:text-slate-700">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <p className="mb-3 text-[11px] text-slate-600">
+        Se creará un <strong>convenio nuevo en borrador</strong>, ligado a éste, con la vigencia que indiques
+        {tarifasActivas > 0 ? ` y una copia de sus ${tarifasActivas} tarifa(s) activa(s)` : ''}.
+        Este convenio firmado queda intacto, y el sucesor no resuelve tarifas hasta que se firme.
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Vigencia desde *" htmlFor={`rn-desde-${convenio.id}`}>
+          <Input id={`rn-desde-${convenio.id}`} type="date" value={form.vigenciaDesde} onChange={(e) => setForm({ ...form, vigenciaDesde: e.target.value })} />
+        </Field>
+        <Field label="Vigencia hasta" htmlFor={`rn-hasta-${convenio.id}`}>
+          <Input id={`rn-hasta-${convenio.id}`} type="date" value={form.vigenciaHasta} onChange={(e) => setForm({ ...form, vigenciaHasta: e.target.value })} />
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Notas del convenio nuevo" htmlFor={`rn-notas-${convenio.id}`}>
+          <Textarea
+            id={`rn-notas-${convenio.id}`}
+            className="min-h-[72px]"
+            value={form.notas}
+            onChange={(e) => setForm({ ...form, notas: e.target.value })}
+          />
+        </Field>
+      </div>
+      <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          checked={form.copiarTarifas}
+          onChange={(e) => setForm({ ...form, copiarTarifas: e.target.checked })}
+          className="h-4 w-4 rounded border-slate-300"
+        />
+        Copiar las tarifas activas al convenio nuevo
+      </label>
+      <div className="mt-3 flex gap-2">
+        <Button onClick={renovar} disabled={guardando || !form.vigenciaDesde}>
+          <RefreshCw className="h-4 w-4" /> Crear convenio sucesor
+        </Button>
+        <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+      </div>
     </div>
   );
 }
@@ -1214,37 +1471,106 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
   onToast: (msg: string) => void;
   onChanged: () => void | Promise<void>;
 }) {
-  const [abierto, setAbierto] = useState(false);
+  /** null = closed, 'nueva' = the create form, otherwise the id of the rate being corrected. */
+  const [modo, setModo] = useState<string | null>(null);
   const [form, setForm] = useState(TARIFA_VACIA);
   const [guardando, setGuardando] = useState(false);
+  const editando = modo && modo !== 'nueva' ? convenio.tarifas.find((t) => t.id === modo) ?? null : null;
 
-  function etiquetaDestino(id: string | null): string {
-    if (!id) return 'Cualquier destino';
-    const d = destinos.find((x) => x.id === id);
+  /**
+   * The destination's name, server-first.
+   *
+   * The rate arrives with `clienteNombre`/`destinoAlias` joined in — that is the fix for the fan-out
+   * this component used to do. The `destinos` lookup remains only as a fallback for a payload that
+   * predates the join, and the uuid is never shown: a raw id on screen is not an answer.
+   */
+  function etiquetaDestino(t: Tarifa): string {
+    if (!t.direccionEntregaId) return 'Cualquier destino';
+    if (t.destinoAlias) return t.clienteNombre ? `${t.clienteNombre} · ${t.destinoAlias}` : t.destinoAlias;
+    const d = destinos.find((x) => x.id === t.direccionEntregaId);
     return d ? `${d.cliente} · ${d.alias}` : 'Destino específico';
   }
 
-  async function agregar() {
+  function abrirNueva() {
+    setForm(TARIFA_VACIA);
+    setModo('nueva');
+  }
+
+  function abrirEditar(t: Tarifa) {
+    setForm({
+      tipoUnidad: t.tipoUnidad,
+      direccionEntregaId: t.direccionEntregaId ?? '',
+      tarifa: String(t.tarifa),
+      moneda: t.moneda,
+      vigenciaDesde: diaDe(t.vigenciaDesde),
+      vigenciaHasta: diaDe(t.vigenciaHasta),
+    });
+    setModo(t.id);
+  }
+
+  async function guardar() {
     if (form.tarifa.trim() === '') { onToast('Error: la tarifa es obligatoria.'); return; }
     setGuardando(true);
     try {
-      const body: Record<string, unknown> = {
-        tipoUnidad: form.tipoUnidad,
-        tarifa: Number(form.tarifa),
-        moneda: form.moneda.trim().toUpperCase() || 'MXN',
-      };
-      if (form.direccionEntregaId) body.direccionEntregaId = form.direccionEntregaId;
-      if (form.vigenciaDesde) body.vigenciaDesde = form.vigenciaDesde;
-      if (form.vigenciaHasta) body.vigenciaHasta = form.vigenciaHasta;
-      await apiPost(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/tarifas`, body);
-      onToast('Tarifa registrada');
+      if (editando) {
+        /**
+         * A correction sends every field, with the empty ones as null: on an edit, "this rate is no
+         * longer destination-specific" and "it no longer expires" are things somebody means, and
+         * omitting the field would be read by the API as "leave it alone".
+         */
+        await apiPut(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/tarifas/${editando.id}`, {
+          tipoUnidad: form.tipoUnidad,
+          direccionEntregaId: form.direccionEntregaId || null,
+          tarifa: Number(form.tarifa),
+          moneda: form.moneda.trim().toUpperCase() || 'MXN',
+          vigenciaDesde: form.vigenciaDesde || null,
+          vigenciaHasta: form.vigenciaHasta || null,
+        });
+        onToast('Tarifa corregida');
+      } else {
+        const body: Record<string, unknown> = {
+          tipoUnidad: form.tipoUnidad,
+          tarifa: Number(form.tarifa),
+          moneda: form.moneda.trim().toUpperCase() || 'MXN',
+        };
+        if (form.direccionEntregaId) body.direccionEntregaId = form.direccionEntregaId;
+        if (form.vigenciaDesde) body.vigenciaDesde = form.vigenciaDesde;
+        if (form.vigenciaHasta) body.vigenciaHasta = form.vigenciaHasta;
+        await apiPost(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/tarifas`, body);
+        onToast('Tarifa registrada');
+      }
       setForm(TARIFA_VACIA);
-      setAbierto(false);
+      setModo(null);
       await onChanged();
     } catch (e) {
       onToast(`Error: ${errMsg(e)}`);
     } finally {
       setGuardando(false);
+    }
+  }
+
+  /**
+   * Retire, never delete — the same rule the fleet follows. A despacho already contracted points at
+   * this row and stores the amount beside it, so retiring the rate cannot restate a past trip; it
+   * only stops the price from resolving onto a new one.
+   */
+  async function desactivar(t: Tarifa) {
+    try {
+      await apiDelete(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/tarifas/${t.id}`);
+      onToast('Tarifa desactivada: ya no se resolverá en ningún despacho nuevo');
+      await onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  async function reactivar(t: Tarifa) {
+    try {
+      await apiPut(`/api/transportistas/${transportistaId}/convenios/${convenio.id}/tarifas/${t.id}`, { activo: true });
+      onToast('Tarifa reactivada');
+      await onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
     }
   }
 
@@ -1254,8 +1580,8 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
         <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-600">
           <Coins className="h-3.5 w-3.5 text-navy-700" /> Tarifas ({convenio.tarifas.length})
         </p>
-        {isAdmin && !abierto && (
-          <button type="button" onClick={() => setAbierto(true)} className="inline-flex items-center gap-1 text-xs font-semibold text-navy-700 hover:underline">
+        {isAdmin && !modo && (
+          <button type="button" onClick={abrirNueva} className="inline-flex items-center gap-1 text-xs font-semibold text-navy-700 hover:underline">
             <Plus className="h-3.5 w-3.5" /> Agregar tarifa
           </button>
         )}
@@ -1272,15 +1598,60 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
                 <th className="px-3 py-2 font-semibold">Destino</th>
                 <th className="px-3 py-2 font-semibold">Tarifa</th>
                 <th className="px-3 py-2 font-semibold">Vigencia</th>
+                <th className="px-3 py-2 font-semibold">Estado</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {convenio.tarifas.map((t) => (
-                <tr key={t.id} className={convenio.vigente ? '' : 'text-slate-400'}>
+                <tr
+                  key={t.id}
+                  className={t.activo === false ? 'bg-slate-50/60 text-slate-400' : convenio.vigente ? '' : 'text-slate-400'}
+                >
                   <td className="px-3 py-2">{etiquetaTipoUnidad(t.tipoUnidad)}</td>
-                  <td className="px-3 py-2">{etiquetaDestino(t.direccionEntregaId)}</td>
+                  <td className="px-3 py-2">{etiquetaDestino(t)}</td>
                   <td className="px-3 py-2 tabular-nums font-semibold">{fmtMonto(t.tarifa, t.moneda)}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(t.vigenciaDesde)} → {fmtDate(t.vigenciaHasta)}</td>
+                  <td className="px-3 py-2">
+                    {t.activo === false ? (
+                      <span className="text-xs font-semibold text-slate-500">Desactivada</span>
+                    ) : (
+                      <span className="text-xs font-semibold text-emerald-700">Activa</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {isAdmin && (
+                      t.activo === false ? (
+                        <button
+                          type="button"
+                          onClick={() => void reactivar(t)}
+                          aria-label={`Reactivar la tarifa de ${etiquetaTipoUnidad(t.tipoUnidad)}`}
+                          className="text-xs font-semibold text-slate-400 transition hover:text-navy-700"
+                        >
+                          Reactivar
+                        </button>
+                      ) : (
+                        <span className="flex justify-end gap-3">
+                          <button
+                            type="button"
+                            onClick={() => abrirEditar(t)}
+                            aria-label={`Editar la tarifa de ${etiquetaTipoUnidad(t.tipoUnidad)}`}
+                            className="text-xs font-semibold text-slate-400 transition hover:text-navy-700"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void desactivar(t)}
+                            aria-label={`Desactivar la tarifa de ${etiquetaTipoUnidad(t.tipoUnidad)}`}
+                            className="text-xs font-semibold text-slate-400 transition hover:text-red-600"
+                          >
+                            Desactivar
+                          </button>
+                        </span>
+                      )
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1288,14 +1659,22 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
         </div>
       )}
 
-      {isAdmin && abierto && (
+      {isAdmin && modo && (
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="mb-3 flex items-center justify-between">
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-600">Nueva tarifa</p>
-            <button type="button" onClick={() => setAbierto(false)} aria-label="Cancelar nueva tarifa" className="text-slate-400 hover:text-slate-700">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-600">
+              {editando ? 'Corregir tarifa' : 'Nueva tarifa'}
+            </p>
+            <button type="button" onClick={() => setModo(null)} aria-label={editando ? 'Cancelar corrección de tarifa' : 'Cancelar nueva tarifa'} className="text-slate-400 hover:text-slate-700">
               <X className="h-4 w-4" />
             </button>
           </div>
+          {editando && (
+            <p className="mb-3 text-[11px] text-slate-500">
+              La corrección aplica de aquí en adelante: los despachos ya contratados conservan el monto
+              con el que se pactaron.
+            </p>
+          )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="Tipo de unidad *" htmlFor={`tf-tipo-${convenio.id}`}>
               <select id={`tf-tipo-${convenio.id}`} className={SELECT_CLS} value={form.tipoUnidad} onChange={(e) => setForm({ ...form, tipoUnidad: e.target.value })}>
@@ -1305,7 +1684,11 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
             <Field label="Destino" htmlFor={`tf-dest-${convenio.id}`}>
               <select id={`tf-dest-${convenio.id}`} className={SELECT_CLS} value={form.direccionEntregaId} onChange={(e) => setForm({ ...form, direccionEntregaId: e.target.value })}>
                 <option value="">Cualquier destino</option>
-                {destinos.map((d) => <option key={d.id} value={d.id}>{d.cliente} · {d.alias}</option>)}
+                {destinos.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.cliente} · {d.alias}{d.activo === false ? ' (inactiva)' : ''}
+                  </option>
+                ))}
               </select>
             </Field>
             <Field label="Tarifa *" htmlFor={`tf-monto-${convenio.id}`}>
@@ -1321,9 +1704,12 @@ function TarifasTabla({ transportistaId, convenio, destinos, isAdmin, onToast, o
               <Input id={`tf-hasta-${convenio.id}`} type="date" value={form.vigenciaHasta} onChange={(e) => setForm({ ...form, vigenciaHasta: e.target.value })} />
             </Field>
           </div>
-          <Button className="mt-3" onClick={agregar} disabled={guardando}>
-            <Plus className="h-4 w-4" /> Registrar tarifa
-          </Button>
+          <div className="mt-3 flex gap-2">
+            <Button onClick={guardar} disabled={guardando}>
+              {editando ? <><PenLine className="h-4 w-4" /> Guardar tarifa</> : <><Plus className="h-4 w-4" /> Registrar tarifa</>}
+            </Button>
+            <Button variant="secondary" onClick={() => setModo(null)}>Cancelar</Button>
+          </div>
         </div>
       )}
     </div>

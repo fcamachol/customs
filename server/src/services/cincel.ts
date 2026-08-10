@@ -82,6 +82,15 @@
  * without the correlation key — would produce a convenio that says `firmado` because a request was
  * dispatched, and every tarifa in it would rest on that. Deferred on purpose.
  *
+ * RENEWAL (`POST /api/transportistas/:id/convenios/:cid/renovar`) WAS BUILT WITHOUT DISTURBING ANY OF
+ * THIS. A signed carrier convenio's terms are frozen, so extending one creates a SUCCESSOR row that
+ * carries the rates forward and links back through `renovado_de_convenio_id`. That flow is
+ * deliberately orthogonal to signing: it always produces a row in `borrador` and stops there, so
+ * whichever path that row later takes to `firmado` — today's "record an external signature", or the
+ * `/firmar/cincel` sibling reserved above — is unaffected. It adds no signature state, no dispatch
+ * column and no fourth spelling to the vocabulary; when the unification lands, a renewed convenio is
+ * simply another unsigned convenio to send.
+ *
  * A NOTE ON THE ENDPOINT SHAPE BELOW. No Cincel API reference lives in this repository or the PRD —
  * the plan only names the product and the requirement it satisfies (R25/D9). The request/response
  * shape here (`POST {baseUrl}/api/v2/documents`, multipart file + signer fields, `{ id, sign_url }`

@@ -202,14 +202,21 @@ export async function registrarEventoDespacho(
 /**
  * Resolve the agreed rate for a carrier, unit type and destination on a given day.
  *
- * Three rules, all of them about defensibility rather than arithmetic:
+ * Four rules, all of them about defensibility rather than arithmetic:
  *  - only convenios that are `firmado` AND in force on that date are considered. A draft price is a
  *    negotiation, not a rate, and a truck must never be contracted against one (R25/D9).
+ *  - only ACTIVE rates. A rate somebody switched off is a rate that was wrong; it stays in the table
+ *    because past despachos point at it, and it must never be resolved onto a new one. Correcting a
+ *    price upwards is otherwise impossible: the cheaper, wrong row would keep winning the tiebreak.
  *  - a destination-specific rate beats the general one for the same unit type. That is what a
  *    destination-specific rate MEANS; falling back to the general one would silently overcharge or
  *    undercharge the exact lane somebody negotiated.
- *  - among equals, the cheapest. A deterministic tiebreak, so the same inputs always resolve to the
- *    same row and the choice can be re-derived later.
+ *  - among equals, the cheapest — and among equally cheap ones, the lowest id. The carrier side
+ *    breaks ties by price ON PURPOSE (a cheaper truck is unambiguously better for us); the revenue
+ *    side must not, and does not — see `resolverTarifaCliente` in shared/operaciones/facturacion.ts,
+ *    which spells out why. The id is the last resort that makes the order TOTAL: two rates at the
+ *    same price for the same lane are a duplicate somebody has to fix, and until they do, the same
+ *    inputs must at least keep resolving to the same row so the choice can be re-derived later.
  */
 async function resolverTarifa(
   q: Q,
@@ -229,10 +236,11 @@ async function resolverTarifa(
         AND (c.vigencia_desde IS NULL OR c.vigencia_desde <= $4::date)
         AND (c.vigencia_hasta IS NULL OR c.vigencia_hasta >= $4::date)
         AND tf.tipo_unidad = $2
+        AND tf.activo
         AND (tf.direccion_entrega_id IS NULL OR tf.direccion_entrega_id = $3::uuid)
         AND (tf.vigencia_desde IS NULL OR tf.vigencia_desde <= $4::date)
         AND (tf.vigencia_hasta IS NULL OR tf.vigencia_hasta >= $4::date)
-      ORDER BY (tf.direccion_entrega_id IS NOT NULL) DESC, tf.tarifa ASC
+      ORDER BY (tf.direccion_entrega_id IS NOT NULL) DESC, tf.tarifa ASC, tf.id
       LIMIT 1`,
     [args.transportistaId, args.tipoUnidad, args.direccionEntregaId, args.fecha],
   );
@@ -334,10 +342,12 @@ despachosRouter.get(
                 AND (c.vigencia_desde IS NULL OR c.vigencia_desde <= $3::date)
                 AND (c.vigencia_hasta IS NULL OR c.vigencia_hasta >= $3::date)
                 AND x.tipo_unidad = $1
+                -- A retired rate is not an option, exactly as resolverTarifa reads it.
+                AND x.activo
                 AND (x.direccion_entrega_id IS NULL OR x.direccion_entrega_id = $2::uuid)
                 AND (x.vigencia_desde IS NULL OR x.vigencia_desde <= $3::date)
                 AND (x.vigencia_hasta IS NULL OR x.vigencia_hasta >= $3::date)
-              ORDER BY (x.direccion_entrega_id IS NOT NULL) DESC, x.tarifa ASC
+              ORDER BY (x.direccion_entrega_id IS NOT NULL) DESC, x.tarifa ASC, x.id
               LIMIT 1
            ) tf ON true
           WHERE t.estado = 'activo'

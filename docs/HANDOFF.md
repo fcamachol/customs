@@ -127,6 +127,7 @@ the shared test DB concurrently — truncation storms produce false failures.
 
 | # | Item | Notes |
 |---|---|---|
+| **39** | **CRITICAL — persistent volume for `/app/storage` + blob recovery** | Evidence blobs are EPHEMERAL: `FILE_STORAGE_DIR=/app/storage` has no Coolify volume, so **every redeploy destroys stored file bytes** (DB rows + sha256 hashes survive; downloads 500). Proven A/B on 2026-08-07. USER: Coolify → customs-v2 → Storages → volume at `/app/storage` → redeploy. THEN a session: recovery script re-downloading lost attachments from AGORA, verifying each restored byte against the stored `content_hash` (verifiable restoration); and fix `routes/files.ts` to answer 410 with the recorded hash instead of 500 on a missing blob. Do this FIRST — it protects everything else. |
 | 23 | Risk requirement to client with hard deadline (R18/D13) | needs `riesgo_requerimientos` table, deadline = eta + window, expiry sweep on the tick firing CT-4 → hold tipo 'riesgo'. **Blocked on outbound email.** |
 | 26 | Contingency engine CT-1..CT-7 (`shared/operaciones/replan.ts`) | consumes flight events + holds (holds/retenciones SHIPPED: `routes/holds.ts`, CT-3/4/5/6 storage+endpoints); versioned ruleset; auto-executes exclude/reschedule/hold/notify, PROPOSES money-touching reassignment with logged override |
 | 29 | Despacho + transport catalogs (R13–R29) | despachos, despacho_partidas, plan_publicaciones with diffs, transportistas/unidades/convenios/tarifas; unit-type-BEFORE-carrier (D7) |

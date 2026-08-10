@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts",
     "migrate": "node-pg-migrate --tsx -m migrations --envPath .env",
     "demo:e2e": "tsx scripts/demoE2e.ts",
+    "recover:evidence": "tsx scripts/recoverEvidence.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -175,7 +175,12 @@ function senderEmail(payload: AgoraWebhookPayload): string | null {
   return payload.sender?.email ?? null;
 }
 
-function fileNameFor(att: { data_url?: string; extension?: string; id?: number }): string {
+/**
+ * The name an AGORA attachment is archived under. Exported because the blob-recovery script
+ * (`scripts/recoverEvidence.ts`) has to re-derive it to match a stored `files.original_name` back to
+ * the attachment it came from — and if the two ever disagreed, recovery would silently find nothing.
+ */
+export function fileNameFor(att: { data_url?: string; extension?: string; id?: number }): string {
   const fromUrl = att.data_url ? decodeURIComponent(att.data_url.split('?')[0].split('/').pop() ?? '') : '';
   if (fromUrl) return fromUrl;
   const ext = att.extension ? `.${att.extension.replace(/^\./, '')}` : '';

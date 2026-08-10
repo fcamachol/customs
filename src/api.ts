@@ -64,9 +64,32 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   return res.json();
 }
 
+/**
+ * Download an archived artifact.
+ *
+ * IT THROWS AN `ApiError`, NOT AN `Error(res.statusText)`, AND THAT IS THE POINT OF THIS FUNCTION.
+ * `GET /api/files/:id` answers three different facts with three different statuses (backlog #39):
+ * 404 "we never had this file", 410 "the row and its sha256 are here, the BYTES are gone", 200 the
+ * bytes. The 410 body carries the Spanish explanation, the `contentHash` the evidence was archived
+ * under, and the `codigo` the recovery script keys on — everything a user needs to prove what the
+ * artifact was and hand it to `npm --prefix server run recover:evidence`. Throwing `res.statusText`
+ * discarded all of it and put the string "Gone" on screen, which reads as a bug in the app rather
+ * than as a data-loss incident with a documented recovery path. A lost piece of customs evidence has
+ * to announce itself as exactly that.
+ *
+ * The body is read defensively: a proxy or a gateway can answer with HTML, and a JSON parse failure
+ * must still produce a usable error rather than swallow the status.
+ */
 export async function apiDownload(path: string, filename: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(res.statusText);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new ApiError(
+      (typeof body.error === 'string' && body.error) || res.statusText,
+      res.status,
+      body,
+    );
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

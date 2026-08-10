@@ -290,11 +290,52 @@ describe('publicación — R19 / P4', () => {
     await publicar().expect(409); // nothing left to publish
   });
 
-  it('says plainly that the recipients were recorded, not contacted', async () => {
-    const res = await publicar({ destinatarios: ['almacen@capitalc.com.mx'] }).expect(201);
-    expect(res.body.notificacion).toContain('#31');
+  /**
+   * R19 / N5 — the fan-out reports what ACTUALLY happened, per recipient.
+   *
+   * This used to answer `'pendiente: … requiere el fan-out (#31)'`. Both channels exist now, so the
+   * response carries real outcomes — and with neither SMTP nor evolution-api provisioned in a test
+   * process, every one of them must come back `omitido` WITH ITS REASON. That is the assertion worth
+   * having: `omitido` is not `enviado`, and a plan whose recipients were skipped for want of a mail
+   * server must never read as a plan that was distributed.
+   */
+  it('reports real per-recipient outcomes, and never calls an unsent message sent', async () => {
+    const res = await publicar({
+      destinatarios: ['almacen@capitalc.com.mx', '+525512345678', 'bodega 3'],
+    }).expect(201);
+
+    expect(res.body.notificacion.intentados).toBe(3);
+    expect(res.body.notificacion.enviados).toBe(0);
+    expect(res.body.notificacion.omitidos).toBe(3);
+    expect(res.body.notificacion.errores).toBe(0);
+
+    const detalle = res.body.notificacion.detalle as Array<{
+      destino: string; canal: string | null; estado: string; detalle: string;
+    }>;
+    // The channel is derived from the handle's shape: an address goes by mail, a number by WhatsApp,
+    // and something that is neither is named rather than silently dropped.
+    expect(detalle.find((d) => d.destino === 'almacen@capitalc.com.mx')).toMatchObject({
+      canal: 'email', estado: 'omitido',
+    });
+    expect(detalle.find((d) => d.destino === '+525512345678')).toMatchObject({
+      canal: 'whatsapp', estado: 'omitido',
+    });
+    expect(detalle.find((d) => d.destino === 'bodega 3')).toMatchObject({
+      canal: null, estado: 'omitido',
+    });
+    expect(detalle.find((d) => d.destino === 'bodega 3')!.detalle).toMatch(/no reconocido/);
+
     const { rows } = await query<{ destinatarios: string[] }>('SELECT destinatarios FROM plan_publicaciones');
-    expect(rows[0].destinatarios).toEqual(['almacen@capitalc.com.mx']);
+    expect(rows[0].destinatarios).toEqual(['almacen@capitalc.com.mx', '+525512345678', 'bodega 3']);
+  });
+
+  it('records the delivery outcomes on the audit row, not only in the response', async () => {
+    await publicar({ destinatarios: ['almacen@capitalc.com.mx'] }).expect(201);
+    const { rows } = await query<{ after: Record<string, any> }>(
+      `SELECT after FROM audit_log WHERE action='PLAN_PUBLICADO' ORDER BY created_at DESC LIMIT 1`,
+    );
+    // "Was the warehouse told?" has to be answerable from the audit trail alone.
+    expect(rows[0].after.notificacion).toMatchObject({ intentados: 1, enviados: 0, omitidos: 1 });
   });
 
   it('is closed to the field and authority roles for writing, open to both for reading', async () => {

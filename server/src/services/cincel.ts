@@ -26,6 +26,62 @@
  * the global `fetch` (the house convention for outbound HTTP — see `services/agoraClient.ts`, which
  * has no dedicated HTTP client dependency either).
  *
+ * =================================================================================================
+ * UNIFICATION WITH `transportista_convenios` — DESIGNED HERE, DELIBERATELY NOT BUILT.
+ * =================================================================================================
+ *
+ * THERE ARE TWO CONVENIO TABLES IN THIS SCHEMA and they are not variants of one thing yet:
+ *
+ *   `convenios`                — client-anchored (`client_id`), Cincel-integrated end to end: upload,
+ *                                `POST /:id/firmar` dispatches through `solicitarFirma` below, and an
+ *                                HMAC-verified webhook stores the NOM-151 conservation constancy and
+ *                                sets `estado_firma = 'firmada'`. Vocabulary:
+ *                                `borrador | solicitada | firmada | error`.
+ *   `transportista_convenios`  — carrier-anchored (#29), no PSC integration. `POST
+ *                                /api/transportistas/:id/convenios/:cid/firmar` RECORDS a signature
+ *                                performed somewhere else, requiring `firmaProveedor` +
+ *                                `firmaReferencia` — a smaller and truer claim than "we signed it".
+ *                                Vocabulary: `borrador | enviado | firmado | vencido`
+ *                                (`ESTADOS_FIRMA_CONVENIO`, shared/operaciones/catalogos.ts).
+ *
+ * THE VOCABULARY MISMATCH IS NOT COSMETIC. `firmada` and `firmado` are different strings in different
+ * CHECK constraints, and `routes/despachos.ts` resolves every tarifa through
+ * `c.estado_firma = 'firmado'` — the carrier spelling. A tarifa that does not resolve is a trip
+ * contracted at no agreed price, so ANY unification has to be a migration that rewrites values under
+ * a lock, not a widened CHECK plus hopeful code: while both spellings were legal in one column, half
+ * the fleet would silently stop quoting.
+ *
+ * WHAT WIRING THE CARRIER SIDE THROUGH THIS MODULE ACTUALLY COSTS (why it is not a small change):
+ *
+ *   1. `transportista_convenios` has none of the dispatch-tracking columns the discipline depends on
+ *      — no `cincel_solicitud_id` (the webhook's only correlation key), no `firma_url`, no
+ *      `solicitud_firma_estado/_detalle/_intentos`, no `solicitado_at`. Without them a request could
+ *      not be retried, and `estado_firma` would have to advance on the ATTEMPT, which is the exact
+ *      "omitido is not enviado" rule this module exists to enforce.
+ *   2. The webhook (`routes/convenios.ts`) looks up `convenios` by `cincel_solicitud_id` and knows one
+ *      table. Serving both means either a second endpoint or a discriminated lookup, and Cincel's
+ *      `external_id` is our convenio id with no type tag on it — so the id space of the two tables
+ *      would have to be treated as one, which it currently is not.
+ *   3. The signer differs in kind. A client convenio is signed by the client (`clients.email`); a
+ *      carrier convenio is signed by the carrier (`transportistas.contacto_email`) AND, in practice,
+ *      countersigned by us. `solicitarFirma` takes exactly one signer.
+ *   4. `POST .../convenios/:cid/firmar` lives in `routes/transportistas.ts`, which is under
+ *      concurrent modification in this working tree; changing its signing semantics in parallel with
+ *      another edit is how a money-touching path acquires a merge artifact.
+ *
+ * THE DESIGN, WHEN IT IS BUILT. One migration adds the six dispatch/completion columns to
+ * `transportista_convenios` and normalizes both tables onto ONE vocabulary — take the carrier
+ * spelling (`firmado`), because `despachos.ts` already reads it and rewriting the tarifa join is the
+ * riskier half. Add a `firma_solicitudes` correlation row, or prefix Cincel's `external_id` with the
+ * table (`cli:<uuid>` / `tra:<uuid>`) so one webhook can route without guessing. Then
+ * `routes/transportistas.ts` gains a `/firmar/cincel` sibling that calls `solicitarFirma` and leaves
+ * the existing "record an external signature" endpoint intact — the two are different claims and
+ * both stay true. NOTHING in this file changes: that is what `solicitarFirma`'s narrow surface bought.
+ *
+ * Half-building it — pointing the carrier signature at Cincel without the tracking columns and
+ * without the correlation key — would produce a convenio that says `firmado` because a request was
+ * dispatched, and every tarifa in it would rest on that. Deferred on purpose.
+ *
  * A NOTE ON THE ENDPOINT SHAPE BELOW. No Cincel API reference lives in this repository or the PRD —
  * the plan only names the product and the requirement it satisfies (R25/D9). The request/response
  * shape here (`POST {baseUrl}/api/v2/documents`, multipart file + signer fields, `{ id, sign_url }`

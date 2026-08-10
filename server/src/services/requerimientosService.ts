@@ -4,6 +4,7 @@ import { recordAudit } from './audit';
 import { mirrorEventoToAgora } from './agoraMirror';
 import { sendMail, type MailOutcome } from './mailer';
 import { avisarInternoPorEvento, escalarPorWhatsapp } from './whatsappFanout';
+import { materializarHoldActivo, type QueryFn } from './holdActivo';
 import type { WhatsappOutcome } from './whatsapp';
 
 /**
@@ -316,28 +317,12 @@ export async function notificarRequerimiento(requerimientoId: string): Promise<N
 // -------------------------------------------------------------------------------------------------
 
 /**
- * Recompute `operaciones.hold_activo` for one caso.
- *
- * The same absolute formula `routes/holds.ts` uses, restated rather than imported: it asks the table
- * what is true right now instead of incrementing anything, so it lands on the correct value no matter
- * what other holds exist. Kept identical to holds.ts on purpose — if one changes, both must.
+ * Recompute `operaciones.hold_activo` for one caso — `services/holdActivo.ts`, the single copy of
+ * the absolute formula. It asks the table what is true right now instead of incrementing anything, so
+ * it lands on the correct value no matter what other holds exist.
  */
-async function materializarHold(
-  q: (text: string, params?: unknown[]) => Promise<any>,
-  operacionId: string,
-): Promise<boolean> {
-  const { rows } = await q(
-    `UPDATE operaciones o
-        SET hold_activo = EXISTS (
-              SELECT 1 FROM operacion_holds h
-               WHERE h.activo
-                 AND (h.operacion_id IS NULL OR h.operacion_id = o.id))
-      WHERE o.id = $1
-      RETURNING o.hold_activo`,
-    [operacionId],
-  );
-  return Boolean(rows[0]?.hold_activo);
-}
+const materializarHold = (q: QueryFn, operacionId: string): Promise<boolean> =>
+  materializarHoldActivo(q, operacionId);
 
 export interface VencimientoDetalle {
   requerimientoId: string;

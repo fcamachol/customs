@@ -400,6 +400,161 @@ describe('CT-7 · la reasignación que toca dinero', () => {
   });
 });
 
+/**
+ * CT-7 against REAL trips — the follow-up to #29.
+ *
+ * `construirEstado` used to hand the engine `despachos: []` with a comment saying the table did not
+ * exist yet, so CT-7 could only fall back to the `asignada` heuristic and propose a reassignment with
+ * a NULL despachoId — "there is a unit, I cannot tell you which one". The dispatch module exists now,
+ * so the proposal has to name the folio the coordinator is going to phone about.
+ */
+describe('CT-7 · la propuesta apunta al despacho real (#29)', () => {
+  async function conDespacho(opId: string, estado: string): Promise<string> {
+    const t = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social) VALUES ('Fletes del Norte') RETURNING id`,
+    );
+    const d = await query<{ id: string }>(
+      `INSERT INTO despachos (folio, fecha_operacion, tipo_unidad, transportista_id, estado)
+       VALUES ($1,'2026-08-10','tracto',$2,$3) RETURNING id`,
+      [`D-20260810-${Math.floor(Math.random() * 900) + 100}`, t.rows[0].id, estado],
+    );
+    await query(`INSERT INTO despacho_partidas (despacho_id, operacion_id) VALUES ($1,$2)`, [
+      d.rows[0].id,
+      opId,
+    ]);
+    return d.rows[0].id;
+  }
+
+  it('names the despacho id instead of proposing against a null', async () => {
+    const despachoId = await conDespacho(opA, 'confirmado');
+    await conVuelo(opA, 'cancelado');
+
+    await replanificar(opA).expect(200);
+
+    const ev = await eventosDe(opA, 'REASIGNACION_PROPUESTA');
+    expect(ev).toHaveLength(1);
+    // The whole point: a folio somebody can call about, not "there is a unit somewhere".
+    expect(ev[0].payload.despachoId).toBe(despachoId);
+    expect(String(ev[0].payload.motivo)).toContain(despachoId);
+  });
+
+  it('carries the real trips into the reproducibility snapshot', async () => {
+    const despachoId = await conDespacho(opA, 'en_patio');
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const { rows } = await query<{ snapshot: { despachos: Array<Record<string, unknown>> } }>(
+      'SELECT snapshot FROM replan_evaluaciones WHERE operacion_id = $1',
+      [opA],
+    );
+    expect(rows[0].snapshot.despachos).toHaveLength(1);
+    expect(rows[0].snapshot.despachos[0]).toMatchObject({ id: despachoId, estado: 'en_patio' });
+    // Not guessed: a trip's destination is a client address, never an airport code.
+    expect(rows[0].snapshot.despachos[0].destinoIata).toBeNull();
+  });
+
+  it('ignores a cancelled trip — a cancelled unit has nothing left to reassign', async () => {
+    await conDespacho(opA, 'cancelado');
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const { rows } = await query<{ snapshot: { despachos: unknown[] } }>(
+      'SELECT snapshot FROM replan_evaluaciones WHERE operacion_id = $1',
+      [opA],
+    );
+    expect(rows[0].snapshot.despachos).toHaveLength(0);
+    // And with `sin_plan`/`planeada` there is no `asignada` signal either, so nothing is proposed —
+    // which is correct: there is no exposure to raise.
+    expect(await eventosDe(opA, 'REASIGNACION_PROPUESTA')).toHaveLength(0);
+  });
+
+  it('keeps the `asignada` safety net for a caso whose trip row is gone', async () => {
+    // The documented fallback. `asignada` MEANS a unit was committed (§8.4 eje 3); a caso in that
+    // state with no live trip is still an exposure, and dropping it silently is how a flete en falso
+    // goes unnoticed.
+    await query(`UPDATE operaciones SET estado_planeacion = 'asignada' WHERE id = $1`, [opA]);
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const ev = await eventosDe(opA, 'REASIGNACION_PROPUESTA');
+    expect(ev).toHaveLength(1);
+    expect(ev[0].payload.despachoId).toBeNull();
+  });
+});
+
+/**
+ * NOTIFICACION_REQUERIDA — the obligation and the delivery are two facts (#22 + #31).
+ *
+ * The engine records that somebody HAS to be told, in the append-only ledger, inside the
+ * transaction. The attempt happens afterwards and its outcome lands on the `replan_acciones` payload.
+ * With no SMTP and no WhatsApp instance in a test process every attempt must come back `omitido` —
+ * and the ledger event must still say the advice was owed.
+ */
+describe('NOTIFICACION_REQUERIDA · la obligación y la entrega son hechos distintos', () => {
+  it('records the delivery attempt on the action, never on the ledger event', async () => {
+    const cliente = await query<{ id: string }>(
+      `INSERT INTO clients (name, email, phone) VALUES ('Cliente Aviso','ops@cliente.example','+525599887766')
+       RETURNING id`,
+    );
+    await query('UPDATE operaciones SET client_id = $2 WHERE id = $1', [opA, cliente.rows[0].id]);
+    await conVuelo(opA, 'cancelado');
+
+    const res = await replanificar(opA).expect(200);
+
+    const avisos = await eventosDe(opA, 'NOTIFICACION_REQUERIDA');
+    expect(avisos.length).toBeGreaterThan(0);
+    // The ledger event is the OBLIGATION. It must not have acquired a delivery claim.
+    for (const a of avisos) expect(a.payload.notificacion).toBeUndefined();
+
+    const { rows } = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const alCliente = rows.find((r) => r.payload.destinatario === 'cliente')!;
+    expect(alCliente.payload.notificacion).toBeTruthy();
+    // Two contacts on file (email + phone), neither channel provisioned: two honest `omitido`s.
+    expect(alCliente.payload.notificacion.intentados).toBe(2);
+    expect(alCliente.payload.notificacion.enviados).toBe(0);
+    expect(alCliente.payload.notificacion.omitidos).toBe(2);
+    expect(res.body).toBeTruthy();
+  });
+
+  it('says so when there is nobody to tell, rather than leaving an unexplained absence', async () => {
+    // No client on the caso and no NOTIFICACION_ALMACEN roster in a test process.
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const { rows } = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    const alAlmacen = rows.find((r) => r.payload.destinatario === 'almacen')!;
+    expect(alAlmacen.payload.notificacion.intentados).toBe(0);
+    expect(alAlmacen.payload.notificacion.motivo).toMatch(/sin contacto/);
+  });
+
+  it('does not re-attempt an advice already on record — the anti-stutter rule covers delivery too', async () => {
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+    const primera = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    const sellos = primera.rows.map((r) => r.payload.notificacion.intentadoAt);
+
+    const res = await replanificar(opA).expect(200);
+    expect(res.body.accionesNuevas).toBe(0);
+
+    const segunda = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    expect(segunda.rows).toHaveLength(primera.rows.length);
+    expect(segunda.rows.map((r) => r.payload.notificacion.intentadoAt)).toEqual(sellos);
+  });
+});
+
 describe('CT-2 · guía no transmitida', () => {
   function marcar(opId: string, guiaId: string, body: Record<string, unknown>, token = capturistaToken) {
     return request(app)

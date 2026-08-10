@@ -28,6 +28,7 @@
 // out of there.
 
 import { rulesetHash } from '../risk/hash';
+import { GUIA_ESTADOS_NO_DESPACHABLES } from './catalogos';
 import type { Etapa, EstadoDocumental, EstadoPlaneacion, TipoEvento } from './estados';
 
 export const REPLAN_RULESET_VERSION = '2026-08a';
@@ -123,8 +124,13 @@ export const REPLAN_RULESET = {
   etapasCerradas: ['en_transito', 'entregado', 'cerrada', 'cancelada'] as const,
   /** Planning states the engine may act on. `sin_plan` has nothing to exclude; `cumplida` is done. */
   planeacionAccionable: ['planeada', 'asignada', 'replanificada'] as const,
-  /** Guía states that cannot be loaded onto a truck today. */
-  guiaNoDespachable: ['no_transmitida', 'retenida', 'cancelada', 'csa_pendiente'] as const,
+  /**
+   * Guía states that cannot be loaded onto a truck today. NOT a literal any more: the same list is
+   * what `routes/despachos.ts` refuses on and what `routes/planeacion.ts` publishes as exclusions, so
+   * it lives once in `shared/operaciones/catalogos.ts`. Its declared order is fixed there precisely
+   * because it is hashed into `REPLAN_RULESET_HASH`.
+   */
+  guiaNoDespachable: GUIA_ESTADOS_NO_DESPACHABLES,
   /** Despacho states that still have a unit committed and therefore can be reassigned. */
   despachoReasignable: [
     'planeado',
@@ -179,10 +185,10 @@ export interface RetencionActiva {
 /**
  * A unit already committed against this caso.
  *
- * The `despachos` table does not exist yet — it arrives with backlog #29 — and this engine is written
- * against the shape it will have rather than around it. Until then the caller passes an empty array
- * and CT-7 falls back to the `asignada` heuristic documented below, which is the honest reading of the
- * only signal that exists today.
+ * The `despachos` table now exists (#29) and `services/replanService.ts` fills this array with the
+ * real, non-cancelled trips carrying this caso's cargo, so CT-7 names actual folios instead of
+ * inferring one. `destinoIata` stays null in practice: a trip's destination is a client address, not
+ * an airport, and the engine does not read the field — see the service for why it is not guessed.
  */
 export interface DespachoContratado {
   id: string;
@@ -219,7 +225,7 @@ export interface EstadoOperativo {
   /** Retenciones still in custody (`estado = 'retenida'`). */
   retenciones: RetencionActiva[];
   guias: GuiaEstado[];
-  /** Units committed against this caso. Empty until #29. */
+  /** Units committed against this caso — real `despachos` rows since #29. */
   despachos: DespachoContratado[];
   /** Casos that could absorb a freed unit today, pre-filtered by the caller. */
   candidatas: CandidataReasignacion[];
@@ -268,7 +274,7 @@ export type AccionPropuesta =
   | (AccionBase & {
       tipo: 'reasignar_despacho';
       operacionId: string;
-      /** Null while #29 is pending: the unit is known to be committed but has no row yet. */
+      /** Null on the `asignada` safety net: a unit is known to be committed but cannot be named. */
       despachoId: string | null;
       candidatas: CandidataReasignacion[];
     });
@@ -702,11 +708,14 @@ export function evaluarContingencias(estado: EstadoOperativo): AccionPropuesta[]
         });
       }
     } else if (op.estadoPlaneacion === 'asignada') {
-      // #29 has not landed, so there is no `despachos` row to point at — but `asignada` MEANS a unit
-      // and a carrier were committed (§8.4 eje 3). Losing that exposure until the dispatch module
-      // exists would defeat the point of the rule, so the proposal is raised with a null despachoId
-      // and the coordinator identifies the unit. When #29 lands the id flows in and this branch
-      // stops being reachable.
+      // THE SAFETY NET, KEPT ON PURPOSE. #29 has landed and the caller now passes real `despachos`
+      // rows, so the branch above is the normal path. This one survives because the two facts can
+      // still disagree: `asignada` MEANS a unit and a carrier were committed (§8.4 eje 3), and a caso
+      // carrying that state with no live trip row — a despacho cancelled outside this engine, a
+      // planning axis moved by an import or by hand, a partida deleted — is still an exposure. The
+      // honest reading is "we know a unit is committed, we cannot name it": the proposal is raised
+      // with a null despachoId and the coordinator identifies the unit. Silently dropping it because
+      // the join came back empty would hide exactly the flete en falso the rule exists to catch.
       acciones.push({
         tipo: 'reasignar_despacho',
         contingencia: 'CT-7',

@@ -32,7 +32,9 @@ import {
   aduanaOrigen,
   canAdvanceEstadoDespacho,
   etiquetaTipoUnidad,
+  GUIA_ESTADOS_DESPACHABLES,
   type EstadoDespacho,
+  type GuiaEstadoNoDespachable,
 } from '../../../shared/operaciones/catalogos';
 import { desviacionArriboMin, estimarArribo } from '../../../shared/operaciones/eta';
 
@@ -85,9 +87,18 @@ type Q = (text: string, params?: unknown[]) => Promise<any>;
 /** Serializes folio minting per operating day; see `siguienteFolio`. */
 const LOCK_FOLIO_DESPACHO = 5000001;
 
-/** Guías that may be loaded onto a unit, and why the others may not. */
-const ESTADOS_GUIA_CARGABLES = new Set(['declarada', 'liberada']);
-const MOTIVO_GUIA_NO_CARGABLE: Record<string, string> = {
+/**
+ * Guías that may be loaded onto a unit, and why the others may not.
+ *
+ * Both halves come from `shared/operaciones/catalogos.ts` rather than being retyped here: the refusal
+ * set and `REPLAN_RULESET.guiaNoDespachable` are ONE product rule, and while they were two hand-synced
+ * literals a divergence would have meant the plan showing a guía as excluded while this endpoint let
+ * it onto a truck. The `Record<GuiaEstadoNoDespachable, string>` annotation is the enforcement: adding
+ * a state to the shared list fails to compile here until somebody writes the sentence the coordinator
+ * will read when the load is refused.
+ */
+const ESTADOS_GUIA_CARGABLES = new Set<string>(GUIA_ESTADOS_DESPACHABLES);
+const MOTIVO_GUIA_NO_CARGABLE: Record<GuiaEstadoNoDespachable, string> = {
   retenida: 'La guía está retenida por la autoridad (CT-5): el pedimento debe declarar la carga que realmente sale.',
   no_transmitida: 'La guía no está transmitida (CT-2): se excluye del plan hasta que se transmita.',
   csa_pendiente: 'La guía está consignada a otra agencia y falta la carta de cesión (CT-3).',
@@ -977,7 +988,7 @@ despachosRouter.post(
         case 'guia_no_cargable':
           res.status(409).json({
             error:
-              MOTIVO_GUIA_NO_CARGABLE[resultado.estado] ??
+              MOTIVO_GUIA_NO_CARGABLE[resultado.estado as GuiaEstadoNoDespachable] ??
               `La guía está en estado '${resultado.estado}' y no puede cargarse.`,
             guia: resultado.guia,
             estado: resultado.estado,

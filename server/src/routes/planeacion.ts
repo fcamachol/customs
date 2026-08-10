@@ -18,6 +18,17 @@ import {
   type PlanExclusionSnapshot,
   type PlanSnapshot,
 } from '../../../shared/operaciones/plan';
+import {
+  GUIA_ESTADOS_DESPACHABLES,
+  GUIA_ESTADOS_NO_DESPACHABLES,
+} from '../../../shared/operaciones/catalogos';
+import {
+  contactosDeRol,
+  enviarNotificaciones,
+  resumirEnvios,
+  type EnvioResultado,
+} from '../services/notificaciones';
+import { avisarInternoPorEvento } from '../services/whatsappFanout';
 
 /**
  * PLANEACIÓN — the living plan (PRD-02 R13, R14, R16, R19, principle P4).
@@ -137,6 +148,9 @@ async function construirSnapshot(q: Q, fecha: string): Promise<PlanSnapshot> {
       ORDER BY o.mawb`,
   );
 
+  // The "cannot leave today" list is the shared vocabulary (shared/operaciones/catalogos.ts), the
+  // same one routes/despachos.ts refuses on and REPLAN_RULESET reasons with — passed as a parameter
+  // so the plan's exclusions and the dispatch endpoint can never disagree about which guías are out.
   const guias = await q(
     `SELECT o.mawb,
             g.guia_norm AS guia,
@@ -144,10 +158,11 @@ async function construirSnapshot(q: Q, fecha: string): Promise<PlanSnapshot> {
             NULL::text AS detalle
        FROM operacion_guias g
        JOIN operaciones o ON o.id = g.operacion_id
-      WHERE g.estado IN ('retenida','no_transmitida','csa_pendiente','cancelada')
+      WHERE g.estado = ANY($1::text[])
         AND o.etapa NOT IN ${ETAPAS_CERRADAS}
         AND NOT o.hold_activo
       ORDER BY o.mawb, g.guia_norm`,
+    [[...GUIA_ESTADOS_NO_DESPACHABLES]],
   );
 
   const exclusiones: PlanExclusionSnapshot[] = [...holds.rows, ...guias.rows].map((r: Record<string, any>) => ({
@@ -213,7 +228,7 @@ planeacionRouter.get(
            LEFT JOIN clients c ON c.id = COALESCE(g.client_id, o.client_id)
           WHERE o.etapa NOT IN ${ETAPAS_CERRADAS}
             AND NOT o.hold_activo
-            AND g.estado IN ('declarada','liberada')
+            AND g.estado = ANY($2::text[])
             AND NOT EXISTS (
               SELECT 1 FROM despacho_partidas p
                 JOIN despachos d ON d.id = p.despacho_id
@@ -222,7 +237,7 @@ planeacionRouter.get(
                  AND d.estado <> 'cancelado')
           ORDER BY o.eta_pais NULLS LAST, o.mawb, g.guia_norm
           LIMIT 500`,
-        [fecha],
+        [fecha, [...GUIA_ESTADOS_DESPACHABLES]],
       );
 
       const ultima = await query(
@@ -242,6 +257,107 @@ planeacionRouter.get(
     }
   },
 );
+
+/**
+ * The message a published plan sends (R19 / N5).
+ *
+ * SPANISH, and deliberately so: the recipients of a plan are the warehouse, the transportista and the
+ * coordination desk — Mexican operations staff. (The English rule, `N6`, is about messages to the
+ * CLIENT, who is mostly Chinese; `requerimientosService.ts` writes those.)
+ *
+ * IT CARRIES THE DELTA, NOT THE DOCUMENT. That is the entire replacement for the second emailed
+ * workbook: "sustituye el Excel corrigiendo al Excel" only works if the recipient is told what
+ * CHANGED, with the reason, and can then open the version to see the rest. Pasting a whole day's plan
+ * into an email or a WhatsApp message reproduces the problem — three organisations diffing two
+ * documents by eye.
+ *
+ * Exported so the wording, which is what three organisations actually act on, is testable without an
+ * SMTP server or a WhatsApp session.
+ */
+export function construirAvisoPublicacion(args: {
+  fechaOperacion: string;
+  version: number;
+  motivo: string | null;
+  resumen: string;
+  snapshot: PlanSnapshot;
+}): { asunto: string; texto: string } {
+  const asunto = `Plan de despacho ${args.fechaOperacion} — versión ${args.version}`;
+  const texto = [
+    args.version === 1
+      ? `Se publicó el plan de despacho del ${args.fechaOperacion}.`
+      : `Se publicó la versión ${args.version} del plan de despacho del ${args.fechaOperacion}. ` +
+        'Esta versión SUSTITUYE a la anterior.',
+    ...(args.motivo ? ['', `Motivo: ${args.motivo}`] : []),
+    '',
+    `Cambios: ${args.resumen}`,
+    '',
+    `Despachos programados: ${args.snapshot.despachos.length}. ` +
+      `Operaciones excluidas: ${args.snapshot.exclusiones.length}.`,
+    ...(args.snapshot.exclusiones.length
+      ? [
+          '',
+          'Exclusiones (y su causa):',
+          // Capped: the point of the message is that something changed and here is where to look, not
+          // to reproduce the document. The full list is on the published version.
+          ...args.snapshot.exclusiones
+            .slice(0, 10)
+            .map((e) => `- ${e.mawb}${e.guia ? ` / ${e.guia}` : ''}: ${e.causa}${e.detalle ? ` (${e.detalle})` : ''}`),
+          ...(args.snapshot.exclusiones.length > 10
+            ? [`- … y ${args.snapshot.exclusiones.length - 10} más.`]
+            : []),
+        ]
+      : []),
+    '',
+    'La versión completa, con folios, placas y orden de carga, está en el sistema de operaciones.',
+  ].join('\n');
+  return { asunto, texto };
+}
+
+/**
+ * Deliver the published plan to the people who have to act on it. NEVER throws.
+ *
+ * WHO GETS IT. The explicit `destinatarios` on the request — the coordinator naming this
+ * publication's audience — PLUS the standing `almacen` and `coordinacion` rosters
+ * (`services/notificaciones.ts`), because those two always need the day's plan and requiring somebody
+ * to retype them on every publication is how a warehouse stops being told. Duplicates collapse.
+ *
+ * The internal `dirección` ping goes through `whatsappFanout.ts` on the ledger-event path instead, so
+ * the plan change reads there exactly like the freeze events it sits beside.
+ */
+async function fanOutPublicacion(args: {
+  destinatarios: string[];
+  fechaOperacion: string;
+  version: number;
+  motivo: string | null;
+  resumen: string;
+  snapshot: PlanSnapshot;
+}): Promise<EnvioResultado[]> {
+  try {
+    const mensaje = construirAvisoPublicacion(args);
+    const destinos = [...args.destinatarios, ...contactosDeRol('almacen'), ...contactosDeRol('coordinacion')];
+    const envios = destinos.length ? await enviarNotificaciones(destinos, mensaje) : [];
+    if (!destinos.length) {
+      console.warn(
+        `[planeacion] plan ${args.fechaOperacion} v${args.version} publicado SIN destinatarios — ` +
+          'no se avisó a nadie (ni lista explícita ni NOTIFICACION_ALMACEN/NOTIFICACION_COORDINACION).',
+      );
+    }
+    // Best-effort, exactly like the AGORA mirror: the publication already committed.
+    await avisarInternoPorEvento({
+      tipo: 'PLAN_PUBLICADO',
+      payloadResumen: {
+        fechaOperacion: args.fechaOperacion,
+        version: args.version,
+        motivo: args.motivo,
+        resumen: args.resumen,
+      },
+    });
+    return envios;
+  } catch (err) {
+    console.warn('[planeacion] falló el fan-out de la publicación:', err);
+    return [];
+  }
+}
 
 /**
  * POST /api/planeacion/publicar — mint version n+1 with its diff (R19 / P4).
@@ -358,6 +474,21 @@ planeacionRouter.post(
           break;
       }
 
+      // ---- R19 / N5 — the fan-out, AFTER the commit and never before it.
+      //
+      // The published version is the fact; telling people is the consequence of the fact. Sending
+      // inside the transaction would mean a rollback after a message went out — three organisations
+      // holding a version of the plan this system says was never published.
+      const envios = await fanOutPublicacion({
+        destinatarios: b.destinatarios ?? [],
+        fechaOperacion: b.fechaOperacion,
+        version: resultado.publicacion.version,
+        motivo: b.motivo ?? null,
+        resumen: resumenDiff(resultado.diff),
+        snapshot: resultado.snapshot,
+      });
+      const resumenEnvios = resumirEnvios(envios);
+
       await recordAudit({
         userId,
         action: 'PLAN_PUBLICADO',
@@ -371,6 +502,9 @@ planeacionRouter.post(
           despachos: resultado.snapshot.despachos.length,
           exclusiones: resultado.snapshot.exclusiones.length,
           resumen: resumenDiff(resultado.diff),
+          // What ACTUALLY went out, per recipient, in the same row that records the publication. The
+          // audit answers "was the warehouse told?" without a second system to consult.
+          notificacion: { ...resumenEnvios, detalle: envios },
         },
         ip: req.ip,
       });
@@ -385,9 +519,10 @@ planeacionRouter.post(
         diff: resultado.diff,
         snapshot: resultado.snapshot,
         eventosRegistrados: resultado.eventos,
-        // #31 will fan this out over AGORA and WhatsApp; until outbound mail exists the recipients
-        // are recorded, not contacted, and saying so is better than implying they were told.
-        notificacion: 'pendiente: el envío a destinatarios requiere el fan-out de notificaciones (#31).',
+        // Real per-recipient outcomes (#22 + #31), not a promise. Four counts and a detail list,
+        // because "the plan went out" is not a statement this system can make when two of five
+        // recipients were skipped for want of SMTP — and the screen has to be able to say so.
+        notificacion: { ...resumenEnvios, detalle: envios },
       });
     } catch (err) {
       if (isUniqueViolation(err)) {

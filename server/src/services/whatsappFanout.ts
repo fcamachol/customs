@@ -9,15 +9,20 @@ import { formatearEvento } from './agoraMirror';
  *  - The frontier table (R19/N5): plan-change notices to almacén/transportista/cliente go
  *    *"también por WhatsApp"*.
  *
- * SCOPE DECISION — read this before adding a `tipo`. R19's literal trigger, a published plan version
- * (`plan_publicaciones`), does not exist yet: despacho/planeación is backlog item #29. There is
- * nothing to fan out to almacén/transportista until that ships. What DOES exist today, and already
- * changes what can be planned, is the freeze layer: a global hold ("todo está parado", CT-6), a
- * retención (CT-5), and a risk deadline that expired and opened one (CT-4). `TIPOS_AVISO_INTERNO`
- * below is the internal-to-`dirección` half of the two PRD lines above, generalized from "when the
- * plan changes" to "when the freeze layer changes what can be planned" — the only concrete instance
- * of that sentence this codebase can act on right now. Wire R19's client/almacén/transportista leg
- * here once #29 lands a real plan-change event.
+ * SCOPE DECISION — read this before adding a `tipo`. `TIPOS_AVISO_INTERNO` below is the
+ * internal-to-`dirección` half of the two PRD lines above: the events that change what can be
+ * planned. Three of them are the freeze layer — a global hold ("todo está parado", CT-6), a retención
+ * (CT-5), and a risk deadline that expired and opened one (CT-4) — and the fourth is R19's literal
+ * trigger, a published plan version, which arrived with #29's `plan_publicaciones`.
+ *
+ * THIS MODULE IS THE INTERNAL LEG ONLY. R19's outward leg — telling the almacén, the transportista
+ * and the named recipients of a specific publication — is `services/notificaciones.ts`, which routes
+ * each recipient over email or WhatsApp by the shape of their handle and hands the per-recipient
+ * outcomes back to the caller. The split is deliberate: what `dirección` gets is decided by the
+ * SIGNIFICANCE OF A LEDGER EVENT and goes to a standing roster, while what a plan's recipients get is
+ * decided by a list somebody typed for that publication. Collapsing them would mean either spamming
+ * management with every routine republication or making the warehouse's notice depend on an internal
+ * roster.
  *
  * The client-facing escalation half (§6.3's "segundo canal") is intentionally NOT event-driven the
  * same way: `escalarPorWhatsapp` below is called directly from `requerimientosService.ts`, the one
@@ -47,6 +52,11 @@ const TIPOS_AVISO_INTERNO = new Set<string>([
   'RETENCION_CREADA',
   // CT-4 — a client's risk deadline ran out; a hold now blocks the operación from being planned.
   'REQUERIMIENTO_VENCIDO',
+  // R19 / N5 — a new version of the day's plan went out. This is the literal trigger the PRD names,
+  // and it is here rather than only on the outward fan-out because a republication is a correction
+  // somebody in the chain has to absorb, and management finding out from the warehouse is the
+  // failure this whole versioning scheme was built to end.
+  'PLAN_PUBLICADO',
 ]);
 
 /**

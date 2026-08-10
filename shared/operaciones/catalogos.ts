@@ -133,6 +133,42 @@ export function esEstadoDespachoAbierto(estado: EstadoDespacho): boolean {
 }
 
 /**
+ * THE GUÍAS THAT MAY NOT BE DISPATCHED TODAY — one list, four consumers.
+ *
+ * This set is a single product rule stated in four places that must agree or the system contradicts
+ * itself: `routes/despachos.ts` refuses to load such a guía onto a truck, `REPLAN_RULESET`
+ * (shared/operaciones/replan.ts) uses it to decide whether a caso still has dispatchable cargo,
+ * `routes/planeacion.ts` publishes each one as an exclusion with its cause, and `replanService.ts`
+ * uses it to find the casos that could absorb a freed unit. They were hand-synced literals; a
+ * divergence would mean the plan showing a guía as excluded while the dispatch endpoint accepts it
+ * onto a unit — a truck contracted against cargo that cannot legally leave, which is the *flete en
+ * falso* the whole freeze layer exists to prevent.
+ *
+ * WHY THESE FOUR, in the words of the contingencies they belong to: `no_transmitida` is CT-2 (nothing
+ * has been declared, so nothing may be dispatched), `retenida` is CT-5 (the authority holds the
+ * cargo), `csa_pendiente` is CT-3 (consigned to another agencia, the cesión letter has not arrived),
+ * and `cancelada` is self-evident. The remaining two states of the column —`declarada` and
+ * `liberada`— are the loadable ones.
+ *
+ * ORDER IS LOAD-BEARING and must not be rearranged: this array is embedded in `REPLAN_RULESET`, whose
+ * sha256 (`REPLAN_RULESET_HASH`) stamps every replanning decision ever recorded. Reordering it would
+ * change the hash and make August's decisions look like they were taken under a different ruleset.
+ * ADDING a value is a real ruleset change and should change the hash — that is the audit trail
+ * working as intended.
+ */
+export const GUIA_ESTADOS_NO_DESPACHABLES = [
+  'no_transmitida',
+  'retenida',
+  'cancelada',
+  'csa_pendiente',
+] as const;
+export type GuiaEstadoNoDespachable = (typeof GUIA_ESTADOS_NO_DESPACHABLES)[number];
+
+/** The complement: guías that CAN be put on a unit. Stated positively for the queries that need it. */
+export const GUIA_ESTADOS_DESPACHABLES = ['declarada', 'liberada'] as const;
+export type GuiaEstadoDespachable = (typeof GUIA_ESTADOS_DESPACHABLES)[number];
+
+/**
  * Signature lifecycle of a transportista convenio (R25 / decision D9).
  *
  * Fernando's commitment was that these are issued digitally signed, with no paper. There is no

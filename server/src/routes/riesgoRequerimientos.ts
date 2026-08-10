@@ -4,6 +4,7 @@ import { withTransaction } from '../db/tx';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { mirrorEventoToAgora } from '../services/agoraMirror';
+import { materializarHoldActivo } from '../services/holdActivo';
 import { validate } from '../validation/middleware';
 import {
   operacionIdParam,
@@ -79,20 +80,9 @@ async function registrarEvento(
   return String(rows[0].id);
 }
 
-/** The same absolute formula holds.ts uses — asks the table what is true, never toggles a flag. */
-async function materializarHold(q: Q, operacionId: string): Promise<boolean> {
-  const { rows } = await q(
-    `UPDATE operaciones o
-        SET hold_activo = EXISTS (
-              SELECT 1 FROM operacion_holds h
-               WHERE h.activo
-                 AND (h.operacion_id IS NULL OR h.operacion_id = o.id))
-      WHERE o.id = $1
-      RETURNING o.hold_activo`,
-    [operacionId],
-  );
-  return Boolean(rows[0]?.hold_activo);
-}
+/** The one absolute formula — `services/holdActivo.ts`. Asks the table what is true, never toggles. */
+const materializarHold = (q: Q, operacionId: string): Promise<boolean> =>
+  materializarHoldActivo(q, operacionId);
 
 interface CierreResultado {
   /** Requerimientos still outstanding on this caso after the one just closed. */

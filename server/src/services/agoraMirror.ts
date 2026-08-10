@@ -291,6 +291,20 @@ const FORMATEADORES: Record<string, (p: Record<string, unknown>) => string> = {
   OPERACION_REPROGRAMADA: (p) =>
     `📅 REPROGRAMADA (${String(p.contingencia ?? 'CT-1')}) — nueva fecha ${String(p.nuevaFecha ?? 'por definir')}. ` +
     `${String(p.motivo ?? '')}`.trim(),
+  // R19 / N5. The version number and the DELTA are the message: a republication that does not say
+  // what changed is the emailed second workbook with better storage. Read by the internal WhatsApp
+  // roster too (`whatsappFanout.ts`), which is why it must stand alone without the plan open.
+  PLAN_PUBLICADO: (p) => {
+    const v = p.version ? ` v${String(p.version)}` : '';
+    const fecha = p.fechaOperacion ? ` del ${String(p.fechaOperacion)}` : '';
+    const motivo = p.motivo ? ` · motivo: ${String(p.motivo)}` : '';
+    return `🗓️ PLAN PUBLICADO${v}${fecha} — ${String(p.resumen ?? 'sin resumen de cambios')}${motivo}`;
+  },
+  // The engine recorded that somebody HAS to be told (CT-1…CT-6). It is not a claim that they were:
+  // the delivery attempt is a separate fact, recorded on the replan action's payload.
+  NOTIFICACION_REQUERIDA: (p) =>
+    `📣 AVISO REQUERIDO (${String(p.contingencia ?? 'CT')}) → ${String(p.destinatario ?? 'destinatario')} — ` +
+    `${String(p.motivo ?? '')}`.trim(),
   REASIGNACION_PROPUESTA: (p) => {
     const candidatas = Array.isArray(p.candidatas) ? p.candidatas.length : 0;
     return (

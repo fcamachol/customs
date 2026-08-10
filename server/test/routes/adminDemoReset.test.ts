@@ -140,7 +140,7 @@ describe('POST /api/admin/demo-reset — gates', () => {
     const sa = await seedUser('super_admin');
     const res = await request(app).post('/api/admin/demo-reset').set('Authorization', `Bearer ${sa.token}`);
     expect(res.status).toBe(200);
-    expect(res.body.deleted).toEqual({ manifests: 0, pedimentos: 0, shipments: 0, files: 0 });
+    expect(res.body.deleted).toMatchObject({ manifests: 0, pedimentos: 0, shipments: 0, files: 0 });
   });
 });
 
@@ -197,7 +197,10 @@ describe('POST /api/admin/demo-reset — cascade + survivors + audit', () => {
     const res = await request(app).post('/api/admin/demo-reset').set('Authorization', `Bearer ${admin.token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.deleted).toEqual(expectedCounts);
+    // `toMatchObject`, not `toEqual`: the payload also carries the operations-surface counts
+    // (operaciones, prealertas, despachos, pods, facturas, transportistas, convenios) added when the
+    // reset stopped ignoring PRD-02's tables. This test is about the manifest graph.
+    expect(res.body.deleted).toMatchObject(expectedCounts);
 
     // Operational graph gone (manifests + all cascade + explicit deletes).
     expect(await count('manifests')).toBe(0);
@@ -223,7 +226,7 @@ describe('POST /api/admin/demo-reset — cascade + survivors + audit', () => {
     expect(login.rows[0].c).toBe(1);
     const demo = await query<{ after: unknown }>(`SELECT after FROM audit_log WHERE action='DEMO_RESET'`);
     expect(demo.rows).toHaveLength(1);
-    expect(demo.rows[0].after).toEqual(expectedCounts);
+    expect(demo.rows[0].after).toMatchObject(expectedCounts);
 
     // Hash chain stays valid: DEMO_RESET links to the prior row's hash.
     const chain = await query<{ action: string; prev_hash: string | null; hash: string }>(
@@ -233,6 +236,93 @@ describe('POST /api/admin/demo-reset — cascade + survivors + audit', () => {
     const prev = chain.rows[chain.rows.length - 2];
     expect(last.action).toBe('DEMO_RESET');
     expect(last.prev_hash).toBe(prev.hash);
+  });
+
+  /**
+   * The Sistema de Operaciones surface — PRD-02 §8.5's known gap.
+   *
+   * `demo-reset` predates the operations system and used to wipe only the manifest graph and the
+   * files table, so every table PRD-02 added survived it: a "pristine" demo opened with yesterday's
+   * trucks on today's board. A demo tool that lies about state is worse than no demo tool.
+   *
+   * Two things are being pinned here beyond the row counts. The append-only ledger
+   * (`operacion_eventos`, BEFORE UPDATE OR DELETE trigger) must be cleared — a `DELETE` against it
+   * raises, which is why the route TRUNCATEs. And `operacion_evidencias.file_id` is ON DELETE
+   * RESTRICT, so with campo evidence on file the whole request fails unless the ops tables go first.
+   */
+  it('wipes the whole operations surface, ledger and campo evidence included', async () => {
+    const admin = await seedUser('admin');
+    const { rows: cli } = await query<{ id: string }>(
+      `INSERT INTO clients (name) VALUES ('Ops Co') RETURNING id`,
+    );
+    const clientId = cli[0].id;
+
+    const { rows: op } = await query<{ id: string }>(
+      `INSERT INTO operaciones (mawb, etapa, client_id) VALUES ('160-77777777','arribado',$1) RETURNING id`,
+      [clientId],
+    );
+    const opId = op[0].id;
+    await query(
+      `INSERT INTO operacion_guias (operacion_id, guia_norm, estado) VALUES ($1,'HAWB-1','declarada')`,
+      [opId],
+    );
+    await query(
+      `INSERT INTO operacion_eventos (operacion_id, operacion_mawb, tipo, origen, ocurrido_at, payload)
+       VALUES ($1,'160-77777777','CARGA_DISPONIBLE','tramitador',now(),'{}'::jsonb)`,
+      [opId],
+    );
+    await query(
+      `INSERT INTO operacion_holds (operacion_id, tipo, alcance, activo, motivo)
+       VALUES ($1,'riesgo','operacion',true,'prueba')`,
+      [opId],
+    );
+    // The RESTRICT edge into `files`: the reset must handle this, not 500 on it.
+    const evidencia = await seedFile('evidencia', admin.id);
+    await query(
+      `INSERT INTO operacion_evidencias (operacion_id, tipo, file_id, capturado_at, created_by)
+       VALUES ($1,'disponible',$2,now(),$3)`,
+      [opId, evidencia.id, admin.id],
+    );
+
+    const { rows: tr } = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social) VALUES ('Fletes Demo') RETURNING id`,
+    );
+    const { rows: dsp } = await query<{ id: string }>(
+      `INSERT INTO despachos (folio, fecha_operacion, tipo_unidad, transportista_id)
+       VALUES ('D-20260810-001','2026-08-10','tracto',$1) RETURNING id`,
+      [tr[0].id],
+    );
+    await query(
+      `INSERT INTO despacho_partidas (despacho_id, operacion_id) VALUES ($1,$2)`,
+      [dsp[0].id, opId],
+    );
+    await query(
+      `INSERT INTO plan_publicaciones (fecha_operacion, version, snapshot) VALUES ('2026-08-10',1,'{}'::jsonb)`,
+    );
+    await query(
+      `INSERT INTO riesgo_requerimientos (operacion_id, reason_codes, vence_at)
+       VALUES ($1,'[]'::jsonb, now() + interval '3 hours')`,
+      [opId],
+    );
+    await query(`INSERT INTO convenios (client_id) VALUES ($1)`, [clientId]);
+
+    const res = await request(app).post('/api/admin/demo-reset').set('Authorization', `Bearer ${admin.token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toMatchObject({
+      operaciones: 1, despachos: 1, transportistas: 1, convenios: 1,
+    });
+
+    for (const t of [
+      'operaciones', 'operacion_guias', 'operacion_eventos', 'operacion_evidencias',
+      'operacion_holds', 'riesgo_requerimientos', 'despachos', 'despacho_partidas',
+      'plan_publicaciones', 'transportistas', 'convenios', 'files',
+    ]) {
+      expect(await count(t)).toBe(0);
+    }
+    // Survivors: the client and the scheduler's watermark rows are not demo data.
+    expect(await count('clients')).toBe(1);
+    expect(await count('integracion_cursores')).toBeGreaterThan(0);
+    expect(existsSync(evidencia.path)).toBe(false);
   });
 });
 

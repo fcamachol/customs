@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { mirrorEventoToAgora } from '../services/agoraMirror';
 import { avisarInternoPorEvento } from '../services/whatsappFanout';
+import { materializarHoldActivo, materializarHoldActivoAbiertas } from '../services/holdActivo';
 import { validate } from '../validation/middleware';
 import {
   holdGlobalBody,
@@ -91,52 +92,19 @@ const ETAPAS_CERRADAS = "('entregado','cerrada','cancelada')";
 const LOCK_HOLD_GLOBAL = 4600001;
 
 /**
- * Recompute the materialized flag for ONE caso.
- *
- * `hold_activo` is denormalized onto `operaciones` because the control-tower board filters on it on
- * every poll (§8.5). The formula is deliberately absolute rather than incremental — it does not
- * increment a counter or trust the caller's intent, it asks the table what is true right now:
- * "is there any active hold that is either global or mine?". So a hold opened while a global freeze is
- * already in force, or closed while another one remains, both land on the correct value with no
- * ordering assumptions.
+ * The materialization of `operaciones.hold_activo` lives in `services/holdActivo.ts` — one absolute
+ * formula, five call sites (this file twice, riesgoRequerimientos, requerimientosService,
+ * replanService). It used to be copied into each of them under a comment promising they would be kept
+ * identical; a formula that must not drift is a formula that must not be written down five times.
+ * These two thin wrappers keep this file's call sites reading exactly as they did.
  */
-async function materializarUna(q: Q, operacionId: string): Promise<boolean> {
-  const { rows } = await q(
-    `UPDATE operaciones o
-        SET hold_activo = EXISTS (
-              SELECT 1 FROM operacion_holds h
-               WHERE h.activo
-                 AND (h.operacion_id IS NULL OR h.operacion_id = o.id))
-      WHERE o.id = $1
-      RETURNING o.hold_activo`,
-    [operacionId],
-  );
-  return Boolean(rows[0]?.hold_activo);
-}
+const materializarUna = (q: Q, operacionId: string): Promise<boolean> =>
+  materializarHoldActivo(q, operacionId);
 
-/**
- * Recompute the flag for EVERY open caso — the global open/close path.
- *
- * One statement, not a loop: the whole point of the audit button is that it is instantaneous and
- * atomic, and a per-row loop inside the transaction would hold locks proportionally to the size of the
- * board. The same absolute formula is reused, which is what makes the interesting edge case correct
- * without a special branch — closing the global hold does NOT clear `hold_activo` on a caso that still
- * has an operación-level hold of its own, because the EXISTS still finds that row.
- *
- * Returns the affected casos so the caller can write one ledger event per timeline.
- */
-async function materializarAbiertas(q: Q): Promise<Array<{ id: string; mawb: string; holdActivo: boolean }>> {
-  const { rows } = await q(
-    `UPDATE operaciones o
-        SET hold_activo = EXISTS (
-              SELECT 1 FROM operacion_holds h
-               WHERE h.activo
-                 AND (h.operacion_id IS NULL OR h.operacion_id = o.id))
-      WHERE o.etapa NOT IN ${ETAPAS_CERRADAS}
-      RETURNING o.id, o.mawb, o.hold_activo AS "holdActivo"`,
-  );
-  return rows as Array<{ id: string; mawb: string; holdActivo: boolean }>;
-}
+const materializarAbiertas = (
+  q: Q,
+): Promise<Array<{ id: string; mawb: string; holdActivo: boolean }>> =>
+  materializarHoldActivoAbiertas(q, ETAPAS_CERRADAS);
 
 /**
  * Ledger row for a single caso.

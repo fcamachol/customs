@@ -4,6 +4,6 @@ export async function truncateAll(): Promise<void> {
   await pool.query(
     // operacion_eventos is append-only via trigger, but TRUNCATE does not fire row-level triggers,
     // so it can be reset here exactly like audit_log.
-    `TRUNCATE users, audit_log, files, manifests, shipments, monthly_history, clients, client_platforms, config, pedimento_scans, pedimentos, validated_rfcs, manifest_staging_rows, agentes_aduanales, importadores, operaciones, operacion_guias, operacion_eventos, operacion_evidencias, prealertas, prealerta_adjuntos, operacion_holds, retenciones RESTART IDENTITY CASCADE`,
+    `TRUNCATE users, audit_log, files, manifests, shipments, monthly_history, clients, client_platforms, config, pedimento_scans, pedimentos, validated_rfcs, manifest_staging_rows, agentes_aduanales, importadores, operaciones, operacion_guias, operacion_eventos, operacion_evidencias, prealertas, prealerta_adjuntos, operacion_holds, retenciones, replan_evaluaciones, replan_acciones RESTART IDENTITY CASCADE`,
   );
 }

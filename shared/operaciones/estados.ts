@@ -108,6 +108,31 @@ export const TIPOS_EVENTO = [
   'RETENCION_CREADA',
   'RETENCION_LIBERADA',
   /**
+   * Contingency engine — the replanning layer (shared/operaciones/replan.ts, CT-1…CT-7).
+   *
+   * These are the CONSEQUENCES of the facts above, and they are separate event types precisely
+   * because a reader must be able to tell "the flight was cancelled" from "and therefore the caso
+   * left today's plan". The first is the world; the second is a decision this platform took, and
+   * only the second can be argued with.
+   *
+   * NOTIFICACION_REQUERIDA says an advice is OWED, never that one was sent — the fan-out is #31 and
+   * is blocked on outbound email (#22). Recording "hay que avisar" as if it were "se avisó" is the
+   * exact failure the hard-deadline rule R18 cannot survive.
+   *
+   * REASIGNACION_PROPUESTA is the money boundary (D6/R20): the engine proposes, a human confirms with
+   * `override = true` and an obligatory motivo, and REASIGNACION_CONFIRMADA/DESCARTADA records who.
+   * Opening a hold reuses HOLD_ABIERTO — an engine-opened block and a coordinator-opened block are
+   * the same fact about the cargo, distinguished by `origen`.
+   */
+  'GUIA_NO_TRANSMITIDA',
+  'OPERACION_EXCLUIDA_DEL_PLAN',
+  'OPERACION_REPROGRAMADA',
+  'SOLICITUD_UNIDADES_SUSPENDIDA',
+  'NOTIFICACION_REQUERIDA',
+  'REASIGNACION_PROPUESTA',
+  'REASIGNACION_CONFIRMADA',
+  'REASIGNACION_DESCARTADA',
+  /**
    * A post-commit step of the ingest failed — manifest parse, risk scoring, flight lookup, the
    * operation-level cotejo, or the AGORA mirror.
    *

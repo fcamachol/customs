@@ -352,3 +352,47 @@ export const retencionParam = z.object({
   id: z.string().uuid('El id de la operación debe ser un UUID.'),
   rid: z.string().uuid('El id de la retención debe ser un UUID.'),
 });
+
+// ---------------------------------------------------------------------------------------------
+// motor de contingencias — replaneación (PRD-02 §8.8, CT-1…CT-7)
+//
+// Same UUID discipline as the holds router and for the same reason: these routes live on the
+// `/api/operaciones` prefix, which `operacionesRouter` also owns with a `GET /:id`.
+//
+// `motivo` is required on BOTH decisions, not only on the confirmation. Discarding a proposal that
+// would have avoided a flete en falso is as consequential as accepting one — the difference is who
+// pays — and "se descartó" with no stated reason is the exact shape of the untraceable decision this
+// platform exists to eliminate (R20/N2).
+// ---------------------------------------------------------------------------------------------
+
+export const replanOperacionParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+});
+
+export const replanAccionParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+  accionId: z.string().uuid('El id de la acción debe ser un UUID.'),
+});
+
+export const replanGuiaParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+  guiaId: z.string().uuid('El id de la guía debe ser un UUID.'),
+});
+
+export const replanDecisionBody = z.object({
+  motivo: motivoRequerido,
+  /**
+   * Which caso absorbs the freed unit. Optional because a coordinator may confirm the reassignment
+   * against a load the system does not know about yet (a client's second guía máster arriving that
+   * afternoon); the decision is still recorded, and naming the target when it IS known is what makes
+   * the tarifa change auditable end to end.
+   */
+  nuevaOperacionId: z.string().uuid('nuevaOperacionId debe ser un UUID.').optional(),
+});
+export type ReplanDecisionBody = z.infer<typeof replanDecisionBody>;
+
+/** CT-2's trigger: somebody in the office learns a guía was never transmitted. */
+export const replanGuiaNoTransmitidaBody = z.object({
+  motivo: motivoRequerido,
+});
+export type ReplanGuiaNoTransmitidaBody = z.infer<typeof replanGuiaNoTransmitidaBody>;

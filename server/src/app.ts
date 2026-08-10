@@ -24,6 +24,7 @@ import { prealertasRouter } from './routes/prealertas';
 import { operacionesRouter } from './routes/operaciones';
 import { opsRouter } from './routes/ops';
 import { holdsRouter } from './routes/holds';
+import { replanRouter } from './routes/replan';
 import { campoRouter } from './routes/campo';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
@@ -90,6 +91,10 @@ export function createApp(): Express {
   // `GET /:id`; holds.ts additionally registers its global routes before its parameterized ones and
   // validates every `:id` as a UUID, so the literal 'holds' can never be read as an operación id.
   app.use('/api/operaciones', holdsRouter);
+  // Contingency engine (PRD-02 §8.8, CT-1…CT-7). Same prefix again, same guarantee: every route it
+  // owns is multi-segment (`/:id/replan…`, `/:id/guias/:guiaId/…`) with a UUID-validated `:id`, so it
+  // neither shadows nor is shadowed by operacionesRouter's `GET /:id`.
+  app.use('/api/operaciones', replanRouter);
   // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
   // role can be granted exactly this prefix and nothing else (§13).
   app.use('/api/campo', campoRouter);

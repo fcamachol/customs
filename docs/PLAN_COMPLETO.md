@@ -120,7 +120,7 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 | — | Riesgo automático al llegar la prealerta | ✅ corre solo; `estado_documental` avanza |
 | R18, D13 | Requerimiento al cliente con **plazo duro** (vuelo + descarga) | ⛔ #23 — bloqueado por SMTP |
 | CT-3/4/5/6 | Holds (CSA, riesgo, auditoría de autoridad global) y retención parcial de pallet | ✅ tablas + endpoints + materialización |
-| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | 📋 #26 |
+| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | ✅ #26 — `shared/operaciones/replan.ts` ruleset `2026-08a` con hash; ejecuta solo excluir/reprogramar/hold/suspender/notificar y **propone** la reasignación con override registrado |
 
 ### Visibilidad, reportes, financiero
 
@@ -169,9 +169,16 @@ Torre de Control · Prealertas · Campo · reparse · runner E2E.
 
 ### Fase B — Cerrar el ciclo operativo
 
-4. **#26 Motor de contingencias** (`shared/operaciones/replan.ts`) — consume vuelos + holds; ruleset
-   versionado; ejecuta solo excluir/reprogramar/hold/notificar, **propone** la reasignación que
-   toca dinero con override registrado. CT-1/2/7.
+4. ~~**#26 Motor de contingencias**~~ ✅ **hecho**. `shared/operaciones/replan.ts` (puro, ruleset
+   `2026-08a` con hash sha256), tablas `replan_evaluaciones`/`replan_acciones` (snapshot guardado =
+   decisión reproducible), rutas `POST/GET /api/operaciones/:id/replan`,
+   `…/acciones/:id/confirmar|descartar` (exigen `motivo`, escriben `override = true`),
+   `POST /api/operaciones/:id/guias/:guiaId/no-transmitida` (disparador de CT-2) y **fase 3 del
+   tick**. Ejecuta solo excluir/reprogramar/abrir hold/suspender unidades/notificar; la reasignación
+   que toca tarifa se **propone**. Una decisión se registra una sola vez por huella: la bitácora no
+   tartamudea. Pendiente de #29: cuando exista `despachos`, CT-7 apuntará al viaje concreto en vez
+   de al indicio `estado_planeacion = 'asignada'`; y de #22/#31 para que `NOTIFICACION_REQUERIDA`
+   deje de ser sólo la obligación registrada.
 5. **#23 Requerimiento de riesgo con plazo duro** — tabla `riesgo_requerimientos`, plazo = ETA +
    ventana, barrido de vencimiento en el tick que dispara CT-4. (Necesita #22.)
 6. **#31 Fan-out de notificaciones** en cambios de plan — AGORA + WhatsApp (evolution-api ya corre).

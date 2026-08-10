@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { query } from '../db/pool';
 import { refreshVuelosPendientes } from '../services/vuelosService';
 import { runAgoraSweep, type SweepSummary } from '../services/agoraSweep';
+import { evaluarPendientes } from '../services/replanService';
 
 export const opsRouter = Router();
 
@@ -22,10 +23,15 @@ export const opsRouter = Router();
  * skips any flight queried in the last 4 minutes, so a tighter cadence costs money on a metered
  * provider without buying freshness.
  *
- * TWO INDEPENDENT PHASES run per tick — flights, then the AGORA prealerta sweep — each with its own
- * cursor row and its own error accounting. Neither can abort the other: they answer different
- * questions ("did the plan move?" vs "did a webhook get dropped?") and a provider outage on one side
- * is no reason to stop asking the other.
+ * THREE INDEPENDENT PHASES run per tick — flights, the AGORA prealerta sweep, then the contingency
+ * engine — each with its own cursor row and its own error accounting. None can abort the others: they
+ * answer different questions ("did the plan move?", "did a webhook get dropped?", "does the plan still
+ * make sense?") and a provider outage on one side is no reason to stop asking the others.
+ *
+ * The ORDER is load-bearing, not alphabetical. Flights run first because they produce the facts the
+ * contingency engine reacts to, so a delay detected at 10:00 becomes an exclusion at 10:00 rather than
+ * five minutes later; the sweep sits between them because a prealerta recovered from a dropped webhook
+ * should be evaluated in the same tick it arrives.
  */
 function authorizeTick(req: Request): boolean {
   const expected = process.env.OPS_TICK_TOKEN;
@@ -103,6 +109,33 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
       sweep = { ok: false, error: message };
     }
 
+    // ---- Phase 3: the contingency engine (PRD-02 §8.8, CT-1…CT-7). Runs LAST so it sees the flight
+    // facts phase 1 just wrote. It re-derives the same conclusions every tick by design and writes
+    // only what is new (`claveAccion` fingerprints), so a cancelled flight produces one exclusion, not
+    // one per cycle. Wrapped like the others: a replanning bug must not turn a successful flight
+    // refresh into a 500 and a scheduler alert.
+    let replan: Awaited<ReturnType<typeof evaluarPendientes>> = [];
+    let replanError: string | null = null;
+    try {
+      replan = await evaluarPendientes(Math.min(Number(req.query.limit ?? 100) || 100, 500));
+    } catch (err) {
+      replanError = err instanceof Error ? err.message : String(err);
+      console.error('[ops] la fase de contingencias falló:', err);
+    }
+
+    // Its own cursor row, for the same reason the flight phase has one: "no contingencies today" and
+    // "nothing has evaluated contingencies since Tuesday" must not look identical from the outside.
+    await query(
+      `UPDATE integracion_cursores
+          SET last_run_at = now(),
+              last_error = $1::text,
+              consecutive_errors = CASE WHEN $1::text IS NULL THEN 0
+                                        ELSE consecutive_errors + 1 END,
+              updated_at = now()
+        WHERE fuente = 'replan'`,
+      [replanError ? `la fase de contingencias falló: ${replanError}` : null],
+    );
+
     res.json({
       ok: true,
       durationMs: Date.now() - startedAt,
@@ -117,6 +150,14 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
         detalle: vuelos,
       },
       sweep,
+      replan: {
+        evaluadas: replan.length,
+        conAcciones: replan.filter((r) => r.accionesNuevas > 0).length,
+        ejecutadas: replan.reduce((n, r) => n + r.ejecutadas, 0),
+        propuestas: replan.reduce((n, r) => n + r.propuestas, 0),
+        ...(replanError ? { error: replanError } : {}),
+        detalle: replan.filter((r) => r.accionesNuevas > 0),
+      },
     });
   } catch (err) {
     next(err);

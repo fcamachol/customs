@@ -4,6 +4,7 @@ import { withTransaction } from '../db/tx';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { mirrorEventoToAgora } from '../services/agoraMirror';
+import { avisarInternoPorEvento } from '../services/whatsappFanout';
 import { validate } from '../validation/middleware';
 import {
   holdGlobalBody,
@@ -62,6 +63,11 @@ import {
  *
  * Snake_case in the database, camelCase over the wire via explicit `AS "camelCase"` aliases, per the
  * house convention.
+ *
+ * #31 — the two global-hold endpoints and the retención endpoint also ping the internal `dirección`
+ * WhatsApp roster (`services/whatsappFanout.ts`) right after the AGORA mirror call, best-effort:
+ * these three events are the freeze layer, i.e. the concrete "the plan changed" this codebase can act
+ * on today (see that module's header for the full scope decision behind why).
  */
 export const holdsRouter = Router();
 
@@ -330,6 +336,18 @@ holdsRouter.post(
         efecto: 'Se suspende la solicitud de unidades; la operación no se programa.',
       });
 
+      // #31/§6.3 — "todo está parado" is exactly the fact `dirección` needs on a channel that reaches
+      // them even if nobody is watching the AGORA inbox at that moment.
+      await avisarInternoPorEvento({
+        tipo: 'HOLD_GLOBAL_ABIERTO',
+        payloadResumen: {
+          tipoHold: tipo,
+          motivo,
+          efecto: 'Se suspende la solicitud de unidades; la operación no se programa.',
+          operacionesAfectadas: resultado.afectadas.length,
+        },
+      });
+
       res.status(201).json({
         ok: true,
         holdId: resultado.holdId,
@@ -437,6 +455,16 @@ holdsRouter.delete(
       await espejarEnAgora(resultado.afectadasIds ?? [], 'HOLD_GLOBAL_CERRADO', {
         efecto: 'Se reanuda la solicitud de unidades salvo que persista un hold propio.',
         operacionesAunBloqueadas: resultado.aunBloqueadas.length,
+      });
+
+      // #31/§6.3 — the freeze lifting is as consequential to `dirección` as it opening was: unblocks
+      // planning, and trucks can be requested again.
+      await avisarInternoPorEvento({
+        tipo: 'HOLD_GLOBAL_CERRADO',
+        payloadResumen: {
+          efecto: 'Se reanuda la solicitud de unidades salvo que persista un hold propio.',
+          operacionesAunBloqueadas: resultado.aunBloqueadas.length,
+        },
       });
 
       res.json({
@@ -908,6 +936,19 @@ holdsRouter.post(
         guia: resultado.guia?.guiaNorm ?? null,
         oficioReferencia: oficioReferencia ?? null,
         motivo,
+      });
+
+      // #31/§6.3 — a retención (CT-5) changes what a truck can carry today; `dirección` gets it on the
+      // second channel too, not only as a private note in a thread nobody may be watching.
+      await avisarInternoPorEvento({
+        operacionId: id,
+        tipo: 'RETENCION_CREADA',
+        payloadResumen: {
+          alcance,
+          guia: resultado.guia?.guiaNorm ?? null,
+          oficioReferencia: oficioReferencia ?? null,
+          motivo,
+        },
       });
 
       res.status(201).json({

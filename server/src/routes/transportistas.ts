@@ -15,6 +15,7 @@ import {
   transportistaBody,
   transportistaConvenioParam,
   transportistaParam,
+  transportistaPaquetesQuery,
   transportistaUnidadParam,
   transportistaUpdateBody,
   unidadBody,
@@ -23,11 +24,12 @@ import {
   type ConvenioFirmaBody,
   type TarifaBody,
   type TransportistaBody,
+  type TransportistaPaquetesQuery,
   type TransportistaUpdateBody,
   type UnidadBody,
   type UnidadUpdateBody,
 } from '../validation/schemas';
-import { TIPOS_UNIDAD } from '../../../shared/operaciones/catalogos';
+import { TIPOS_UNIDAD, etiquetaTipoUnidad } from '../../../shared/operaciones/catalogos';
 
 /**
  * Transport catalogs — carriers, their fleet, their agreements and the rates inside them
@@ -229,6 +231,117 @@ transportistasRouter.get(
         ...desencriptarFila(t.rows[0]),
         unidades: unidades.rows,
         convenios: convenios.rows,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * GET /api/transportistas/:id/paquetes — TRAZABILIDAD, the carrier→cargo direction.
+ *
+ * THE QUESTION IT ANSWERS is the one the meeting kept coming back to and the spreadsheet could never
+ * answer without a phone call: "what did we send with this line, and on which trip did each guía
+ * travel?" Until now the only path was `GET /api/despachos?transportistaId=…` — which returns a
+ * COUNT of partidas per trip — and then one `GET /api/despachos/:id` per row. That N+1 is why the
+ * question was asked of a person instead of the system.
+ *
+ * ONE ROW PER PARTIDA, not per trip. The unit of the answer is a package: a guía that rode on a
+ * plate on a day. A trip-shaped answer would force the reader back into the same expansion, and the
+ * multi-client truck (R29 — N guías, N clientes, one address) would be a single line hiding three
+ * clients.
+ *
+ * ONE AGGREGATE QUERY, and the totals are folded over the rows it already returned rather than asked
+ * for a second time: a second SUM query against the same filter is a second answer able to disagree
+ * with the first. `despachos` counts DISTINCT trips, so a truck carrying four guías is one trip and
+ * four packages, which is exactly how it is invoiced and exactly how it is explained.
+ *
+ * Cancelled trips are INCLUDED unless filtered out. A trip that was contracted and then cancelled is
+ * part of the carrier's history — it is where the *flete en falso* argument (CT-7/D10) lives — and
+ * dropping it would make the record flatter than the money.
+ */
+transportistasRouter.get(
+  '/:id/paquetes',
+  requireAuth,
+  validate({ params: transportistaParam, query: transportistaPaquetesQuery }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { desde, hasta, estado } = req.query as unknown as TransportistaPaquetesQuery;
+
+      const t = await query<{ razonSocial: string }>(
+        `SELECT razon_social AS "razonSocial" FROM transportistas WHERE id = $1`,
+        [id],
+      );
+      if (!t.rows.length) {
+        res.status(404).json({ error: 'Transportista no encontrado' });
+        return;
+      }
+
+      const { rows } = await query<{
+        despachoId: string;
+        piezas: number | null;
+        cartonesPlaneados: number | null;
+        cartonesCargados: number | null;
+        tipoUnidad: string;
+      }>(
+        `SELECT p.id                 AS "partidaId",
+                d.id                 AS "despachoId",
+                d.folio,
+                d.fecha_operacion    AS "fechaOperacion",
+                d.estado,
+                d.tipo_unidad        AS "tipoUnidad",
+                d.placas,
+                d.operador_nombre    AS "operadorNombre",
+                d.unidad_id          AS "unidadId",
+                cd.alias             AS "destino",
+                d.cita_at            AS "citaAt",
+                d.salida_at          AS "salidaAt",
+                d.eta_calculado      AS "etaCalculado",
+                d.arribo_real        AS "arriboReal",
+                p.operacion_id       AS "operacionId",
+                o.mawb,
+                p.operacion_guia_id  AS "operacionGuiaId",
+                g.guia_norm          AS "guia",
+                g.estado             AS "guiaEstado",
+                c.name               AS "cliente",
+                p.pedimento_id       AS "pedimentoId",
+                p.piezas,
+                p.cartones_planeados AS "cartonesPlaneados",
+                p.cartones_cargados  AS "cartonesCargados",
+                p.orden_carga        AS "ordenCarga"
+           FROM despachos d
+           JOIN despacho_partidas p ON p.despacho_id = d.id
+           JOIN operaciones o ON o.id = p.operacion_id
+           LEFT JOIN operacion_guias g ON g.id = p.operacion_guia_id
+           LEFT JOIN clients c ON c.id = COALESCE(g.client_id, o.client_id)
+           LEFT JOIN client_direcciones cd ON cd.id = d.direccion_entrega_id
+          WHERE d.transportista_id = $1
+            AND ($2::date IS NULL OR d.fecha_operacion >= $2::date)
+            AND ($3::date IS NULL OR d.fecha_operacion <= $3::date)
+            AND ($4::text IS NULL OR d.estado = $4)
+          ORDER BY d.fecha_operacion DESC, d.folio, p.orden_carga NULLS LAST, p.created_at
+          LIMIT 2000`,
+        [id, desde ?? null, hasta ?? null, estado ?? null],
+      );
+
+      const despachos = new Set(rows.map((r) => r.despachoId));
+      const suma = (f: (r: (typeof rows)[number]) => number | null): number =>
+        rows.reduce((acc, r) => acc + (Number(f(r)) || 0), 0);
+
+      res.json({
+        transportistaId: id,
+        transportista: t.rows[0].razonSocial,
+        filtros: { desde: desde ?? null, hasta: hasta ?? null, estado: estado ?? null },
+        totales: {
+          despachos: despachos.size,
+          paquetes: rows.length,
+          piezas: suma((r) => r.piezas),
+          cartonesPlaneados: suma((r) => r.cartonesPlaneados),
+          cartonesCargados: suma((r) => r.cartonesCargados),
+        },
+        paquetes: rows.map((r) => ({ ...r, tipoUnidadLabel: etiquetaTipoUnidad(r.tipoUnidad) })),
       });
     } catch (err) {
       next(err);

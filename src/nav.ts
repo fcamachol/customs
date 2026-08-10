@@ -1,8 +1,8 @@
-import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, Truck, type LucideIcon } from 'lucide-react';
 
 export type Section =
   | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
-  | 'ops_torre' | 'ops_prealertas' | 'ops_campo'
+  | 'ops_torre' | 'ops_prealertas' | 'ops_campo' | 'ops_traza'
   | 'cfg_motor' | 'cfg_clientes' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
 
@@ -17,6 +17,7 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   ops_torre:    { title: 'Torre de Control', subtitle: 'Estado en vivo de todas las operaciones: etapas, vuelos, semáforo y banderas.' },
   ops_prealertas: { title: 'Prealertas', subtitle: 'Casos creados desde el correo del cliente, con su evidencia y bitácora.' },
   ops_campo:    { title: 'Captura de Campo', subtitle: 'Registro del tramitador: disponibilidad, carga, modulación y semáforo.' },
+  ops_traza:    { title: 'Trazabilidad', subtitle: 'Qué paquetes llevó cada transportista, y en qué unidad salió cada guía.' },
   cfg_motor:    { title: 'Motor de riesgo', subtitle: 'Parámetros de validación y listas de exclusión (V1–V8).' },
   cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
@@ -53,6 +54,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     { id: 'ops_torre', label: 'Torre de Control', icon: Radar },
     { id: 'ops_prealertas', label: 'Prealertas', icon: Inbox },
     { id: 'ops_campo', label: 'Campo', icon: Smartphone },
+    { id: 'ops_traza', label: 'Trazabilidad', icon: Truck },
   ] },
   { label: 'Sistema', items: [
     {
@@ -84,9 +86,11 @@ const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_rfcs', 'cf
 //  - capturista runs the operative flow but not Configuración nor the Autoridad portal.
 export function visibleSectionsFor(role: string): Section[] {
   if (role === 'tramitador') return ['ops_campo'];
-  if (role === 'autoridad') return ['dashboard', 'consulta', 'ops_torre', 'ops_prealertas', 'autoridad', 'acerca'];
+  // Trazabilidad is read-only and is precisely the trace the authority asks for ("¿con quién salió
+  // esa guía?"), so autoridad sees it too.
+  if (role === 'autoridad') return ['dashboard', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_traza', 'autoridad', 'acerca'];
   if (role === 'admin' || role === 'super_admin') {
-    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
+    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
   }
-  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'acerca'];
+  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', 'acerca'];
 }

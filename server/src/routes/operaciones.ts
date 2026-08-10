@@ -198,6 +198,36 @@ operacionesRouter.get('/:id', requireAuth, async (req: Request, res: Response, n
       [id],
     );
 
+    /**
+     * Trazabilidad, composed light on purpose (R29).
+     *
+     * The caso view has to be able to SAY who took the cargo out — that is the question the meeting
+     * kept losing to a phone call — so the carrier, the plates and the trip's state travel with the
+     * detail. What it does NOT carry is the load: `partidas` is a count of this caso's own guías on
+     * that unit, and the guía-by-guía breakdown (plus the rest of the truck) lives in the dedicated
+     * `GET /api/operaciones/:id/despachos`. A caso with four guías split over three trips would
+     * otherwise bloat a payload that already carries every prealerta version and the whole timeline.
+     */
+    const despachos = await query(
+      `SELECT d.id,
+              d.folio,
+              d.fecha_operacion  AS "fechaOperacion",
+              d.estado,
+              d.tipo_unidad      AS "tipoUnidad",
+              d.transportista_id AS "transportistaId",
+              t.razon_social     AS "transportista",
+              d.placas,
+              d.salida_at        AS "salidaAt",
+              d.arribo_real      AS "arriboReal",
+              count(p.id)::int   AS "partidas"
+         FROM despachos d
+         JOIN despacho_partidas p ON p.despacho_id = d.id AND p.operacion_id = $1
+         LEFT JOIN transportistas t ON t.id = d.transportista_id
+        GROUP BY d.id, t.id
+        ORDER BY d.fecha_operacion DESC, d.folio`,
+      [id],
+    );
+
     // Reading a caso exposes the client's shipment detail, so it is audited like the other
     // PII-bearing reads in this codebase. Fail-closed: if the audit write fails the read fails too.
     await recordAudit({
@@ -213,6 +243,7 @@ operacionesRouter.get('/:id', requireAuth, async (req: Request, res: Response, n
       vuelo: vuelo.rows[0] ?? null,
       prealertas: prealertas.rows,
       timeline: timeline.rows,
+      despachos: despachos.rows,
     });
   } catch (err) {
     next(err);

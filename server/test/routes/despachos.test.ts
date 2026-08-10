@@ -839,3 +839,226 @@ describe('arribo estimado contra arribo real — R36 / D14', () => {
     await request(app).post(`/api/despachos/${id}/arribo`).set('Authorization', `Bearer ${adminToken}`).send({}).expect(409);
   });
 });
+
+// -------------------------------------------------------------------------------------------------
+/**
+ * TRAZABILIDAD — paquete ↔ transportista, in both directions.
+ *
+ * The gap these close is the one the spreadsheet never closed: the record knew a truck had four
+ * partidas, and knew a caso existed, and could not connect the two without a person. What is pinned
+ * here is precisely that connection, in the two shapes the question is actually asked in:
+ *
+ *  - "what did we send with this line?" — one row per PACKAGE, not per trip, because a trip-shaped
+ *    answer hides the multi-client truck (R29) behind a single line and puts the reader back into
+ *    the N+1 that made the question unanswerable.
+ *  - "who took MY guías out?" — asked from a caso, one shipment at a time, by somebody who knows
+ *    their MAWB and not our folio. Split loads answer with BOTH trips, and the count of the rest of
+ *    the truck travels beside them, because "your two guías rode with nine others" is what explains
+ *    a wait at the dock.
+ */
+describe('trazabilidad — paquete ↔ transportista', () => {
+  let clienteBId: string;
+  let transportistaB: string;
+  let unidadB: string;
+  /** Un solo camión, dos clientes: guiaA1 (opA/ACME) + guiaB1 (opB/BIMBO). */
+  let compartido: string;
+  /** Otro día, otra línea: guiaA2, del MISMO caso opA. */
+  let segundo: string;
+
+  const FECHA2 = '2026-08-20';
+
+  beforeEach(async () => {
+    const cb = await query<{ id: string }>(`INSERT INTO clients (name) VALUES ('BIMBO') RETURNING id`);
+    clienteBId = cb.rows[0].id;
+    await query('UPDATE operaciones SET client_id = $1 WHERE id = $2', [clienteBId, opB]);
+    await query('UPDATE operacion_guias SET client_id = $1 WHERE id = $2', [clienteBId, guiaB1]);
+
+    const t = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social, estado) VALUES ('Fletes del Norte','activo') RETURNING id`,
+    );
+    transportistaB = t.rows[0].id;
+    const u = await query<{ id: string }>(
+      `INSERT INTO transportista_unidades (transportista_id, placas, tipo_unidad)
+       VALUES ($1,'XYZ9876','tracto') RETURNING id`,
+      [transportistaB],
+    );
+    unidadB = u.rows[0].id;
+
+    compartido = (
+      await crearDespacho({ transportistaId, unidadId: unidadTractoId, direccionEntregaId: direccionId }).expect(201)
+    ).body.id;
+    await agregarPartida(compartido, { operacionId: opA, operacionGuiaId: guiaA1 }).expect(201);
+    await agregarPartida(compartido, { operacionId: opB, operacionGuiaId: guiaB1 }).expect(201);
+
+    segundo = (
+      await crearDespacho({
+        fechaOperacion: FECHA2,
+        transportistaId: transportistaB,
+        unidadId: unidadB,
+        direccionEntregaId: direccionId,
+      }).expect(201)
+    ).body.id;
+    await agregarPartida(segundo, { operacionId: opA, operacionGuiaId: guiaA2 }).expect(201);
+  });
+
+  function paquetes(id: string, qs = '', token = adminToken) {
+    return request(app)
+      .get(`/api/transportistas/${id}/paquetes${qs}`)
+      .set('Authorization', `Bearer ${token}`);
+  }
+
+  function despachosDe(operacionId: string, token = adminToken) {
+    return request(app)
+      .get(`/api/operaciones/${operacionId}/despachos`)
+      .set('Authorization', `Bearer ${token}`);
+  }
+
+  // ── transportista → paquetes ────────────────────────────────────────────────────────────────
+  it('lists every package a carrier took, in ONE call, with guía, cliente and quantities', async () => {
+    const res = await paquetes(transportistaId).expect(200);
+
+    expect(res.body.transportista).toBe('Transportes del Bajío');
+    expect(res.body.totales).toMatchObject({ despachos: 1, paquetes: 2, piezas: 120, cartonesPlaneados: 12 });
+    expect(res.body.paquetes).toHaveLength(2);
+
+    const a = res.body.paquetes.find((p: { guia: string }) => p.guia === 'AAA0001');
+    expect(a).toMatchObject({
+      mawb: '160-11111111',
+      cliente: 'ACME',
+      guiaEstado: 'declarada',
+      piezas: 100,
+      cartonesPlaneados: 10,
+      tipoUnidad: 'tracto',
+      tipoUnidadLabel: 'Tracto',
+      placas: 'ABC1234',
+      estado: 'planeado',
+      destino: 'IMILE Cuautitlán',
+      operacionId: opA,
+    });
+    expect(a.folio).toMatch(/^D-20260814-\d{3}$/);
+  });
+
+  it('shows the multi-client truck AS a multi-client truck: one trip, two clients, two MAWBs', async () => {
+    const res = await paquetes(transportistaId).expect(200);
+    const folios = new Set(res.body.paquetes.map((p: { folio: string }) => p.folio));
+    // One despacho, two packages — the shape R29 exists for, and the one a trip-per-row answer hides.
+    expect(folios.size).toBe(1);
+    expect(res.body.paquetes.map((p: { cliente: string }) => p.cliente).sort()).toEqual(['ACME', 'BIMBO']);
+    expect(res.body.paquetes.map((p: { mawb: string }) => p.mawb).sort()).toEqual(['160-11111111', '160-22222222']);
+    expect(res.body.totales.despachos).toBe(1);
+    expect(res.body.totales.paquetes).toBe(2);
+  });
+
+  it('reports what was actually loaded beside what was planned', async () => {
+    const partidaId = (await paquetes(transportistaId).expect(200)).body.paquetes.find(
+      (p: { guia: string }) => p.guia === 'AAA0001',
+    ).partidaId;
+    await request(app)
+      .put(`/api/despachos/${compartido}/partidas/${partidaId}`)
+      .set('Authorization', `Bearer ${tramitadorToken}`)
+      .send({ cartonesCargados: 8 })
+      .expect(200);
+
+    const res = await paquetes(transportistaId).expect(200);
+    expect(res.body.totales.cartonesPlaneados).toBe(12);
+    // The gap somebody has to explain — 8 of 10 cartons on that guía — survives into the carrier view.
+    expect(res.body.totales.cartonesCargados).toBe(8);
+  });
+
+  it('filters by operating-day range and by estado', async () => {
+    const fuera = await paquetes(transportistaId, `?desde=${FECHA2}`).expect(200);
+    expect(fuera.body.paquetes).toHaveLength(0);
+    expect(fuera.body.filtros.desde).toBe(FECHA2);
+
+    const dentro = await paquetes(transportistaId, `?desde=${FECHA}&hasta=${FECHA}`).expect(200);
+    expect(dentro.body.paquetes).toHaveLength(2);
+
+    await estado(compartido, { estado: 'solicitado' }).expect(201);
+    expect((await paquetes(transportistaId, '?estado=solicitado').expect(200)).body.paquetes).toHaveLength(2);
+    expect((await paquetes(transportistaId, '?estado=planeado').expect(200)).body.paquetes).toHaveLength(0);
+  });
+
+  it('answers a carrier that never carried anything with an empty list, not a 404', async () => {
+    const t = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social) VALUES ('Fletes sin viajes') RETURNING id`,
+    );
+    const res = await paquetes(t.rows[0].id).expect(200);
+    expect(res.body.paquetes).toEqual([]);
+    expect(res.body.totales).toMatchObject({ despachos: 0, paquetes: 0, piezas: 0 });
+  });
+
+  it('404s an unknown carrier and 400s an id that is not a uuid', async () => {
+    await paquetes('11111111-1111-1111-1111-111111111111').expect(404);
+    await paquetes('no-soy-uuid').expect(400);
+  });
+
+  it('is readable by any authenticated role — the board has to name who took the load', async () => {
+    await paquetes(transportistaId, '', autoridadToken).expect(200);
+    await paquetes(transportistaId, '', capturistaToken).expect(200);
+    await request(app).get(`/api/transportistas/${transportistaId}/paquetes`).expect(401);
+  });
+
+  // ── operación → despachos ───────────────────────────────────────────────────────────────────
+  it('answers, from the caso, which units took its guías and with whom', async () => {
+    const res = await despachosDe(opA).expect(200);
+
+    expect(res.body.mawb).toBe('160-11111111');
+    // A split load: two guías of one caso, two trips, two carriers.
+    expect(res.body.totales).toMatchObject({ despachos: 2, transportistas: 2, partidas: 2 });
+
+    const transportistas = res.body.despachos.map((d: { transportista: string }) => d.transportista).sort();
+    expect(transportistas).toEqual(['Fletes del Norte', 'Transportes del Bajío']);
+
+    const bajio = res.body.despachos.find((d: { transportista: string }) => d.transportista === 'Transportes del Bajío');
+    expect(bajio).toMatchObject({ placas: 'ABC1234', tipoUnidad: 'tracto', tipoUnidadLabel: 'Tracto', estado: 'planeado' });
+    expect(bajio.partidas.map((p: { guia: string }) => p.guia)).toEqual(['AAA0001']);
+    expect(bajio.partidas[0]).toMatchObject({ cliente: 'ACME', piezas: 100, cartonesPlaneados: 10, ordenCarga: 1 });
+  });
+
+  it('shows only THIS caso\'s guías, and says how big the rest of the load was', async () => {
+    const res = await despachosDe(opB).expect(200);
+    expect(res.body.despachos).toHaveLength(1);
+    const d = res.body.despachos[0];
+    // The truck carried two partidas; only BIMBO's own guía is listed on BIMBO's caso.
+    expect(d.partidas).toHaveLength(1);
+    expect(d.partidas[0]).toMatchObject({ guia: 'BBB0001', cliente: 'BIMBO' });
+    expect(d.partidasTotales).toBe(2);
+  });
+
+  it('answers a caso that has not been loaded onto any unit with an empty list', async () => {
+    const op = await query<{ id: string }>(
+      `INSERT INTO operaciones (mawb, mawb_raw, etapa, client_id) VALUES ('160-33333333','160-33333333','arribado',$1) RETURNING id`,
+      [clienteBId],
+    );
+    const res = await despachosDe(op.rows[0].id).expect(200);
+    expect(res.body.despachos).toEqual([]);
+    expect(res.body.totales).toMatchObject({ despachos: 0, transportistas: 0, partidas: 0 });
+  });
+
+  it('404s an unknown caso and 400s an id that is not a uuid', async () => {
+    await despachosDe('11111111-1111-1111-1111-111111111111').expect(404);
+    await despachosDe('no-soy-uuid').expect(400);
+  });
+
+  it('filters the despacho list by operación too, so the same question has one cheap answer', async () => {
+    const res = await request(app)
+      .get(`/api/despachos?operacionId=${opB}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].id).toBe(compartido);
+    expect(res.body[0].transportista).toBe('Transportes del Bajío');
+  });
+
+  it('composes a light despacho summary onto the caso detail — carrier, plates, own partidas', async () => {
+    const res = await request(app)
+      .get(`/api/operaciones/${opA}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(res.body.despachos).toHaveLength(2);
+    const compartidoRow = res.body.despachos.find((d: { id: string }) => d.id === compartido);
+    expect(compartidoRow).toMatchObject({ transportista: 'Transportes del Bajío', placas: 'ABC1234', partidas: 1 });
+    // Light on purpose: the guía-by-guía breakdown lives in the dedicated endpoint.
+    expect(compartidoRow.partidas).toBe(1);
+  });
+});

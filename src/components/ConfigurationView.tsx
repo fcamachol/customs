@@ -6,6 +6,7 @@
  * component renders the single domain selected there, showing its complete view:
  *   · cfg_motor:       Parámetros de validación + Listas de exclusión (V6/V7)
  *   · cfg_clientes:    Clientes (master data)
+ *   · cfg_transportistas: Transportistas, flota, convenios y tarifas (R24 / R25-D9)
  *   · cfg_rfcs:        RFCs validados
  *   · cfg_empresa:     Identidad / branding
  *   · cfg_tasa:        Tasa global (vigencias) — Super Admin only
@@ -40,10 +41,16 @@ import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/c
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
 import { AddClientModal } from './AddClientModal';
+import { TransportistasTab } from './TransportistasTab';
 
 interface Props {
   domain: ConfigSection;
   onToast: (msg: string) => void;
+  /**
+   * Jump to Trazabilidad with a carrier preselected. Optional so every existing test that renders a
+   * Configuración pane on its own keeps working; when absent the affordance is simply not offered.
+   */
+  onVerTrazabilidad?: (transportistaId: string) => void;
 }
 
 interface ConfigResponse<T> {
@@ -115,7 +122,7 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : 'Error inesperado';
 }
 
-export default function ConfigurationView({ domain, onToast }: Props) {
+export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }: Props) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const isSuperAdmin = user?.role === 'super_admin';
@@ -323,6 +330,10 @@ export default function ConfigurationView({ domain, onToast }: Props) {
 
       {domain === 'cfg_clientes' && (
         <ClientesTab isAdmin={isAdmin} clients={clients} onClientsChanged={refreshClients} onToast={onToast} />
+      )}
+
+      {domain === 'cfg_transportistas' && (
+        <TransportistasTab isAdmin={isAdmin} onToast={onToast} onVerTrazabilidad={onVerTrazabilidad} />
       )}
 
       {domain === 'cfg_rfcs' && (

@@ -189,9 +189,11 @@ function Totales({ items }: { items: { label: string; value: string }[] }) {
 
 // ---- Tab 1: carrier → packages ---------------------------------------------------------------
 
-function PorTransportista() {
+function PorTransportista({ inicial }: { inicial?: string }) {
   const [transportistas, setTransportistas] = useState<TransportistaListItem[]>([]);
-  const [transportistaId, setTransportistaId] = useState('');
+  // `inicial` is an INITIAL value, not a controlled one: the carrier catalog hands one over on the
+  // way in ("ver trazabilidad"), and from that point the picker belongs to the reader.
+  const [transportistaId, setTransportistaId] = useState(inicial ?? '');
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
   const [estado, setEstado] = useState('');
@@ -546,7 +548,7 @@ function PorGuia() {
 
 type Tab = 'transportista' | 'guia';
 
-export default function TrazabilidadView() {
+export default function TrazabilidadView({ transportistaId }: { transportistaId?: string } = {}) {
   const [tab, setTab] = useState<Tab>('transportista');
 
   const tabs: { id: Tab; label: string }[] = [
@@ -571,7 +573,7 @@ export default function TrazabilidadView() {
         ))}
       </div>
 
-      {tab === 'transportista' ? <PorTransportista /> : <PorGuia />}
+      {tab === 'transportista' ? <PorTransportista inicial={transportistaId} /> : <PorGuia />}
     </div>
   );
 }

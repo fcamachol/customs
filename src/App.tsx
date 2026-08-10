@@ -34,6 +34,10 @@ function AuthenticatedApp() {
   const { user, logout } = useAuth();
   const [section, setSection] = useState<Section>('dashboard');
   const [toast, setToast] = useState<string | null>(null);
+  // Carrier handed over from the Transportistas catalog to Trazabilidad ("ver trazabilidad").
+  // TrazabilidadView is unmounted whenever another section is showing, so this is read exactly once,
+  // as that view's initial selection — no syncing, and the user is free to pick another carrier.
+  const [trazaTransportistaId, setTrazaTransportistaId] = useState<string | undefined>(undefined);
   const allowed = visibleSectionsFor(user!.role);
   // Fallback used to hardcode 'dashboard', but a role like tramitador never has 'dashboard' in
   // its visible set (it sees ONLY ops_campo) — falling back to a section the role can't see would
@@ -58,8 +62,14 @@ function AuthenticatedApp() {
           {current === 'ops_torre' && <TorreControlView />}
           {current === 'ops_prealertas' && <PrealertasView />}
           {current === 'ops_campo' && <CampoView />}
-          {current === 'ops_traza' && <TrazabilidadView />}
-          {current.startsWith('cfg_') && <ConfigurationView domain={current as ConfigSection} onToast={setToast} />}
+          {current === 'ops_traza' && <TrazabilidadView transportistaId={trazaTransportistaId} />}
+          {current.startsWith('cfg_') && (
+            <ConfigurationView
+              domain={current as ConfigSection}
+              onToast={setToast}
+              onVerTrazabilidad={(id) => { setTrazaTransportistaId(id); setSection('ops_traza'); }}
+            />
+          )}
           {current === 'autoridad' && <AutoridadView />}
           {current === 'acerca' && <AcercaDeView />}
         </div>

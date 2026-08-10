@@ -7,6 +7,7 @@ import {
   runRequerimientosSweep,
   type RequerimientosTickSummary,
 } from '../services/requerimientosService';
+import { evaluarPendientes } from '../services/replanService';
 
 export const opsRouter = Router();
 
@@ -26,10 +27,27 @@ export const opsRouter = Router();
  * skips any flight queried in the last 4 minutes, so a tighter cadence costs money on a metered
  * provider without buying freshness.
  *
- * THREE INDEPENDENT PHASES run per tick — flights, the AGORA prealerta sweep, then the risk
- * requirements — each with its own error accounting. None can abort another: they answer different
- * questions ("did the plan move?", "did a webhook get dropped?", "did a client's deadline run out?")
- * and a provider outage on one side is no reason to stop asking the other.
+ * FOUR INDEPENDENT PHASES run per tick — flights, the AGORA prealerta sweep, the risk requirements,
+ * then the contingency engine — each behind its own try/catch and, where it has one, its own cursor
+ * row. None can abort another: they answer different questions ("did the plan move?", "did a webhook
+ * get dropped?", "did a client's deadline run out?", "does the plan still make sense?") and a provider
+ * outage on one side is no reason to stop asking the others.
+ *
+ * The ORDER is load-bearing, not alphabetical. Each phase produces facts the next one reads, so the
+ * whole chain resolves within a single tick instead of leaking a cycle of latency per hop:
+ *
+ *   1. Flights first, because they produce the delay/cancellation facts the contingency engine reacts
+ *      to — a delay detected at 10:00 becomes an exclusion at 10:00, not five minutes later.
+ *   2. The AGORA sweep next, so a prealerta recovered from a dropped webhook is evaluated in the same
+ *      tick it arrives.
+ *   3. The risk requirements next, because expiry is a WRITE the engine reads: it opens the CT-4
+ *      `riesgo` hold and walks `estado_documental` to `riesgo_vencido`. Running it before phase 4
+ *      means a deadline that ran out at 09:58 is reflected in the dispatch plan on this tick.
+ *   4. The contingency engine last, so it sees everything the first three just wrote.
+ *
+ * Phases 3 and 4 both touch `riesgo` holds and deliberately do not collide: each checks for an already
+ * active hold of that tipo on the caso before inserting (requerimientosService reuses it, replanService
+ * skips the action and records `omitido`), so the freeze is opened exactly once regardless of order.
  */
 function authorizeTick(req: Request): boolean {
   const expected = process.env.OPS_TICK_TOKEN;
@@ -108,9 +126,10 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
     }
 
     // ---- Phase 3: risk requirements (PRD-02 R18/D13 → CT-4). Two steps inside one call: retry the
-    // notifications that never went out because SMTP was unprovisioned (#22), then expire the
-    // deadlines that ran out — and ONLY for requerimientos the client was actually told about. This
-    // is the phase that freezes cargo, so it runs last and behind its own guard: a bug here must not
+    // notifications that never went out because SMTP was unreachable (#22), then expire the deadlines
+    // that ran out — and ONLY for requerimientos the client was actually told about. This is the phase
+    // that freezes cargo, so it runs before the contingency engine (phase 4), which reads that freeze
+    // and the `riesgo_vencido` documental state it produces. Behind its own guard: a bug here must not
     // cost us the flight refresh, and above all must not 500 the tick into a scheduler alert loop.
     let requerimientos: RequerimientosTickSummary | { ok: boolean; error: string };
     try {
@@ -120,6 +139,34 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
       console.error('[ops] el barrido de requerimientos falló:', err);
       requerimientos = { ok: false, error: message };
     }
+
+    // ---- Phase 4: the contingency engine (PRD-02 §8.8, CT-1…CT-7). Runs LAST so it sees everything
+    // the earlier phases just wrote — the flight facts from phase 1 and the CT-4 freezes from phase 3.
+    // It re-derives the same conclusions every tick by design and writes
+    // only what is new (`claveAccion` fingerprints), so a cancelled flight produces one exclusion, not
+    // one per cycle. Wrapped like the others: a replanning bug must not turn a successful flight
+    // refresh into a 500 and a scheduler alert.
+    let replan: Awaited<ReturnType<typeof evaluarPendientes>> = [];
+    let replanError: string | null = null;
+    try {
+      replan = await evaluarPendientes(Math.min(Number(req.query.limit ?? 100) || 100, 500));
+    } catch (err) {
+      replanError = err instanceof Error ? err.message : String(err);
+      console.error('[ops] la fase de contingencias falló:', err);
+    }
+
+    // Its own cursor row, for the same reason the flight phase has one: "no contingencies today" and
+    // "nothing has evaluated contingencies since Tuesday" must not look identical from the outside.
+    await query(
+      `UPDATE integracion_cursores
+          SET last_run_at = now(),
+              last_error = $1::text,
+              consecutive_errors = CASE WHEN $1::text IS NULL THEN 0
+                                        ELSE consecutive_errors + 1 END,
+              updated_at = now()
+        WHERE fuente = 'replan'`,
+      [replanError ? `la fase de contingencias falló: ${replanError}` : null],
+    );
 
     res.json({
       ok: true,
@@ -136,6 +183,14 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
       },
       sweep,
       requerimientos,
+      replan: {
+        evaluadas: replan.length,
+        conAcciones: replan.filter((r) => r.accionesNuevas > 0).length,
+        ejecutadas: replan.reduce((n, r) => n + r.ejecutadas, 0),
+        propuestas: replan.reduce((n, r) => n + r.propuestas, 0),
+        ...(replanError ? { error: replanError } : {}),
+        detalle: replan.filter((r) => r.accionesNuevas > 0),
+      },
     });
   } catch (err) {
     next(err);

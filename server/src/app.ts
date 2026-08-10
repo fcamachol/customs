@@ -28,6 +28,7 @@ import {
   operacionRequerimientosRouter,
   riesgoRequerimientosRouter,
 } from './routes/riesgoRequerimientos';
+import { replanRouter } from './routes/replan';
 import { campoRouter } from './routes/campo';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
@@ -100,6 +101,10 @@ export function createApp(): Express {
   app.use('/api/operaciones', operacionRequerimientosRouter);
   // The work queue the control tower reads: open requerimientos and the ones about to expire.
   app.use('/api/riesgo-requerimientos', riesgoRequerimientosRouter);
+  // Contingency engine (PRD-02 §8.8, CT-1…CT-7). Same prefix again, same guarantee: every route it
+  // owns is multi-segment (`/:id/replan…`, `/:id/guias/:guiaId/…`) with a UUID-validated `:id`, so it
+  // neither shadows nor is shadowed by operacionesRouter's `GET /:id`.
+  app.use('/api/operaciones', replanRouter);
   // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
   // role can be granted exactly this prefix and nothing else (§13).
   app.use('/api/campo', campoRouter);

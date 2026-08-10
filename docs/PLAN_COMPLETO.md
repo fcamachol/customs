@@ -118,9 +118,9 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 | Req | | Estado |
 |---|---|---|
 | — | Riesgo automático al llegar la prealerta | ✅ corre solo; `estado_documental` avanza |
-| R18, D13 | Requerimiento al cliente con **plazo duro** (vuelo + descarga) | ⛔ #23 — bloqueado por SMTP |
+| R18, D13 | Requerimiento al cliente con **plazo duro** (vuelo + descarga) | ✅ #23 — tabla + plazo + barrido de vencimiento en el tick; el reloj sólo corre contra quien sí fue avisado |
 | CT-3/4/5/6 | Holds (CSA, riesgo, auditoría de autoridad global) y retención parcial de pallet | ✅ tablas + endpoints + materialización |
-| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | 📋 #26 |
+| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | ✅ #26 — `shared/operaciones/replan.ts` ruleset `2026-08a` con hash; ejecuta solo excluir/reprogramar/hold/suspender/notificar y **propone** la reasignación con override registrado |
 
 ### Visibilidad, reportes, financiero
 
@@ -165,15 +165,28 @@ Torre de Control · Prealertas · Campo · reparse · runner E2E.
    script re-descarga de AGORA los adjuntos perdidos verificando cada byte contra el hash guardado,
    y `routes/files.ts` responde 410 honesto en vez de 500. Protege toda la evidencia.
 2. **#34 Tarea programada** del tick (usuario, 2 min). Sin esto "automático" no es autónomo.
-3. **#22 SMTP saliente** (usuario). Destraba #23 y #31.
+3. **#22 SMTP saliente** — código hecho (`services/mailer.ts`, reintento en el tick); falta la **app
+   password** (usuario). Sin ella el aviso no sale y #31 sigue esperando.
 
 ### Fase B — Cerrar el ciclo operativo
 
-4. **#26 Motor de contingencias** (`shared/operaciones/replan.ts`) — consume vuelos + holds; ruleset
-   versionado; ejecuta solo excluir/reprogramar/hold/notificar, **propone** la reasignación que
-   toca dinero con override registrado. CT-1/2/7.
-5. **#23 Requerimiento de riesgo con plazo duro** — tabla `riesgo_requerimientos`, plazo = ETA +
-   ventana, barrido de vencimiento en el tick que dispara CT-4. (Necesita #22.)
+4. ~~**#26 Motor de contingencias**~~ ✅ **hecho**. `shared/operaciones/replan.ts` (puro, ruleset
+   `2026-08a` con hash sha256), tablas `replan_evaluaciones`/`replan_acciones` (snapshot guardado =
+   decisión reproducible), rutas `POST/GET /api/operaciones/:id/replan`,
+   `…/acciones/:id/confirmar|descartar` (exigen `motivo`, escriben `override = true`),
+   `POST /api/operaciones/:id/guias/:guiaId/no-transmitida` (disparador de CT-2) y **fase 4 del
+   tick**. Ejecuta solo excluir/reprogramar/abrir hold/suspender unidades/notificar; la reasignación
+   que toca tarifa se **propone**. Una decisión se registra una sola vez por huella: la bitácora no
+   tartamudea. Pendiente de #29: cuando exista `despachos`, CT-7 apuntará al viaje concreto en vez
+   de al indicio `estado_planeacion = 'asignada'`; y de #22/#31 para que `NOTIFICACION_REQUERIDA`
+   deje de ser sólo la obligación registrada.
+5. ~~**#23 Requerimiento de riesgo con plazo duro**~~ ✅ **hecho**. Tabla `riesgo_requerimientos`,
+   plazo = ETA + ventana de descarga, `services/requerimientosService.ts`, `routes/riesgoRequerimientos.ts`
+   y el barrido de vencimiento como **fase 3 del tick**, que dispara CT-4 (hold de tipo `riesgo`).
+   La regla que lo sostiene: el plazo **no corre contra quien nunca fue avisado** — `expirarVencidos`
+   sólo toca filas con `notificado_at`, así que un SMTP sin credenciales deja el requerimiento
+   visiblemente sin notificar en vez de congelar la carga de un cliente que no fue advertido.
+   El código de #22 (`services/mailer.ts`) viaja con él; falta sólo la app password del usuario.
 6. **#31 Fan-out de notificaciones** en cambios de plan — AGORA + WhatsApp (evolution-api ya corre).
    (Necesita #22.)
 

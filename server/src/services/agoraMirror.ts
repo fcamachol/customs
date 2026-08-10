@@ -78,6 +78,15 @@ const TIPOS_ESPEJO_SIEMPRE = new Set<string>([
   'REQUERIMIENTO_EMITIDO',
   'REQUERIMIENTO_VENCIDO',
   'REQUERIMIENTO_RESUELTO',
+  // The contingency engine's plan-changing conclusions (CT-1…CT-7). Mirrored because they answer the
+  // question the thread exists for — "is this shipment going out today?" — and because a reassignment
+  // proposal is waiting on a human: an unread proposal IS the flete en falso. Deduplicated at the
+  // source by `claveAccion`, so a cancelled flight posts one note, not one every five minutes.
+  // NOTIFICACION_REQUERIDA is deliberately absent: several fire per contingency and the notice itself
+  // is what #31 will send, so mirroring the obligation would double the noise for zero new fact.
+  'OPERACION_EXCLUIDA_DEL_PLAN',
+  'OPERACION_REPROGRAMADA',
+  'REASIGNACION_PROPUESTA',
   // a best-effort ingest step that failed — the whole point is that it stops being invisible
   'INGESTA_INCIDENCIA',
 ]);
@@ -261,6 +270,20 @@ const FORMATEADORES: Record<string, (p: Record<string, unknown>) => string> = {
   },
   INGESTA_INCIDENCIA: (p) =>
     `🛠️ INGESTA_INCIDENCIA — falló el paso «${String(p.paso ?? 'desconocido')}»: ${String(p.error ?? 'sin detalle')}`,
+  // The contingency engine. `motivo` is the engine's own Spanish sentence and is quoted rather than
+  // paraphrased, for the same reason `efecto` is above: the note and the ledger must not drift.
+  OPERACION_EXCLUIDA_DEL_PLAN: (p) =>
+    `📤 FUERA DEL PLAN (${String(p.contingencia ?? 'CT')}) — ${String(p.motivo ?? 'sin motivo')}`,
+  OPERACION_REPROGRAMADA: (p) =>
+    `📅 REPROGRAMADA (${String(p.contingencia ?? 'CT-1')}) — nueva fecha ${String(p.nuevaFecha ?? 'por definir')}. ` +
+    `${String(p.motivo ?? '')}`.trim(),
+  REASIGNACION_PROPUESTA: (p) => {
+    const candidatas = Array.isArray(p.candidatas) ? p.candidatas.length : 0;
+    return (
+      `🔁 REASIGNACIÓN PROPUESTA (CT-7) — requiere confirmación: compromete tarifa. ` +
+      `${candidatas} candidata(s). ${String(p.motivo ?? '')}`.trim()
+    );
+  },
 };
 
 /** Chatwoot accepts long content; a wall of text in an inbox is still unreadable. */

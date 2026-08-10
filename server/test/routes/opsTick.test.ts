@@ -61,6 +61,9 @@ beforeEach(async () => {
   await query(
     `INSERT INTO integracion_cursores (fuente) VALUES ('vuelos') ON CONFLICT (fuente) DO NOTHING`,
   );
+  await query(
+    `INSERT INTO integracion_cursores (fuente) VALUES ('replan') ON CONFLICT (fuente) DO NOTHING`,
+  );
 });
 
 afterEach(() => {
@@ -184,5 +187,58 @@ describe('POST /api/ops/tick — barrido de prealertas', () => {
     );
     expect(cur.rows[0].last_error).toMatch(/la fase de vuelos falló/);
     expect(Number(cur.rows[0].consecutive_errors)).toBe(1);
+  });
+});
+
+/**
+ * Phase 3 — the contingency engine (PRD-02 §8.8). NOT mocked: its own behaviour is covered in
+ * routes/replan.test.ts, and what is asked here is the route's question — does the phase run, does it
+ * advance its own cursor, and can it be taken down by (or take down) the other two?
+ *
+ * The cursor matters more than it looks. Without a row of its own, "no contingencies today" and
+ * "nothing has evaluated contingencies since Tuesday" are indistinguishable from the outside, and the
+ * second one is how a truck gets contracted against cancelled cargo.
+ */
+describe('POST /api/ops/tick — motor de contingencias', () => {
+  it('runs the engine, reports it, and advances its own cursor', async () => {
+    const res = await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    expect(res.body.replan).toMatchObject({ evaluadas: 0, conAcciones: 0, ejecutadas: 0, propuestas: 0 });
+
+    const cur = await query<{ last_run_at: string | null; last_error: string | null }>(
+      `SELECT last_run_at, last_error FROM integracion_cursores WHERE fuente='replan'`,
+    );
+    expect(cur.rows[0].last_run_at).toBeTruthy();
+    expect(cur.rows[0].last_error).toBeNull();
+  });
+
+  it('evaluates a caso whose flight was cancelled and pulls it from the plan', async () => {
+    const vuelo = await query<{ id: string }>(
+      `INSERT INTO vuelos (numero_vuelo, fecha_operacion, estado)
+       VALUES ('CI9999','2026-08-10','cancelado') RETURNING id`,
+    );
+    const op = await query<{ id: string }>(
+      `INSERT INTO operaciones (mawb, etapa, estado_planeacion, numero_vuelo, vuelo_id)
+       VALUES ('160-99999999','en_vuelo','planeada','CI9999',$1) RETURNING id`,
+      [vuelo.rows[0].id],
+    );
+
+    const res = await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    expect(res.body.replan.conAcciones).toBe(1);
+    expect(res.body.replan.ejecutadas).toBeGreaterThan(0);
+
+    const { rows } = await query<{ estado_planeacion: string }>(
+      'SELECT estado_planeacion FROM operaciones WHERE id = $1',
+      [op.rows[0].id],
+    );
+    expect(rows[0].estado_planeacion).toBe('excluida');
+
+    // And it does not stutter on the next tick: the same facts write nothing more.
+    await request(app).post('/api/ops/tick').set('x-ops-token', TOKEN).expect(200);
+    const eventos = await query(
+      `SELECT id FROM operacion_eventos WHERE operacion_id = $1 AND tipo = 'OPERACION_EXCLUIDA_DEL_PLAN'`,
+      [op.rows[0].id],
+    );
+    expect(eventos.rows).toHaveLength(1);
+    await query('TRUNCATE vuelos RESTART IDENTITY CASCADE');
   });
 });

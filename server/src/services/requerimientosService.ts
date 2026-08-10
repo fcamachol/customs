@@ -3,6 +3,8 @@ import { withTransaction } from '../db/tx';
 import { recordAudit } from './audit';
 import { mirrorEventoToAgora } from './agoraMirror';
 import { sendMail, type MailOutcome } from './mailer';
+import { avisarInternoPorEvento, escalarPorWhatsapp } from './whatsappFanout';
+import type { WhatsappOutcome } from './whatsapp';
 
 /**
  * RIESGO REQUERIMIENTOS — the risk→client bridge with a hard deadline (PRD-02 `R18`/`D13`, §8.7),
@@ -23,6 +25,12 @@ import { sendMail, type MailOutcome } from './mailer';
  * freeze — and walks `estado_documental` to `riesgo_vencido`. It does NOT move `estado_planeacion`,
  * exclude the caso from a plan, or look for a replacement guía: that is the contingency engine's job
  * (§8.8, `shared/operaciones/replan.ts`), exactly as `routes/holds.ts` states for every other hold.
+ *
+ * #31 — WhatsApp is the second channel (Adenda A §6.3): whenever email does not confirm delivery,
+ * `escalarPorWhatsapp` (`services/whatsappFanout.ts`) tries the client's phone, and the CT-4 freeze
+ * also pings the internal `dirección` roster regardless of the email outcome. See that module's
+ * header for the exact scope this covers and what it deliberately does not (R19's plan-change leg,
+ * which needs #29).
  */
 
 // -------------------------------------------------------------------------------------------------
@@ -60,6 +68,7 @@ interface FilaNotificable {
   ruleset_version: string | null;
   destinatario_email: string | null;
   cliente_email: string | null;
+  cliente_telefono: string | null;
   remitente: string | null;
   agora_conversation_id: string | null;
   notificacion_intentos: number;
@@ -76,6 +85,7 @@ const SQL_FILA = `
          r.ruleset_version,
          r.destinatario_email,
          c.email AS cliente_email,
+         c.phone AS cliente_telefono,
          (SELECT p.remitente FROM prealertas p
            WHERE p.operacion_id = o.id AND p.remitente IS NOT NULL
            ORDER BY p.version DESC LIMIT 1) AS remitente,
@@ -105,6 +115,16 @@ export function resolverDestinatario(fila: {
     if (v) return v;
   }
   return null;
+}
+
+/**
+ * The WhatsApp escalation target (#31, §6.3's "segundo canal"). Only one candidate today —
+ * `clients.phone` — because the other addresses this module resolves for email (the requerimiento's
+ * own override, the prealerta sender) are, by construction, email addresses.
+ */
+export function resolverTelefono(fila: { cliente_telefono: string | null }): string | null {
+  const v = (fila.cliente_telefono ?? '').trim();
+  return v || null;
 }
 
 /** `ReasonCode[]` as the client should read it. Defensive: the column is jsonb and may hold anything. */
@@ -179,9 +199,43 @@ export function construirCorreoVencimiento(fila: {
   };
 }
 
+/**
+ * The WhatsApp escalation text (#31, §6.3's "segundo canal") — condensed, English (`N6`), no
+ * subject line: WhatsApp has no separate subject field, and a message this short reads as a message,
+ * not an email pasted into a chat window.
+ */
+export function construirWhatsappRequerimiento(fila: {
+  mawb: string;
+  guia_norm: string | null;
+  vence_at: Date;
+}): string {
+  return (
+    `ACTION REQUIRED — customs risk review, MAWB ${fila.mawb}` +
+    `${fila.guia_norm ? ` / HAWB ${fila.guia_norm}` : ''}. ` +
+    `Findings must be cleared by ${fechaUtc(fila.vence_at)} or the shipment is held and excluded ` +
+    'from dispatch. Please reply to this message (or the earlier email) with corrected documentation.'
+  );
+}
+
+/** The expiry notice's WhatsApp counterpart — condensed, same facts as `construirCorreoVencimiento`. */
+export function construirWhatsappVencimiento(fila: {
+  mawb: string;
+  guia_norm: string | null;
+  vence_at: Date;
+}): string {
+  return (
+    `HOLD PLACED — deadline expired, MAWB ${fila.mawb}${fila.guia_norm ? ` / HAWB ${fila.guia_norm}` : ''}. ` +
+    `The risk review deadline (${fechaUtc(fila.vence_at)}) passed with no response; the shipment is ` +
+    'on hold and out of the dispatch plan. Reply with corrected documentation to reinstate it.'
+  );
+}
+
 export interface NotificacionResultado {
   requerimientoId: string;
   outcome: MailOutcome;
+  /** null when WhatsApp was never attempted — the primary channel confirmed, or there is no phone
+   *  number on file. See `escalarPorWhatsapp` for the exact rule. */
+  whatsapp: WhatsappOutcome | null;
 }
 
 /**
@@ -195,7 +249,11 @@ export async function notificarRequerimiento(requerimientoId: string): Promise<N
   const { rows } = await query<FilaNotificable>(`${SQL_FILA} WHERE r.id = $1`, [requerimientoId]);
   const fila = rows[0];
   if (!fila) {
-    return { requerimientoId, outcome: { status: 'omitido', motivo: 'requerimiento inexistente' } };
+    return {
+      requerimientoId,
+      outcome: { status: 'omitido', motivo: 'requerimiento inexistente' },
+      whatsapp: null,
+    };
   }
 
   const destinatario = resolverDestinatario(fila);
@@ -241,7 +299,16 @@ export async function notificarRequerimiento(requerimientoId: string): Promise<N
     );
   }
 
-  return { requerimientoId, outcome };
+  // §6.3 — the second channel. Fires only when email did NOT confirm delivery; a confirmed send has
+  // nothing to escalate. Never affects `notificado_at`: WhatsApp delivery is not the gate the CT-4
+  // deadline reads (email is, per D13), it is a courtesy attempt to reach the client another way.
+  const whatsapp = await escalarPorWhatsapp({
+    telefono: resolverTelefono(fila),
+    canalPrimarioEstado: outcome.status,
+    texto: construirWhatsappRequerimiento(fila),
+  });
+
+  return { requerimientoId, outcome, whatsapp };
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -466,17 +533,27 @@ export async function expirarVencidos(limite = 100): Promise<VencimientoDetalle[
       vence_at: new Date(resultado.venceAt),
     });
 
+    const payloadEvento = {
+      requerimientoId: resultado.requerimientoId,
+      venceAt: resultado.venceAt,
+      guia: resultado.guiaNorm,
+      efecto:
+        'CT-4: se abre hold de riesgo; la operación no se programa hasta resolver el requerimiento.',
+    };
+
     await mirrorEventoToAgora({
       operacionId: resultado.operacionId,
       agoraConversationId: resultado.agoraConversationId,
       tipo: 'REQUERIMIENTO_VENCIDO',
-      payloadResumen: {
-        requerimientoId: resultado.requerimientoId,
-        venceAt: resultado.venceAt,
-        guia: resultado.guiaNorm,
-        efecto:
-          'CT-4: se abre hold de riesgo; la operación no se programa hasta resolver el requerimiento.',
-      },
+      payloadResumen: payloadEvento,
+    });
+
+    // §6.3 — "aviso interno a dirección": a CT-4 freeze is exactly the kind of fact management needs
+    // to know about even if nobody is watching the AGORA inbox at that moment.
+    await avisarInternoPorEvento({
+      operacionId: resultado.operacionId,
+      tipo: 'REQUERIMIENTO_VENCIDO',
+      payloadResumen: payloadEvento,
     });
 
     salida.push({
@@ -498,20 +575,31 @@ async function avisarVencimiento(
   requerimientoId: string,
   fila: { mawb: string; guia_norm: string | null; vence_at: Date },
 ): Promise<MailOutcome['status']> {
-  const { rows } = await query<{ destinatario_email: string | null; cliente_email: string | null; remitente: string | null }>(
-    `${SQL_FILA} WHERE r.id = $1`,
-    [requerimientoId],
-  );
-  const destinatario = rows[0] ? resolverDestinatario(rows[0]) : null;
-  if (!destinatario) return 'omitido';
-  const { subject, text } = construirCorreoVencimiento(fila);
-  const outcome = await sendMail({ to: destinatario, subject, text });
+  const { rows } = await query<{
+    destinatario_email: string | null;
+    cliente_email: string | null;
+    cliente_telefono: string | null;
+    remitente: string | null;
+  }>(`${SQL_FILA} WHERE r.id = $1`, [requerimientoId]);
+  const fija = rows[0] ?? null;
+  const destinatario = fija ? resolverDestinatario(fija) : null;
+  const outcome: MailOutcome = destinatario
+    ? await sendMail({ to: destinatario, ...construirCorreoVencimiento(fila) })
+    : { status: 'omitido', motivo: 'sin destinatario' };
   if (outcome.status !== 'enviado') {
     console.warn(
       `[requerimientos] no se pudo avisar el vencimiento del requerimiento ${requerimientoId}: ` +
         (outcome.status === 'omitido' ? outcome.motivo : outcome.error),
     );
   }
+
+  // §6.3 — second channel, same rule as the emission path: only escalate when email did not confirm.
+  await escalarPorWhatsapp({
+    telefono: fija ? resolverTelefono(fija) : null,
+    canalPrimarioEstado: outcome.status,
+    texto: construirWhatsappVencimiento(fila),
+  });
+
   return outcome.status;
 }
 

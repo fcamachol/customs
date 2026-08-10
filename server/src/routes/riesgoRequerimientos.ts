@@ -386,7 +386,7 @@ operacionRequerimientosRouter.post(
       // AFTER the commit, and never inside it: an SMTP round trip inside a transaction holds a row
       // lock for the duration of somebody else's network. Also the reason the notification outcome is
       // reported separately from the creation — the requerimiento exists either way.
-      const { outcome } = await notificarRequerimiento(resultado.requerimiento.id);
+      const { outcome, whatsapp } = await notificarRequerimiento(resultado.requerimiento.id);
 
       await mirrorEventoToAgora({
         operacionId: id,
@@ -422,6 +422,19 @@ operacionRequerimientosRouter.post(
                 ? outcome.error
                 : outcome.destinatario,
         },
+        // #31 — null when the primary channel confirmed or there is no phone on file; see
+        // `escalarPorWhatsapp` (services/whatsappFanout.ts) for the exact rule.
+        whatsapp: whatsapp
+          ? {
+              estado: whatsapp.status,
+              detalle:
+                whatsapp.status === 'omitido'
+                  ? whatsapp.motivo
+                  : whatsapp.status === 'error'
+                    ? whatsapp.error
+                    : whatsapp.destinatario,
+            }
+          : null,
       });
     } catch (err) {
       next(err);
@@ -516,7 +529,7 @@ riesgoRequerimientosRouter.post(
         res.status(404).json({ error: 'Requerimiento no encontrado' });
         return;
       }
-      const { outcome } = await notificarRequerimiento(id);
+      const { outcome, whatsapp } = await notificarRequerimiento(id);
       const { rows } = await query(`${SELECT_REQUERIMIENTO} WHERE r.id = $1`, [id]);
       res.json({
         ok: outcome.status === 'enviado',
@@ -529,6 +542,17 @@ riesgoRequerimientosRouter.post(
                 ? outcome.error
                 : outcome.destinatario,
         },
+        whatsapp: whatsapp
+          ? {
+              estado: whatsapp.status,
+              detalle:
+                whatsapp.status === 'omitido'
+                  ? whatsapp.motivo
+                  : whatsapp.status === 'error'
+                    ? whatsapp.error
+                    : whatsapp.destinatario,
+            }
+          : null,
         requerimiento: rows[0],
       });
     } catch (err) {

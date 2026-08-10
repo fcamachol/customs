@@ -3,6 +3,10 @@ import { timingSafeEqual } from 'node:crypto';
 import { query } from '../db/pool';
 import { refreshVuelosPendientes } from '../services/vuelosService';
 import { runAgoraSweep, type SweepSummary } from '../services/agoraSweep';
+import {
+  runRequerimientosSweep,
+  type RequerimientosTickSummary,
+} from '../services/requerimientosService';
 
 export const opsRouter = Router();
 
@@ -22,10 +26,10 @@ export const opsRouter = Router();
  * skips any flight queried in the last 4 minutes, so a tighter cadence costs money on a metered
  * provider without buying freshness.
  *
- * TWO INDEPENDENT PHASES run per tick — flights, then the AGORA prealerta sweep — each with its own
- * cursor row and its own error accounting. Neither can abort the other: they answer different
- * questions ("did the plan move?" vs "did a webhook get dropped?") and a provider outage on one side
- * is no reason to stop asking the other.
+ * THREE INDEPENDENT PHASES run per tick — flights, the AGORA prealerta sweep, then the risk
+ * requirements — each with its own error accounting. None can abort another: they answer different
+ * questions ("did the plan move?", "did a webhook get dropped?", "did a client's deadline run out?")
+ * and a provider outage on one side is no reason to stop asking the other.
  */
 function authorizeTick(req: Request): boolean {
   const expected = process.env.OPS_TICK_TOKEN;
@@ -103,6 +107,20 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
       sweep = { ok: false, error: message };
     }
 
+    // ---- Phase 3: risk requirements (PRD-02 R18/D13 → CT-4). Two steps inside one call: retry the
+    // notifications that never went out because SMTP was unprovisioned (#22), then expire the
+    // deadlines that ran out — and ONLY for requerimientos the client was actually told about. This
+    // is the phase that freezes cargo, so it runs last and behind its own guard: a bug here must not
+    // cost us the flight refresh, and above all must not 500 the tick into a scheduler alert loop.
+    let requerimientos: RequerimientosTickSummary | { ok: boolean; error: string };
+    try {
+      requerimientos = await runRequerimientosSweep();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[ops] el barrido de requerimientos falló:', err);
+      requerimientos = { ok: false, error: message };
+    }
+
     res.json({
       ok: true,
       durationMs: Date.now() - startedAt,
@@ -117,6 +135,7 @@ opsRouter.post('/tick', async (req: Request, res: Response, next: NextFunction) 
         detalle: vuelos,
       },
       sweep,
+      requerimientos,
     });
   } catch (err) {
     next(err);

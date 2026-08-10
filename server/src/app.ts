@@ -24,6 +24,10 @@ import { prealertasRouter } from './routes/prealertas';
 import { operacionesRouter } from './routes/operaciones';
 import { opsRouter } from './routes/ops';
 import { holdsRouter } from './routes/holds';
+import {
+  operacionRequerimientosRouter,
+  riesgoRequerimientosRouter,
+} from './routes/riesgoRequerimientos';
 import { campoRouter } from './routes/campo';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
@@ -90,6 +94,12 @@ export function createApp(): Express {
   // `GET /:id`; holds.ts additionally registers its global routes before its parameterized ones and
   // validates every `:id` as a UUID, so the literal 'holds' can never be read as an operación id.
   app.use('/api/operaciones', holdsRouter);
+  // Risk requirements with a hard deadline (PRD-02 R18/D13, CT-4). Same prefix-stacking rationale as
+  // holdsRouter: its paths carry a second segment ('/:id/riesgo-requerimientos') that operacionesRouter's
+  // single-segment `GET /:id` cannot shadow, and every `:id` here is validated as a UUID.
+  app.use('/api/operaciones', operacionRequerimientosRouter);
+  // The work queue the control tower reads: open requerimientos and the ones about to expire.
+  app.use('/api/riesgo-requerimientos', riesgoRequerimientosRouter);
   // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
   // role can be granted exactly this prefix and nothing else (§13).
   app.use('/api/campo', campoRouter);

@@ -71,6 +71,13 @@ const TIPOS_ESPEJO_SIEMPRE = new Set<string>([
   'HOLD_GLOBAL_ABIERTO',
   'HOLD_GLOBAL_CERRADO',
   'RETENCION_CREADA',
+  // The risk requirement with a hard deadline (R18/D13) and its CT-4 expiry. All three are mirrored:
+  // the emission is a promise made to the client on the team's behalf, the expiry is a freeze, and
+  // the resolution is what tells a coordinator the cargo can move again. Rare and human-consequential,
+  // which is exactly the bar for the shared inbox.
+  'REQUERIMIENTO_EMITIDO',
+  'REQUERIMIENTO_VENCIDO',
+  'REQUERIMIENTO_RESUELTO',
   // a best-effort ingest step that failed — the whole point is that it stops being invisible
   'INGESTA_INCIDENCIA',
 ]);
@@ -232,6 +239,25 @@ const FORMATEADORES: Record<string, (p: Record<string, unknown>) => string> = {
     const que = p.guia ? `guía ${String(p.guia)}` : `alcance ${String(p.alcance ?? 'operación')}`;
     const oficio = p.oficioReferencia ? ` (oficio ${String(p.oficioReferencia)})` : '';
     return `🚫 RETENCIÓN — la autoridad retuvo ${que}${oficio}: ${String(p.motivo ?? 'sin motivo')}`;
+  },
+  // R18. The deadline is the whole message — a note that says "requerimiento emitido" without saying
+  // by when is not actionable. `notificacion` is spelled out because `omitida` means the client has
+  // NOT been told and the clock is not running (SMTP unprovisioned, #22).
+  REQUERIMIENTO_EMITIDO: (p) => {
+    const guia = p.guia ? ` guía ${String(p.guia)}` : '';
+    const plazo = fechaCorta(p.venceAt);
+    const aviso = p.notificacion === 'enviado' ? '' : ` · ⚠️ cliente NO notificado (${String(p.notificacion ?? 'sin envío')})`;
+    return `📄 REQUERIMIENTO — riesgo${guia}: el cliente debe resolver${plazo ? ` antes del ${plazo}` : ''}${aviso}`;
+  },
+  REQUERIMIENTO_VENCIDO: (p) => {
+    const guia = p.guia ? ` guía ${String(p.guia)}` : '';
+    return `⏰ REQUERIMIENTO VENCIDO${guia} — ${String(p.efecto ?? 'se abre hold de riesgo (CT-4).')}`;
+  },
+  REQUERIMIENTO_RESUELTO: (p) => {
+    const guia = p.guia ? ` guía ${String(p.guia)}` : '';
+    const tiempo = p.aTiempo === false ? ' (fuera de plazo, aceptado)' : '';
+    const sigue = p.holdActivo ? ' · la operación sigue con hold' : '';
+    return `✅ REQUERIMIENTO RESUELTO${guia}${tiempo} — riesgo liberado${sigue}`;
   },
   INGESTA_INCIDENCIA: (p) =>
     `🛠️ INGESTA_INCIDENCIA — falló el paso «${String(p.paso ?? 'desconocido')}»: ${String(p.error ?? 'sin detalle')}`,

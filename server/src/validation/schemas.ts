@@ -352,3 +352,99 @@ export const retencionParam = z.object({
   id: z.string().uuid('El id de la operación debe ser un UUID.'),
   rid: z.string().uuid('El id de la retención debe ser un UUID.'),
 });
+
+// ---------------------------------------------------------------------------------------------
+// riesgo_requerimientos — the risk→client bridge with a hard deadline (PRD-02 R18/D13, CT-4)
+//
+// Two things are required and never optional: WHAT is wrong (`reasonCodes`, or a `detalle` the
+// client can act on) and WHO decided (the authenticated caller). A demand that cannot say what it
+// wants is a delay with paperwork, and this one can end with a client's cargo frozen.
+// ---------------------------------------------------------------------------------------------
+
+/** Shared with the requerimientos routes, which live on the /api/operaciones prefix too. */
+export const operacionIdParam = z.object({
+  id: z.string().uuid('El id de la operación debe ser un UUID.'),
+});
+
+export const requerimientoIdParam = z.object({
+  id: z.string().uuid('El id del requerimiento debe ser un UUID.'),
+});
+
+/**
+ * One entry of the risk engine's `ReasonCode[]` (shared/risk/signals.ts). Validated loosely on
+ * purpose — `signalId` is the only field this system reads back, and rejecting a ruleset that grew a
+ * field would break emission for the exact findings the client most needs to hear about.
+ */
+const reasonCode = z
+  .object({
+    signalId: z.string().min(1),
+    points: z.number().optional(),
+    weight: z.number().optional(),
+    detail: z.string().optional(),
+  })
+  .passthrough();
+
+export const requerimientoEmitirBody = z
+  .object({
+    reasonCodes: z.array(reasonCode).default([]),
+    rulesetVersion: textoOpcional,
+    rulesetHash: textoOpcional,
+    /** Free text the client reads, in English (N6). */
+    detalle: textoOpcional,
+    operacionGuiaId: z.string().uuid('operacionGuiaId debe ser un UUID.').optional(),
+    shipmentId: z.string().uuid('shipmentId debe ser un UUID.').optional(),
+    /**
+     * The offload window added to the caso's ETA (D13). Omitted → the configured default. Capped at
+     * a week: a "hard deadline" a month out is not a deadline, it is a way of never deciding.
+     */
+    ventanaHoras: z.preprocess(
+      (v) => (v === '' || v === null || v === undefined ? undefined : v),
+      z.coerce.number().positive('ventanaHoras debe ser mayor que cero.').max(168).optional(),
+    ),
+    /**
+     * An explicit deadline, for the caso whose `eta_pais` is unknown (a prealerta that never declared
+     * a flight). Required in that case — see routes/riesgoRequerimientos.ts — because inventing a
+     * deadline from `now()` would silently shorten the window the client was promised.
+     */
+    venceAt: fechaHoraOpcional,
+    /** Overrides the client-catalog address for this one demand. */
+    destinatarioEmail: z.preprocess(
+      (v) => (v === '' || v === null || v === undefined ? undefined : v),
+      z.string().email('destinatarioEmail debe ser un correo válido.').optional(),
+    ),
+  })
+  .refine((b) => b.reasonCodes.length > 0 || (b.detalle ?? '').trim().length > 0, {
+    message:
+      'Un requerimiento debe decir qué está mal: envía `reasonCodes` del motor de riesgo o un `detalle`.',
+    path: ['reasonCodes'],
+  });
+export type RequerimientoEmitirBody = z.infer<typeof requerimientoEmitirBody>;
+
+export const requerimientoResolverBody = z.object({
+  /** Trimmed-nonempty: "resolved" with no note is indistinguishable from someone closing a ticket. */
+  nota: z
+    .string()
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, 'La `nota` es obligatoria: hay que decir cómo se resolvió.'),
+  evidenciaFileId: z.string().uuid('evidenciaFileId debe ser un UUID.').optional(),
+});
+export type RequerimientoResolverBody = z.infer<typeof requerimientoResolverBody>;
+
+export const requerimientoCancelarBody = z.object({
+  motivo: z
+    .string()
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, 'El `motivo` es obligatorio: retirar una exigencia debe quedar explicado.'),
+});
+export type RequerimientoCancelarBody = z.infer<typeof requerimientoCancelarBody>;
+
+export const requerimientoListaQuery = z.object({
+  estado: z.enum(['abierto', 'resuelto', 'vencido', 'cancelado', 'todos']).default('abierto'),
+  /** "About to expire": the control tower's countdown column (PRD-02 §12). */
+  porVencerHoras: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? undefined : v),
+    z.coerce.number().positive().max(720).optional(),
+  ),
+  operacionId: z.string().uuid('operacionId debe ser un UUID.').optional(),
+});
+export type RequerimientoListaQuery = z.infer<typeof requerimientoListaQuery>;

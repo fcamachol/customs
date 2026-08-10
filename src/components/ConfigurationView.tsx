@@ -379,11 +379,39 @@ interface DeleteCounts {
   pedimentos: number;
   shipments: number;
   files: number;
+  operaciones: number;
+  prealertas: number;
+  despachos: number;
+  pods: number;
+  facturas: number;
+}
+
+// Mirrors the route's response — see server/src/routes/admin.ts. Optional because a caller could,
+// in principle, be talking to an older server; the UI degrades to the base message rather than throw.
+interface DemoResetSuperficies {
+  manifiestos: boolean;
+  archivos: boolean;
+  operaciones: boolean;
+  catalogosDurables: boolean;
+}
+
+interface DemoResetConservado {
+  catalogosDurables: string[];
+  transportistas: number;
+  convenios: number;
+}
+
+interface DemoResetResponse {
+  deleted: DeleteCounts;
+  superficies?: DemoResetSuperficies;
+  conservado?: DemoResetConservado;
 }
 
 function DemoResetCard({ onToast, onReset }: { onToast: (msg: string) => void; onReset: () => void }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
+  // Default UNCHECKED: the pre-PRD-02 behaviour (manifest graph only) stays the one-click default.
+  const [incluirOperaciones, setIncluirOperaciones] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // The destructive action stays disabled until the operator types the exact word.
@@ -398,9 +426,17 @@ function DemoResetCard({ onToast, onReset }: { onToast: (msg: string) => void; o
     if (!canConfirm || busy) return;
     setBusy(true);
     try {
-      const { deleted } = await apiPost<{ deleted: DeleteCounts }>('/api/admin/demo-reset', {});
+      const body = incluirOperaciones ? { incluirOperaciones: true } : {};
+      const { deleted, superficies, conservado } = await apiPost<DemoResetResponse>('/api/admin/demo-reset', body);
       const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
-      onToast(`🔄 ${plural(deleted.manifests, 'manifiesto')} y ${plural(deleted.pedimentos, 'pedimento')} eliminados.`);
+      let msg = `🔄 ${plural(deleted.manifests, 'manifiesto')} y ${plural(deleted.pedimentos, 'pedimento')} eliminados.`;
+      // Only the wider surface earns the extra sentence — the response says whether it actually ran.
+      if (superficies?.operaciones) {
+        msg += ` También ${plural(deleted.despachos, 'despacho')}, ${plural(deleted.pods, 'POD')}, ` +
+          `${plural(deleted.facturas, 'factura')} y la bitácora de operaciones. Catálogos durables conservados: ` +
+          `${plural(conservado?.transportistas ?? 0, 'transportista')}, ${plural(conservado?.convenios ?? 0, 'convenio')}.`;
+      }
+      onToast(msg);
       closeModal();
       onReset();
     } catch (e) {
@@ -418,6 +454,15 @@ function DemoResetCard({ onToast, onReset }: { onToast: (msg: string) => void; o
         sus archivos asociados para iniciar una demostración desde cero. Los usuarios, clientes, plataformas,
         catálogos y la bitácora de auditoría se conservan. Esta acción no se puede deshacer.
       </p>
+      <label className="mb-4 flex items-center gap-2 text-sm text-amber-900">
+        <input
+          type="checkbox"
+          checked={incluirOperaciones}
+          onChange={(e) => setIncluirOperaciones(e.target.checked)}
+          className="h-4 w-4 rounded border-amber-300 text-navy-700 focus:ring-navy-500/25"
+        />
+        Incluir operaciones (despachos, PODs, facturas, holds y bitácora)
+      </label>
       <button
         type="button"
         onClick={() => setModalOpen(true)}
@@ -431,6 +476,12 @@ function DemoResetCard({ onToast, onReset }: { onToast: (msg: string) => void; o
           Se eliminarán de forma permanente <strong>todos los manifiestos y pedimentos</strong> junto con sus
           envíos, escaneos y archivos. Los usuarios, clientes, catálogos y la bitácora de auditoría se conservan.
         </p>
+        {incluirOperaciones && (
+          <p className="mt-3 text-sm font-medium text-red-700">
+            También se eliminará la bitácora de operaciones (ledger), despachos, PODs, facturas, holds y
+            requerimientos vigentes. Los catálogos durables — transportistas, convenios y tarifas — se conservan.
+          </p>
+        )}
         <p className="mt-3 text-sm text-slate-700">
           Escriba <strong>BORRAR</strong> para confirmar.
         </p>

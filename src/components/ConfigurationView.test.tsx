@@ -355,7 +355,10 @@ describe('ConfigurationView — Modo demostración (demo-reset card)', () => {
     );
     await waitFor(() => expect(screen.getByText('Modo demostración')).toBeTruthy());
 
+    // Unchecked (the default): the confirm modal carries no extra warning, and the body is the
+    // pre-PRD-02 shape — no incluirOperaciones key at all.
     fireEvent.click(screen.getByRole('button', { name: /Restablecer datos de demostración/i }));
+    expect(screen.queryByText(/bitácora de operaciones \(ledger\)/i)).toBeNull();
     fireEvent.change(screen.getByLabelText(/Confirmar escribiendo BORRAR/i), { target: { value: 'BORRAR' } });
     fireEvent.click(screen.getByRole('button', { name: /Eliminar todo/i }));
 
@@ -364,6 +367,57 @@ describe('ConfigurationView — Modo demostración (demo-reset card)', () => {
     });
     await waitFor(() => {
       expect(onToast).toHaveBeenCalledWith('🔄 3 manifiestos y 5 pedimentos eliminados.');
+    });
+  });
+
+  it('the "Incluir operaciones" checkbox is unchecked by default', async () => {
+    const { apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'admin', demoMode: true }));
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={() => {}} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(screen.getByText('Modo demostración')).toBeTruthy());
+    const checkbox = screen.getByLabelText(/Incluir operaciones/i) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('checked: posts { incluirOperaciones: true }, warns about the wider blast radius, and shows the ops counts in the toast', async () => {
+    const { apiGet, apiPost } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockDemoApi({ role: 'super_admin', demoMode: true }));
+    vi.mocked(apiPost).mockResolvedValue({
+      deleted: { manifests: 1, pedimentos: 2, shipments: 1, files: 1, operaciones: 4, prealertas: 0, despachos: 3, pods: 2, facturas: 1 },
+      superficies: { manifiestos: true, archivos: true, operaciones: true, catalogosDurables: false },
+      conservado: { catalogosDurables: ['transportistas', 'convenios'], transportistas: 5, convenios: 2 },
+    });
+    const onToast = vi.fn();
+
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={onToast} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(screen.getByText('Modo demostración')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText(/Incluir operaciones/i));
+    fireEvent.click(screen.getByRole('button', { name: /Restablecer datos de demostración/i }));
+
+    // The confirm step names the bigger blast radius: the ledger goes, catalogs/convenios survive.
+    expect(screen.getByText(/bitácora de operaciones \(ledger\)/i)).toBeTruthy();
+    expect(screen.getByText(/catálogos durables — transportistas, convenios y tarifas — se conservan/i)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Confirmar escribiendo BORRAR/i), { target: { value: 'BORRAR' } });
+    fireEvent.click(screen.getByRole('button', { name: /Eliminar todo/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/api/admin/demo-reset', { incluirOperaciones: true });
+    });
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(
+        '🔄 1 manifiesto y 2 pedimentos eliminados. También 3 despachos, 2 PODs, 1 factura y la bitácora de ' +
+        'operaciones. Catálogos durables conservados: 5 transportistas, 2 convenios.',
+      );
     });
   });
 });

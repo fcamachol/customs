@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  ESTADOS_DESPACHO,
+  ESTADOS_FIRMA_CONVENIO,
+  ESTADOS_TRANSPORTISTA,
+  TIPOS_UNIDAD_IDS,
+} from '../../../shared/operaciones/catalogos';
 
 // Shared role enum. `tramitador` is creatable through the users API (PRD-02 §13): it is the field
 // role, so somebody has to be able to hand out accounts for it. `super_admin` stays out on purpose —
@@ -351,4 +357,323 @@ export type RetencionBody = z.infer<typeof retencionBody>;
 export const retencionParam = z.object({
   id: z.string().uuid('El id de la operación debe ser un UUID.'),
   rid: z.string().uuid('El id de la retención debe ser un UUID.'),
+});
+
+// ---------------------------------------------------------------------------------------------
+// despacho y catálogos de transporte (PRD-02 R21–R29, R36/D14, R38/D15)
+//
+// The one rule worth stating up front, because it shapes half the schemas below: decision D7 says
+// UNIT TYPE FIRST, CARRIER SECOND. So `tipoUnidad` is required wherever a carrier could be chosen —
+// on the options query and on despacho creation — and a carrier can never be supplied without it.
+// That is not a UI convenience being re-stated; a request that names a transportista with no unit
+// type cannot be answered, because the rate that makes the choice meaningful is indexed by type.
+// ---------------------------------------------------------------------------------------------
+
+/** R23 / D8 — the full unit-type glossary, sourced from the shared catalog so it cannot drift. */
+export const tipoUnidadEnum = z.enum(
+  TIPOS_UNIDAD_IDS as unknown as [string, ...string[]],
+  { errorMap: () => ({ message: `tipoUnidad debe ser uno de: ${TIPOS_UNIDAD_IDS.join(', ')}.` }) },
+);
+
+const estadoDespachoEnum = z.enum(
+  ESTADOS_DESPACHO as unknown as [string, ...string[]],
+  { errorMap: () => ({ message: `estado debe ser uno de: ${ESTADOS_DESPACHO.join(', ')}.` }) },
+);
+
+/** Trimmed, non-empty free text. */
+const textoRequerido = z
+  .string()
+  .transform((s) => s.trim())
+  .refine((s) => s.length > 0, 'Este campo es obligatorio.');
+
+/** YYYY-MM-DD. `fecha_operacion` is a DATE column: the operating day, not an instant. */
+const fechaISO = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha debe tener el formato YYYY-MM-DD.');
+
+const fechaOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  fechaISO.optional(),
+);
+
+/** Money. Coerced (forms send strings) and non-negative — a negative tariff is a data-entry slip. */
+const montoOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().nonnegative('El monto no puede ser negativo.').optional(),
+);
+
+const enteroOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().int().nonnegative('Debe ser un entero no negativo.').optional(),
+);
+
+/** Latitude/longitude, range-checked so a transposed pair fails here and not inside the estimator. */
+const latOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().min(-90).max(90).optional(),
+);
+const lngOpcional = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().min(-180).max(180).optional(),
+);
+
+// ── params ───────────────────────────────────────────────────────────────────────────────────
+export const despachoParam = z.object({
+  id: z.string().uuid('El id del despacho debe ser un UUID.'),
+});
+
+export const despachoPartidaParam = z.object({
+  id: z.string().uuid('El id del despacho debe ser un UUID.'),
+  pid: z.string().uuid('El id de la partida debe ser un UUID.'),
+});
+
+export const transportistaParam = z.object({
+  id: z.string().uuid('El id del transportista debe ser un UUID.'),
+});
+
+export const transportistaUnidadParam = z.object({
+  id: z.string().uuid('El id del transportista debe ser un UUID.'),
+  uid: z.string().uuid('El id de la unidad debe ser un UUID.'),
+});
+
+export const transportistaConvenioParam = z.object({
+  id: z.string().uuid('El id del transportista debe ser un UUID.'),
+  cid: z.string().uuid('El id del convenio debe ser un UUID.'),
+});
+
+export const clientDireccionParam = z.object({
+  id: z.string().uuid('El id del cliente debe ser un UUID.'),
+  did: z.string().uuid('El id de la dirección debe ser un UUID.'),
+});
+
+// ── transportistas y su flota (R24) ──────────────────────────────────────────────────────────
+export const transportistaBody = z.object({
+  razonSocial: textoRequerido,
+  // RFC uppercased on the way in: it carries a UNIQUE constraint, and 'abc010101aaa' and
+  // 'ABC010101AAA' are the same fiscal person — accepting both would split one carrier in two.
+  rfc: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined),
+    z.string().optional(),
+  ),
+  contactoNombre: textoOpcional,
+  contactoTelefono: textoOpcional,
+  contactoEmail: textoOpcional,
+  estado: z.enum(ESTADOS_TRANSPORTISTA as unknown as [string, ...string[]]).optional(),
+  documentosOk: z.boolean().optional(),
+});
+export type TransportistaBody = z.infer<typeof transportistaBody>;
+
+export const transportistaUpdateBody = transportistaBody.partial();
+export type TransportistaUpdateBody = z.infer<typeof transportistaUpdateBody>;
+
+export const unidadBody = z.object({
+  // Uppercased and stripped of separators for the same reason as the RFC: 'ABC-12-34' and 'ABC1234'
+  // are one vehicle, and the UNIQUE constraint is per carrier.
+  placas: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase().replace(/[\s-]/g, '') : v),
+    textoRequerido,
+  ),
+  tipoUnidad: tipoUnidadEnum,
+  numeroEconomico: textoOpcional,
+  vigenciaSeguro: fechaOpcional,
+  vigenciaVerificacion: fechaOpcional,
+  activo: z.boolean().optional(),
+});
+export type UnidadBody = z.infer<typeof unidadBody>;
+
+export const unidadUpdateBody = unidadBody.partial();
+export type UnidadUpdateBody = z.infer<typeof unidadUpdateBody>;
+
+// ── convenios y tarifas (R25 / D9) ───────────────────────────────────────────────────────────
+export const convenioBody = z.object({
+  vigenciaDesde: fechaOpcional,
+  vigenciaHasta: fechaOpcional,
+  fileId: z.string().uuid('fileId debe ser un UUID.').optional(),
+  // Deliberately NOT accepting 'firmado' here: a convenio becomes signed through /firmar, which is
+  // the only path that records who signed it and under what reference (D9). Letting a POST declare
+  // itself signed would make the signature a word somebody typed.
+  estadoFirma: z.enum(['borrador', 'enviado'] as const).optional(),
+});
+export type ConvenioBody = z.infer<typeof convenioBody>;
+
+export const convenioFirmaBody = z.object({
+  firmaProveedor: textoRequerido,
+  firmaReferencia: textoRequerido,
+  firmaEvidenciaFileId: z.string().uuid('firmaEvidenciaFileId debe ser un UUID.').optional(),
+  firmadoAt: fechaHoraOpcional,
+});
+export type ConvenioFirmaBody = z.infer<typeof convenioFirmaBody>;
+
+export const tarifaBody = z.object({
+  tipoUnidad: tipoUnidadEnum,
+  // Absent = general rate for this unit type, any destination (see the migration).
+  direccionEntregaId: z.string().uuid('direccionEntregaId debe ser un UUID.').optional(),
+  tarifa: z.coerce.number().nonnegative('La tarifa no puede ser negativa.'),
+  moneda: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined),
+    z.string().length(3, 'La moneda es un código ISO de 3 letras.').optional(),
+  ),
+  vigenciaDesde: fechaOpcional,
+  vigenciaHasta: fechaOpcional,
+});
+export type TarifaBody = z.infer<typeof tarifaBody>;
+
+// ── direcciones de entrega del cliente (R38 / D15) ───────────────────────────────────────────
+export const clientDireccionBody = z.object({
+  alias: textoRequerido,
+  direccion: textoOpcional,
+  ciudad: textoOpcional,
+  estado: textoOpcional,
+  cp: textoOpcional,
+  lat: latOpcional,
+  lng: lngOpcional,
+  contactoNombre: textoOpcional,
+  contactoTelefono: textoOpcional,
+  horario: textoOpcional,
+  activo: z.boolean().optional(),
+});
+export type ClientDireccionBody = z.infer<typeof clientDireccionBody>;
+
+export const clientDireccionUpdateBody = clientDireccionBody.partial();
+export type ClientDireccionUpdateBody = z.infer<typeof clientDireccionUpdateBody>;
+
+// ── despachos (R21, R22/D7, R28, R29) ────────────────────────────────────────────────────────
+
+/**
+ * The D7 gate. `tipoUnidad` is REQUIRED — this is the query that answers "which carriers can I
+ * call?", and refusing to answer it without a unit type is the mechanism that stops the phone calls
+ * Fernando's argument was about.
+ */
+export const despachoOpcionesQuery = z.object({
+  tipoUnidad: tipoUnidadEnum,
+  direccionEntregaId: z.string().uuid('direccionEntregaId debe ser un UUID.').optional(),
+  fecha: fechaOpcional,
+});
+export type DespachoOpcionesQuery = z.infer<typeof despachoOpcionesQuery>;
+
+export const despachoListQuery = z.object({
+  fecha: fechaOpcional,
+  estado: estadoDespachoEnum.optional(),
+  transportistaId: z.string().uuid('transportistaId debe ser un UUID.').optional(),
+});
+
+export const despachoCrearBody = z.object({
+  fechaOperacion: fechaISO,
+  /** D7: notNull in the table, required here, and it comes FIRST in the shape on purpose. */
+  tipoUnidad: tipoUnidadEnum,
+  // Optional at creation: a trip is planned before a carrier is engaged. Supplying a unit without a
+  // carrier is rejected in the route (and by a table CHECK), because a vehicle belonging to nobody
+  // cannot be called.
+  transportistaId: z.string().uuid('transportistaId debe ser un UUID.').optional(),
+  unidadId: z.string().uuid('unidadId debe ser un UUID.').optional(),
+  placas: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase().replace(/[\s-]/g, '') : undefined),
+    z.string().optional(),
+  ),
+  operadorNombre: textoOpcional,
+  direccionEntregaId: z.string().uuid('direccionEntregaId debe ser un UUID.').optional(),
+  citaAt: fechaHoraOpcional,
+  folio: textoOpcional,
+  comentarios: textoOpcional,
+});
+export type DespachoCrearBody = z.infer<typeof despachoCrearBody>;
+
+export const despachoActualizarBody = z.object({
+  tipoUnidad: tipoUnidadEnum.optional(),
+  // `null` is meaningful and distinct from absent: it UNASSIGNS. A coordinator who has to drop a
+  // carrier needs a way to say so that is not "leave the old one and hope".
+  transportistaId: z.string().uuid().nullable().optional(),
+  unidadId: z.string().uuid().nullable().optional(),
+  placas: textoOpcional,
+  operadorNombre: textoOpcional,
+  direccionEntregaId: z.string().uuid().nullable().optional(),
+  citaAt: fechaHoraOpcional,
+  comentarios: textoOpcional,
+  motivo: textoOpcional,
+});
+export type DespachoActualizarBody = z.infer<typeof despachoActualizarBody>;
+
+/** R29: one more guía onto this truck. */
+export const despachoPartidaBody = z.object({
+  operacionId: z.string().uuid('operacionId debe ser un UUID.'),
+  operacionGuiaId: z.string().uuid('operacionGuiaId debe ser un UUID.').optional(),
+  pedimentoId: z.string().uuid('pedimentoId debe ser un UUID.').optional(),
+  cartonesPlaneados: enteroOpcional,
+  piezas: enteroOpcional,
+  // Absent = append at the end. R14's consecutive is assigned by the server so it cannot have holes.
+  ordenCarga: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? undefined : v),
+    z.coerce.number().int().positive('ordenCarga debe ser un entero positivo.').optional(),
+  ),
+});
+export type DespachoPartidaBody = z.infer<typeof despachoPartidaBody>;
+
+export const despachoPartidaCargaBody = z.object({
+  cartonesCargados: enteroOpcional,
+});
+
+/** R21 — one step of the despacho FSM. */
+export const despachoEstadoBody = z.object({
+  estado: estadoDespachoEnum,
+  /** When it happened, per whoever saw it. Same discipline as campo: distinct from registrado_at. */
+  ocurridoAt: fechaHoraOpcional,
+  motivo: textoOpcional,
+});
+export type DespachoEstadoBody = z.infer<typeof despachoEstadoBody>;
+
+/**
+ * CT-7 / D10 — reassign the already-contracted unit to other cargo instead of cancelling.
+ *
+ * `motivo` is REQUIRED and there is no default. This is the one action in the module that touches
+ * money without a new negotiation, and §8.8's governance rule is explicit: the engine may propose
+ * it, a human confirms it, and the confirmation is logged as an override with a stated reason.
+ */
+export const despachoReasignarBody = z.object({
+  motivo: motivoRequerido,
+  fechaOperacion: fechaOpcional,
+  direccionEntregaId: z.string().uuid('direccionEntregaId debe ser un UUID.').optional(),
+  citaAt: fechaHoraOpcional,
+  folio: textoOpcional,
+  /** Carry the current load over to the new trip, or start empty (the usual case). */
+  copiarPartidas: z.boolean().optional(),
+});
+export type DespachoReasignarBody = z.infer<typeof despachoReasignarBody>;
+
+/** R36/D14 — recompute the estimate. Never invents an origin; see routes/despachos.ts. */
+export const despachoEtaBody = z.object({
+  salidaAt: fechaHoraOpcional,
+  origenIata: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim().toUpperCase() : undefined),
+    z.string().length(3, 'origenIata es un código IATA de 3 letras.').optional(),
+  ),
+  origenLat: latOpcional,
+  origenLng: lngOpcional,
+});
+export type DespachoEtaBody = z.infer<typeof despachoEtaBody>;
+
+/** R36/D14 — the observed arrival, stored beside the estimate and never over it. */
+export const despachoArriboBody = z.object({
+  arriboAt: fechaHoraOpcional,
+  motivo: textoOpcional,
+});
+export type DespachoArriboBody = z.infer<typeof despachoArriboBody>;
+
+// ── planeación (R14, R19, P4) ────────────────────────────────────────────────────────────────
+export const planFechaQuery = z.object({
+  fecha: fechaOpcional,
+});
+
+export const planPublicarBody = z.object({
+  fechaOperacion: fechaISO,
+  /**
+   * Required from version 2 onward (checked in the route, where the version number is known): a plan
+   * that changed for no stated reason is exactly the Excel problem with better storage.
+   */
+  motivo: textoOpcional,
+  destinatarios: z.array(z.string().min(1)).optional(),
+});
+export type PlanPublicarBody = z.infer<typeof planPublicarBody>;
+
+export const planPublicacionParam = z.object({
+  id: z.string().uuid('El id de la publicación debe ser un UUID.'),
 });

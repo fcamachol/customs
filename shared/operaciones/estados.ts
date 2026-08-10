@@ -108,6 +108,31 @@ export const TIPOS_EVENTO = [
   'RETENCION_CREADA',
   'RETENCION_LIBERADA',
   /**
+   * Despacho — one truck, one trip (R21–R29). These land on the timeline of EVERY caso riding on
+   * the unit, not on a trip-level log, for the same reason the global hold does: six weeks later the
+   * question arrives one shipment at a time ("why did guía X leave on Thursday and not Tuesday?"),
+   * and each timeline has to answer it without the reader knowing which trip to look up first.
+   *
+   * DESPACHO_ASIGNADO is separate from DESPACHO_CREADO because of decision D7. Creating the trip
+   * fixes the UNIT TYPE; assigning it names the carrier, the plates and the agreed rate. Those are
+   * two decisions taken at different moments by different people, and collapsing them into one event
+   * would erase the ordering the decision exists to enforce.
+   */
+  'DESPACHO_CREADO',
+  'DESPACHO_ASIGNADO',
+  'DESPACHO_ACTUALIZADO',
+  'DESPACHO_ESTADO',
+  'DESPACHO_PARTIDA_AGREGADA',
+  'DESPACHO_PARTIDA_RETIRADA',
+  /** CT-7 / D10: the contracted unit moved to other cargo instead of being cancelled. */
+  'DESPACHO_REASIGNADO',
+  'DESPACHO_CANCELADO',
+  /** R36 / D14: the calculated arrival. Distinct from ARRIBO_DESTINO, which is the observed one. */
+  'ETA_CALCULADA',
+  'ARRIBO_DESTINO',
+  /** R19 / P4: a new version of the day's plan went out, with its diff. */
+  'PLAN_PUBLICADO',
+  /**
    * A post-commit step of the ingest failed — manifest parse, risk scoring, flight lookup, the
    * operation-level cotejo, or the AGORA mirror.
    *

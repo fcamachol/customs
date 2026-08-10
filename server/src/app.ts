@@ -25,6 +25,9 @@ import { operacionesRouter } from './routes/operaciones';
 import { opsRouter } from './routes/ops';
 import { holdsRouter } from './routes/holds';
 import { campoRouter } from './routes/campo';
+import { despachosRouter } from './routes/despachos';
+import { planeacionRouter } from './routes/planeacion';
+import { transportistasRouter } from './routes/transportistas';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -93,6 +96,13 @@ export function createApp(): Express {
   // Field capture (PRD-02 R11, R30–R35). Mounted separately from /api/operaciones so the tramitador
   // role can be granted exactly this prefix and nothing else (§13).
   app.use('/api/campo', campoRouter);
+  // Despacho and transport (PRD-02 R21–R29, R36/D14). Three prefixes of their own rather than
+  // sub-paths of /api/operaciones, because a despacho is NOT a property of one caso: one unit
+  // carries several casos to one destination (R29), so hanging it off a single operación id would
+  // make either the truck or the cargo invisible.
+  app.use('/api/transportistas', transportistasRouter);
+  app.use('/api/despachos', despachosRouter);
+  app.use('/api/planeacion', planeacionRouter);
   // Machine-to-machine: authenticated by HMAC signature / shared secret rather than a JWT, because
   // the callers are AGORA and the scheduler, neither of which has a session.
   app.use('/api/prealertas', prealertasRouter);

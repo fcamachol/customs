@@ -30,6 +30,7 @@ import {
 } from './routes/riesgoRequerimientos';
 import { replanRouter } from './routes/replan';
 import { campoRouter } from './routes/campo';
+import { conveniosRouter } from './routes/convenios';
 import { globalLimiter } from './middleware/rateLimit';
 import { rejectEnrollmentScope } from './auth/middleware';
 import { ValidationError } from './validation/middleware';
@@ -111,6 +112,11 @@ export function createApp(): Express {
   // Machine-to-machine: authenticated by HMAC signature / shared secret rather than a JWT, because
   // the callers are AGORA and the scheduler, neither of which has a session.
   app.use('/api/prealertas', prealertasRouter);
+  // Convenios (PRD-02 Excel item 8, R25/D9): upload + NOM-151 signature via Cincel. Its
+  // `/cincel/webhook` route is the same "no JWT, HMAC-verified" shape as prealertasRouter's inbound
+  // webhook, mounted under this same prefix rather than a separate one since it is one small piece
+  // of a router that is mostly JWT-authenticated.
+  app.use('/api/convenios', conveniosRouter);
   app.use('/api/ops', opsRouter);
   app.use('/api', consolidatedRouter);
   // Serve the built frontend when running as a combined single-container deploy.

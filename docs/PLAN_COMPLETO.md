@@ -3,7 +3,12 @@
 **Un solo documento con todo el plan:** qué se prometió, qué está construido y desplegado, qué
 falta, en qué orden, quién lo bloquea, y cómo se demuestra.
 
-**Estado:** 2026-08-10 · producción `customs-v2` en `main` · repo `fercamachol/customs`
+**Estado:** 2026-08-10 (commits `78da50f..684849f`) · producción `customs-v2` en `main` ·
+repo `fercamachol/customs`. Todo el backlog de código de este documento está cerrado; lo que
+queda pendiente es exclusivamente: infraestructura de usuario (volumen persistente, #39b),
+credenciales de terceros que activan integraciones ya construidas (SMTP, evolution-api,
+Cincel), rotación de secretos (#37), la unificación de convenios (diseñada, no construida) y
+un lote de vistas de frontend todavía sin montar sobre APIs que ya existen. Ver §3–§5.
 **Documentos hermanos** (no duplicar, este los resume): `docs/HANDOFF.md` (guía de continuación
 operativa), `docs/PRD_sistema_operaciones.md` (spec maestra + transcripción + códigos de requisito),
 `docs/PRD_sistema_operaciones_agora.md` (frontera de integración con AGORA), `docs/DEMO_E2E.md`
@@ -98,8 +103,8 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 | R33 | Modulación con **captura diferida** (sin celular en el semáforo): `ocurrido_at ≠ registrado_at` | ✅ |
 | R34, D16 | Semáforo **green/red en inglés** (el cliente lo ve) | ✅ |
 | R35 | Salida de rojo + **tiempo en rojo** (KPI) | ✅ `tiempoEnRojoMin` calculado |
-| R36, D14 | Arribo estimado (tráfico) vs arribo real | 📋 estimado por calcular; real capturable |
-| R21–R29 | Catálogo transportistas/unidades/CAAT/placas, pedimento asignado, tipo-unidad-antes-de-línea (D7) | 📋 #29 |
+| R36, D14 | Arribo estimado (tráfico) vs arribo real | ✅ `shared/operaciones/eta.ts` calcula el estimado determinista del último tramo (aduana→domicilio); `POST /api/despachos/:id/arribo` graba `arribo_real` y nunca toca `eta_calculado` — la comparación vive en `shared/operaciones/leadTimes.ts` (#29/#32) |
+| R21–R29 | Catálogo transportistas/unidades/CAAT/placas, pedimento asignado, tipo-unidad-antes-de-línea (D7) | ✅ #29 — `transportistas.ts`/`despachos.ts`/`catalogs.ts`, migraciones `transportistas_catalogos`/`despachos`/`plan_publicaciones` |
 
 ### Banderas rojas · cotejo (R5)
 
@@ -120,7 +125,7 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 | — | Riesgo automático al llegar la prealerta | ✅ corre solo; `estado_documental` avanza |
 | R18, D13 | Requerimiento al cliente con **plazo duro** (vuelo + descarga) | ✅ #23 — tabla + plazo + barrido de vencimiento en el tick; el reloj sólo corre contra quien sí fue avisado |
 | CT-3/4/5/6 | Holds (CSA, riesgo, auditoría de autoridad global) y retención parcial de pallet | ✅ tablas + endpoints + materialización |
-| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | ✅ #26 — `shared/operaciones/replan.ts` ruleset `2026-08a` con hash; ejecuta solo excluir/reprogramar/hold/suspender/notificar y **propone** la reasignación con override registrado |
+| CT-1/2/7 | Motor de contingencias (replaneación automática, reasignación anti-flete-en-falso) | ✅ #26 — `shared/operaciones/replan.ts` ruleset `2026-08a` con hash; ejecuta solo excluir/reprogramar/hold/suspender/notificar y **propone** la reasignación con override registrado. Integrado (684849f): CT-7 ya lee `despachos` reales y nombra el viaje concreto en vez del indicio `estado_planeacion = 'asignada'`; `NOTIFICACION_REQUERIDA` se entrega de verdad tras el commit (SMTP/WhatsApp, con resultado por destinatario en `replan_acciones.payload`) en vez de sólo registrar la obligación |
 
 ### Visibilidad, reportes, financiero
 
@@ -131,11 +136,11 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 | — | **Campo** (los siete botones, móvil) | ✅ |
 | N1, N3 | Portal de autoridad + verificación de cadena de hash | ✅ (de PRD-01, ahora cubre logística) |
 | — | Tracking completo **dentro de AGORA** (idea del ticket) | ✅ espejo como notas privadas |
-| 5 (Excel) | Pre-planeación: mostrar en automático prealertas sin incidencia | 🟡 la detección de incidencias ya vive; la planeación editable/enviable es #29 |
-| 6 (Excel) | Reporte general por fecha/cliente, trazabilidad por MAWB | 🟡 trazabilidad por MAWB = timeline; el export operativo combinado es #32 |
-| 7 (Excel) | Dashboard (warehouse time, dispatch, transit, LT+LM) | 🟡 KPIs vivos en Torre; las fórmulas de lead time son una vista sobre timestamps ya capturados |
-| R43–R48 | Trazabilidad financiera guía↔pieza↔factura, proforma, reporte mensual | 📋 #32 |
-| 8 (Excel) | Contratos de clientes/proveedores importables | 📋 diseñado con firma NOM-151 (Cincel); fase 2 |
+| 5 (Excel) | Pre-planeación: mostrar en automático prealertas sin incidencia | ✅ backend #29 — `routes/planeacion.ts` (plan editable, `plan_publicaciones` con diffs, publicación con fan-out); 🟡 **falta montar `PlaneacionView` en el frontend** (la API existe, no hay pantalla) |
+| 6 (Excel) | Reporte general por fecha/cliente, trazabilidad por MAWB | ✅ `GET /api/reportes/operativo` (#32/Fase C, `routes/reportesOperativos.ts`, una fila por guía, exporta xlsx) + `TrazabilidadView.tsx` (f2ea038, quién se llevó cada guía) además del timeline en Prealertas |
+| 7 (Excel) | Dashboard (warehouse time, dispatch, transit, LT+LM) | ✅ backend — `GET /api/reportes/lead-times`, `shared/operaciones/leadTimes.ts` (`LEAD_TIME_RULESET_VERSION`, versionado y probado); 🟡 **no hay tiles en Torre de Control** — la aritmética existe, nadie la pinta todavía |
+| R43–R48 | Trazabilidad financiera guía↔pieza↔factura, proforma, reporte mensual | ✅ #32 (e40d646) — `client_tarifas`, `facturas`, `factura_partidas`, `routes/facturacion.ts`, reporte mensual por cliente; el vínculo vive en el sistema, no en el CFDI (D17); 🟡 **falta `FacturacionView`** en el frontend |
+| 8 (Excel) | Contratos de clientes/proveedores importables | ✅ código — `routes/convenios.ts` + `services/cincel.ts` (firma NOM-151 vía Cincel, migración `convenios`), upload+hash sin depender de Cincel; ⛔ firma real inactiva hasta que el usuario provea `CINCEL_API_KEY`/`CINCEL_WEBHOOK_SECRET`. La unificación con `transportista_convenios` (#29) está **diseñada, deliberadamente no construida** — ver la nota completa en `server/src/services/cincel.ts` (razón: vocabularios de estado distintos, `despachos.ts` ya lee `firmado`; medio-construirla dejaría convenios marcados "firmado" sin corresponsalía real) |
 
 ### Prueba y operación
 
@@ -143,69 +148,83 @@ Leyenda: ✅ vivo en producción · 🟡 parcial · ⛔ bloqueado por el usuario
 |---|---|---|
 | #38 | Runner E2E de capacidades completas | ✅ **27/27 en producción** (`npm --prefix server run demo:e2e`) |
 | #27 | Barrido de reconciliación de webhooks perdidos | ✅ |
-| #39 | **Volumen persistente para `/app/storage`** | ⛔ **CRÍTICO** — sin él cada deploy borra los bytes de evidencia |
-| #34 | Tarea programada de Coolify para el tick | ⛔ sin ella nada sondea solo |
-| #37 | Rotación de secretos expuestos en el build | ⛔ post-demo |
-| #36 | 34 fallas de test preexistentes | 📋 |
+| #39 | **Volumen persistente para `/app/storage`** | ✅ código (b5932d4) — `routes/files.ts` responde **410 con el hash** en vez de 500 sobre un blob perdido; `npm --prefix server run recover:evidence` re-descarga adjuntos desde AGORA y sólo escribe lo que coincide con el `content_hash` guardado (dry-run por default, `--apply` para escribir, exit 0 = todo explicado/nada falló, exit 1 = hay algo para ojos humanos). ⛔ **queda la mitad de infraestructura**: el usuario debe montar el volumen en Coolify (customs-v2 → Storages → `/app/storage` → redeploy) y luego correr `recover:evidence` contra producción para restaurar lo que aún se pueda |
+| #34 | Tarea programada de Coolify para el tick | ⛔ sin ella nada sondea solo (acción de usuario, 2 min) |
+| #37 | Rotación de secretos expuestos en el build | ⛔ operativo, post-demo (usuario) |
+| #36 | 34 fallas de test preexistentes | ✅ **cerrado** (f6c7fcf) — ambas suites en cero fallas; ver §7 para los conteos exactos verificados el 10-ago |
 
 ---
 
 ## 4. Roadmap
 
-### Hecho (14 entregables, desplegados y verificados el 6–10 ago)
+### Hecho — TODO el backlog de código está cerrado (commits `78da50f..684849f`, 10-ago)
 
 Ingesta de prealerta · parser del formato real · ingesta de manifiesto → riesgo automático · cotejo
 PA-01/02/03/04/05/07/08/10 · seguimiento de vuelo AeroAPI · resolución de cliente · app de campo
 (7 eventos + semáforo + foto) · holds y retenciones · espejo a AGORA · barrido de reconciliación ·
-Torre de Control · Prealertas · Campo · reparse · runner E2E.
+Torre de Control · Prealertas · Campo · reparse · runner E2E · **#36 ambas suites en cero fallas** ·
+**#39 código** (410 con hash + `recover:evidence`) · **#22 mailer** + **#23 requerimiento con plazo
+duro** · **#26 motor de contingencias** · **#31 fan-out WhatsApp** · **#29 despacho y catálogos de
+transporte** · **#30 POD firmado** + **#32 trazabilidad financiera** + reportes operativos/lead-times
+(Fase C) · **NOM-151/Cincel** para convenios de cliente · **TrazabilidadView** · pase de integración
+final (replan↔despachos reales, fan-out de `NOTIFICACION_REQUERIDA` en vivo, vocabulario compartido
+de guía-despachable, orden de fases del tick probado, 410 honesto en el frontend, demo-reset limpia
+las 25 tablas de ops).
 
-### Fase A — Estabilización (destraba todo lo demás; empezar aquí)
+Lo único que sigue abierto es lo que ninguna sesión puede cerrar sola: infraestructura de Coolify,
+credenciales de terceros, rotación de secretos, una unificación de diseño deliberadamente diferida, y
+un lote de vistas de frontend sobre APIs que ya funcionan. En detalle:
 
-1. **#39 Volumen persistente `/app/storage`** — CRÍTICO. Usuario monta el volumen; luego un
-   script re-descarga de AGORA los adjuntos perdidos verificando cada byte contra el hash guardado,
-   y `routes/files.ts` responde 410 honesto en vez de 500. Protege toda la evidencia.
-2. **#34 Tarea programada** del tick (usuario, 2 min). Sin esto "automático" no es autónomo.
-3. **#22 SMTP saliente** — código hecho (`services/mailer.ts`, reintento en el tick); falta la **app
-   password** (usuario). Sin ella el aviso no sale y #31 sigue esperando.
+### A — Bloqueado en infraestructura/usuario (el código ya está)
 
-### Fase B — Cerrar el ciclo operativo
+1. **#39b Volumen persistente `/app/storage`** — el script de recuperación y el 410 honesto están
+   hechos (`b5932d4`); falta que el usuario monte el volumen en Coolify (customs-v2 → Storages →
+   `/app/storage` → redeploy) y que una sesión corra `npm --prefix server run recover:evidence`
+   (dry-run primero, luego `-- --apply`) contra producción para restaurar lo recuperable.
+2. **#34 Tarea programada** del tick — sigue siendo 100% acción de usuario (Coolify Scheduled Tasks);
+   nada en el código puede sustituirla, por diseño (no hay scheduler en proceso).
+3. **#37 Rotación de secretos** — operativo, post-demo; ninguna sesión de código lo resuelve.
 
-4. ~~**#26 Motor de contingencias**~~ ✅ **hecho**. `shared/operaciones/replan.ts` (puro, ruleset
-   `2026-08a` con hash sha256), tablas `replan_evaluaciones`/`replan_acciones` (snapshot guardado =
-   decisión reproducible), rutas `POST/GET /api/operaciones/:id/replan`,
-   `…/acciones/:id/confirmar|descartar` (exigen `motivo`, escriben `override = true`),
-   `POST /api/operaciones/:id/guias/:guiaId/no-transmitida` (disparador de CT-2) y **fase 4 del
-   tick**. Ejecuta solo excluir/reprogramar/abrir hold/suspender unidades/notificar; la reasignación
-   que toca tarifa se **propone**. Una decisión se registra una sola vez por huella: la bitácora no
-   tartamudea. Pendiente de #29: cuando exista `despachos`, CT-7 apuntará al viaje concreto en vez
-   de al indicio `estado_planeacion = 'asignada'`; y de #22/#31 para que `NOTIFICACION_REQUERIDA`
-   deje de ser sólo la obligación registrada.
-5. ~~**#23 Requerimiento de riesgo con plazo duro**~~ ✅ **hecho**. Tabla `riesgo_requerimientos`,
-   plazo = ETA + ventana de descarga, `services/requerimientosService.ts`, `routes/riesgoRequerimientos.ts`
-   y el barrido de vencimiento como **fase 3 del tick**, que dispara CT-4 (hold de tipo `riesgo`).
-   La regla que lo sostiene: el plazo **no corre contra quien nunca fue avisado** — `expirarVencidos`
-   sólo toca filas con `notificado_at`, así que un SMTP sin credenciales deja el requerimiento
-   visiblemente sin notificar en vez de congelar la carga de un cliente que no fue advertido.
-   El código de #22 (`services/mailer.ts`) viaja con él; falta sólo la app password del usuario.
-6. **#31 Fan-out de notificaciones** en cambios de plan — AGORA + WhatsApp (evolution-api ya corre).
-   (Necesita #22.)
+### B — Bloqueado en credenciales de terceros (integraciones ya construidas, "config-gated")
 
-### Fase C — Despacho, entrega, financiero
+4. **#22 SMTP saliente** — `services/mailer.ts` completo, con reintento en el tick; degrada a
+   `omitido` sin credenciales, nunca falla una ruta. Falta la app password de `ops@capitalc.com.mx`.
+5. **#31 WhatsApp (evolution-api)** — `services/whatsapp.ts`/`whatsappFanout.ts` completos, segundo
+   canal + roster interno de dirección. Falta `EVOLUTION_API_URL`/`EVOLUTION_API_KEY`/
+   `EVOLUTION_INSTANCE`.
+6. **NOM-151 (Cincel)** — `services/cincel.ts` + `routes/convenios.ts` completos, upload+hash
+   funciona sin Cincel. Falta `CINCEL_API_KEY` y `CINCEL_WEBHOOK_SECRET` para que la firma real corra
+   (el webhook falla cerrado — 503 — sin el secret, misma postura que AGORA).
+7. **#35 Aireon** (ADS-B trans-Pacífico) — correo a FlightAware pidiendo el alta; posición oceánica
+   sigue oscura mientras tanto, itinerario/arribos ya funcionan por otras vías.
 
-7. **#29 Planeación + despacho + catálogos de transporte** — el más grande: despachos,
-   despacho_partidas, plan_publicaciones con diffs, transportistas/unidades/convenios/tarifas,
-   tipo-unidad-antes-de-línea (D7), orden de carga.
-8. **#30 Generación de POD** — sobre #29; plantilla pendiente de Luis (Q6).
-9. **#32 Trazabilidad financiera** — client_tarifas, facturas, factura_partidas, reporte mensual por
-   cliente; el vínculo vive en el sistema, no en el CFDI (D17).
+### C — Diseñado, deliberadamente no construido
 
-### Fase D — Endurecimiento
+8. **Unificación `convenios` ↔ `transportista_convenios`** — la nota completa vive en
+   `server/src/services/cincel.ts` (líneas ~30–91): vocabularios de estado distintos
+   (`firmada` vs `firmado`), sin columnas de seguimiento de despacho en la tabla del transportista,
+   sin llave de correlación única para el webhook, firmante de naturaleza distinta. Medio-construirla
+   dejaría convenios marcados "firmado" por el solo hecho de haberse solicitado — exactamente la
+   disciplina que este módulo existe para impedir.
 
-10. **#36** arreglar las 34 fallas de test preexistentes (cubren login/registro — enmascaran
-    regresiones reales en los flujos que se demuestran).
-11. **#37** rotar todos los secretos expuestos en la transcripción del build.
-12. **#35** habilitar Aireon (ADS-B espacial) para posición trans-Pacífica.
-13. Interfaces AGORA/ANAM/VUCEM/SAT timbrado T1 (fase 4, tras autorización — Q12).
+### D — Backend listo, falta la vista de frontend
+
+9. **`PlaneacionView`** — `routes/planeacion.ts` (plan editable, `plan_publicaciones` con diffs) no
+   tiene pantalla montada en `src/App.tsx`/`src/nav.ts`.
+10. **`DespachosView`** — igual, sobre `routes/despachos.ts`.
+11. **`EntregasView`** — POD y confirmación de entrega (`routes/pods.ts`) sin vista propia.
+12. **`FacturacionView`** — `routes/facturacion.ts` (client_tarifas, facturas, reporte mensual) sin
+    vista propia.
+13. **Tiles de lead-time en Torre de Control** — `GET /api/reportes/lead-times` y
+    `shared/operaciones/leadTimes.ts` calculan warehouse/dispatch/transit/LT+LM; nada los pinta en
+    `TorreControlView.tsx` todavía.
+
+### E — Estructuralmente bloqueado o deliberadamente ausente (no es backlog, es un hecho del modelo)
+
+14. **PA-09** (CSA) — no evaluable: requiere la patente consignataria, que ningún artefacto que
+    recibimos hoy declara. El motor de contingencias y los holds YA reaccionan si algún día llega a
+    dispararse (`replan.ts`, `holds.ts` lo referencian), pero la regla del cotejo nunca lo produce.
+15. **#34/#35** — ver A.2 y B.7; no son ausencias de diseño, son acciones fuera del repo.
 
 ---
 
@@ -213,9 +232,11 @@ Torre de Control · Prealertas · Campo · reparse · runner E2E.
 
 | # | Acción | Impacto | Tiempo |
 |---|---|---|---|
-| **39** | Coolify → customs-v2 → Storages → volumen en `/app/storage` → redeploy | **La evidencia se borra en cada deploy sin esto** | 2 min |
+| **39** | Coolify → customs-v2 → Storages → volumen en `/app/storage` → redeploy; luego una sesión corre `npm --prefix server run recover:evidence -- --apply` | **La evidencia se borra en cada deploy sin esto** | 2 min + una sesión |
 | 34 | Coolify → Scheduled Tasks → `*/5 * * * *` → `curl -sS -m 120 -X POST -H "x-ops-token: $OPS_TICK_TOKEN" http://localhost:4000/api/ops/tick` | Nada sondea solo | 2 min |
 | 22 | App password de `ops@capitalc.com.mx` → SMTP Gmail en el inbox 21 (o `SMTP_ADDRESS` en AGORA) | Bloquea todo aviso al cliente (R18, R19) | 10 min |
+| 31 | `EVOLUTION_API_URL`/`EVOLUTION_API_KEY`/`EVOLUTION_INSTANCE` en Coolify (evolution-api ya corre en el proyecto) | Bloquea el segundo canal (WhatsApp) y el aviso interno de dirección | 10 min |
+| — | Cincel: cuenta + `CINCEL_API_KEY` + `CINCEL_WEBHOOK_SECRET` en Coolify | Bloquea la firma NOM-151 real de convenios (el upload+hash ya funciona sin ella) | según alta con Cincel |
 | — | `RAILS_INBOUND_EMAIL_PASSWORD` en AGORA (Easypanel) | Abre el relay: camino de correo 100% real para el demo | 5 min |
 | 35 | Email a FlightAware pidiendo Aireon (trans-Pacífico, HKG-NLU) | Posición oceánica en vivo | correo |
 | 37 | Rotar token AGORA, secret del webhook, OPS_TICK_TOKEN, passwords semilla, key AeroAPI | Higiene post-demo | 15 min |
@@ -241,8 +262,13 @@ Torre de Control · Prealertas · Campo · reparse · runner E2E.
 - Migraciones `node-pg-migrate`, slots +100000, uuid PK, `text`+CHECK (no enums), hijos CASCADE.
 - Rutas: `requireAuth → requireRole → validate(zod) → try/catch(next)`; JSON camelCase por alias SQL.
 - Frontend sin router: `Section` en `nav.ts`, montado en `App.tsx`; `apiGet/apiPost/apiUpload`.
-- **Baselines de test (no perseguir, no exceder): root 31 fallas/5 archivos, server 3/1
-  (dashboardData).**
+- **Baselines de test: ambas suites en CERO fallas** (cerrado #36, `f6c7fcf`). Medido de nuevo el
+  10-ago: root **75 archivos / 791 pruebas**, server **82 archivos / 1047 pruebas**, las dos corridas
+  limpias. (Una corrida aislada mostró un timeout de 5s en un test de `replan.test.ts` bajo carga
+  concurrente completa; se confirmó no reproducible — pasa solo y pasa en una segunda corrida
+  completa — así que no es una falla real, es contención de la máquina local.) El baseline viejo de
+  "31 fallas/5 archivos root, 3/1 server" ya no aplica: no perseguir cero de nuevo si algo lo rompe,
+  perseguirlo — cero es ahora el piso.
 - Push a `fercamachol/customs`: `gh auth switch --user fercamachol` antes, revertir después.
 
 ## 8. Demo (guión de 12 min — detalle completo abajo)
@@ -256,15 +282,22 @@ Torre de Control · Prealertas · Campo · reparse · runner E2E.
    ni con acceso a la base — lo probamos."*
 5. **AGORA conversación 14** — el tracking espejado donde trabaja el equipo.
 
-Plan B si algo no carga: `npm --prefix server run demo:e2e` corre las 27 pruebas en vivo.
-**No demostrar:** envío de correo al cliente (falta SMTP) ni "sondea solo" (falta la tarea).
-**Sólo descargar evidencia del caso `16039293994`** hasta que se monte el volumen (#39).
+Plan B si algo no carga: `npm --prefix server run demo:e2e` corre las pruebas en vivo contra
+producción (scorecard de PRD-02 núcleo: prealerta/vuelo/campo/cotejo/holds/espejo — **no incluye
+todavía** #29/#30/#32/NOM-151 como pasos puntuados; `docs/DEMO_E2E.md` sigue describiendo el alcance
+original, es la brecha de documentación más honesta que queda).
+**No demostrar:** envío de correo al cliente (falta SMTP), WhatsApp (falta evolution-api), firma
+NOM-151 real (falta Cincel), ni "sondea solo" (falta la tarea de Coolify).
+**Descarga de evidencia**: el código ya responde 410 honesto en vez de 500 sobre un blob perdido, y
+`recover:evidence` puede restaurar lo verificable — pero **sin el volumen montado (#39) cada
+redeploy vuelve a perder los bytes nuevos**, así que la garantía real de "se puede bajar" sigue
+pendiente de la acción de infraestructura.
 
 ## 9. Riesgos
 
 | Riesgo | Mitigación |
 |---|---|
-| **Evidencia efímera (#39)** | Volumen persistente + recuperación verificable desde AGORA por hash |
+| **Evidencia efímera (#39)** | Código ya hecho: 410 honesto + `recover:evidence` verificable por hash. Falta el volumen persistente (usuario) — sin él el script sólo cura lo ya perdido, no evita perder lo próximo |
 | SMTP ausente bloquea R18 con consecuencia legal (detener carga a quien nunca fue avisado) | No arrancar el reloj sin confirmación de envío; escalar a WhatsApp; categoría visible en Torre |
 | AGORA en el camino crítico | Barrido de reconciliación recupera; degrada a carga manual del manifiesto |
 | Cobertura ADS-B trans-Pacífico | Aireon (#35); mientras, itinerario/arribos ya funcionan, sólo la posición oceánica queda oscura |
@@ -278,10 +311,16 @@ Plan B si algo no carga: `npm --prefix server run demo:e2e` corre las 27 pruebas
   — ¿granularidad del xlsx o declaración corta? (El sistema la marcó correctamente.)
 - **`CX3186`** no existe en FlightAware — ¿referencia interna o typo?
 - ¿A veces llegan los documentos en un correo **posterior** con la misma guía? (cambia la ingesta)
-- Q6 plantilla de POD · Q7 contrato+tarifas transportista · Q8 direcciones de entrega · Q9 precio por
-  pieza por cliente · Q12 cuál interfaz de autoridad primero.
+- Q6 plantilla de POD (código usa un layout provisional, dicho en voz alta — `routes/pods.ts`) ·
+  Q7 contrato+tarifas transportista, Q8 direcciones de entrega, Q9 precio por pieza por cliente — el
+  **mecanismo ya existe** (`transportista_convenios`/tarifas, `client_direcciones`, `client_tarifas`
+  de #29/#32) y sólo falta que Alfonso/Luis carguen los datos reales · Q12 cuál interfaz de autoridad
+  primero.
 
 ---
 
 *Fin. Para continuar desde cualquier sesión (local o claude.ai/code web): abrir el repo y decir
-"lee docs/HANDOFF.md y continúa el backlog". El primer ítem es #39.*
+"lee docs/HANDOFF.md y continúa el backlog". No queda backlog de código sin depender de una acción
+externa (§4) — el primer ítem para una sesión nueva es correr `recover:evidence` contra producción
+en cuanto el usuario confirme el volumen montado (#39), y montar las vistas de frontend de la
+sección D si se decide que valen la pena antes de tener credenciales reales que mostrar en ellas.*

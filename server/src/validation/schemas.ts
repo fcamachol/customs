@@ -498,6 +498,41 @@ export type ReplanDecisionBody = z.infer<typeof replanDecisionBody>;
 export const replanGuiaNoTransmitidaBody = z.object({
   motivo: motivoRequerido,
 });
+
+// ---------------------------------------------------------------------------------------------
+// convenios — client agreements, NOM-151 digital signature via Cincel (PRD-02 Excel item 8, R25/D9)
+// ---------------------------------------------------------------------------------------------
+
+export const convenioIdParam = z.object({
+  id: z.string().uuid('El id del convenio debe ser un UUID.'),
+});
+
+/** Multipart fields arrive as strings — same tolerance as `campoEvidenciaBody` above. */
+export const convenioCreateBody = z.object({
+  clientId: z.string().uuid('El `clientId` debe ser un UUID.'),
+  vigenciaDesde: textoOpcional,
+  vigenciaHasta: textoOpcional,
+});
+export type ConvenioCreateBody = z.infer<typeof convenioCreateBody>;
+
+export const convenioListQuery = z.object({
+  clientId: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? undefined : v),
+    z.string().uuid('El `clientId` debe ser un UUID.').optional(),
+  ),
+});
+export type ConvenioListQuery = z.infer<typeof convenioListQuery>;
+
+/**
+ * Both optional: when omitted, `routes/convenios.ts` resolves the signer from the `clients` row
+ * itself (name/email), the same "resolve from data, fall back to what was actually typed" pattern
+ * `requerimientosService.ts`'s `resolverDestinatario` uses.
+ */
+export const convenioFirmarBody = z.object({
+  signerNombre: textoOpcional,
+  signerEmail: textoOpcional,
+});
+export type ConvenioFirmarBody = z.infer<typeof convenioFirmarBody>;
 export type ReplanGuiaNoTransmitidaBody = z.infer<typeof replanGuiaNoTransmitidaBody>;
 
 // ---------------------------------------------------------------------------------------------

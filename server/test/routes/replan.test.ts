@@ -6,6 +6,7 @@ import { signToken } from '../../src/auth/token';
 import { truncateAll } from '../helpers/db';
 import { createApp } from '../../src/app';
 import { REPLAN_RULESET_HASH, REPLAN_RULESET_VERSION } from '../../../shared/operaciones/replan';
+import { encryptField } from '../../src/crypto/fieldCrypto';
 
 /**
  * MOTOR DE CONTINGENCIAS — the replanning layer (PRD-02 §8.8, CT-1…CT-7).
@@ -532,6 +533,93 @@ describe('NOTIFICACION_REQUERIDA · la obligación y la entrega son hechos disti
     const alAlmacen = rows.find((r) => r.payload.destinatario === 'almacen')!;
     expect(alAlmacen.payload.notificacion.intentados).toBe(0);
     expect(alAlmacen.payload.notificacion.motivo).toMatch(/sin contacto/);
+  });
+
+  /**
+   * THE CARRIER'S CONTACT IS ENCRYPTED AT REST, AND THE NOTIFIER WAS BEING HANDED THE CIPHERTEXT.
+   *
+   * `transportistas.contacto_email` / `contacto_telefono` are AES-GCM envelopes (`v1:iv:tag:ct`,
+   * PRD-02 §8.5) — `routes/transportistas.ts` encrypts on the way in and decrypts on the way out.
+   * `resolverDestinos` read the columns raw, so `services/notificaciones.ts` classified a base64
+   * envelope as neither an email nor a phone and every carrier advice came back `omitido`: the engine
+   * reporting "no channel on file" for a carrier whose number had been on file all along, which is
+   * precisely the *flete en falso* phone call CT-1 exists to make. And the envelope itself was
+   * written into `replan_acciones.payload.detalle`, putting ciphertext in a record a human reads.
+   *
+   * Seeded through the REAL `encryptField`, not a hand-written literal: a test that fakes the
+   * envelope proves nothing about the envelope the application actually writes.
+   */
+  it('descifra el contacto del transportista antes de notificarlo (PII cifrada en reposo)', async () => {
+    const correo = 'despacho@fletesdelnorte.example';
+    const telefono = '+525512345678';
+    const t = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social, contacto_email, contacto_telefono)
+         VALUES ('Fletes del Norte',$1,$2) RETURNING id`,
+      [encryptField(correo), encryptField(telefono)],
+    );
+    // Sanity: the row really is stored as ciphertext, so what follows is not a tautology.
+    const enReposo = await query<{ contacto_email: string; contacto_telefono: string }>(
+      'SELECT contacto_email, contacto_telefono FROM transportistas WHERE id = $1', [t.rows[0].id]);
+    expect(enReposo.rows[0].contacto_email.startsWith('v1:')).toBe(true);
+    expect(enReposo.rows[0].contacto_telefono.startsWith('v1:')).toBe(true);
+
+    const d = await query<{ id: string }>(
+      `INSERT INTO despachos (folio, fecha_operacion, tipo_unidad, transportista_id, estado)
+         VALUES ('D-20260810-777','2026-08-10','tracto',$1,'confirmado') RETURNING id`,
+      [t.rows[0].id],
+    );
+    await query(`INSERT INTO despacho_partidas (despacho_id, operacion_id) VALUES ($1,$2)`, [d.rows[0].id, opA]);
+
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const { rows } = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    const alTransportista = rows.find((r) => r.payload.destinatario === 'transportista')!;
+    expect(alTransportista).toBeTruthy();
+    const n = alTransportista.payload.notificacion;
+
+    // Both handles were resolved and CLASSIFIED — one email, one WhatsApp. Neither channel is
+    // provisioned in a test process, so both are honest `omitido`s; the point is that the notifier
+    // knew what they WERE, which it could not have with the envelope.
+    expect(n.intentados).toBe(2);
+    expect(n.motivo).toBeUndefined(); // never again "sin contacto en archivo"
+    const canales = (n.detalle as Array<{ destino: string; canal: string | null }>);
+    expect(canales.map((x) => x.canal).sort()).toEqual(['email', 'whatsapp']);
+    expect(canales.map((x) => x.destino).sort()).toEqual([correo, telefono].sort());
+
+    // AND NO CIPHERTEXT ANYWHERE IN THE STORED RECORD.
+    const serializado = JSON.stringify(alTransportista.payload);
+    expect(serializado).not.toContain('v1:');
+    expect(serializado).not.toContain(enReposo.rows[0].contacto_email);
+  });
+
+  it('trata un contacto ilegible como ausente en lugar de enviar un sobre cifrado', async () => {
+    // A rotated key or a corrupted row. `decryptField` throws on it; the notifier must never see it.
+    const t = await query<{ id: string }>(
+      `INSERT INTO transportistas (razon_social, contacto_email)
+         VALUES ('Fletes Ilegibles','v1:AAAA:BBBB:CCCC') RETURNING id`,
+    );
+    const d = await query<{ id: string }>(
+      `INSERT INTO despachos (folio, fecha_operacion, tipo_unidad, transportista_id, estado)
+         VALUES ('D-20260810-778','2026-08-10','tracto',$1,'confirmado') RETURNING id`,
+      [t.rows[0].id],
+    );
+    await query(`INSERT INTO despacho_partidas (despacho_id, operacion_id) VALUES ($1,$2)`, [d.rows[0].id, opA]);
+
+    await conVuelo(opA, 'cancelado');
+    await replanificar(opA).expect(200);
+
+    const { rows } = await query<{ payload: Record<string, any> }>(
+      `SELECT payload FROM replan_acciones WHERE operacion_id = $1 AND tipo = 'notificar'`,
+      [opA],
+    );
+    const alTransportista = rows.find((r) => r.payload.destinatario === 'transportista')!;
+    expect(alTransportista.payload.notificacion.intentados).toBe(0);
+    expect(alTransportista.payload.notificacion.motivo).toMatch(/sin contacto/);
+    expect(JSON.stringify(alTransportista.payload)).not.toContain('v1:');
   });
 
   it('does not re-attempt an advice already on record — the anti-stutter rule covers delivery too', async () => {

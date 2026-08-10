@@ -524,6 +524,11 @@ podsRouter.post(
  *
  * `tramitador` is allowed: the person holding the paper at the client's warehouse is the field role,
  * and routing this through an office phone call is how the delivery time stops being real.
+ *
+ * WHAT A SIGNATURE CLOSES, AND WHAT IT DOES NOT. It closes THIS trip — `despachos.estado` becomes
+ * `entregado`. It closes a CASO only when this trip was carrying all of it: a caso split across two
+ * despachos (R29) stays where it is until the last one arrives, and `operacionesSinAvanzar` says so
+ * with the reason. See the caso loop below.
  */
 podsRouter.post(
   '/:id/firmado',
@@ -640,26 +645,62 @@ podsRouter.post(
           await q(`UPDATE despachos SET estado = 'entregado' WHERE id = $1`, [pod.despacho_id]);
         }
 
-        // ---- every caso riding on the unit reaches etapa `entregado`, monotonically. One that
-        // cannot (already delivered, closed or cancelled) is reported, never forced.
+        // ---- every caso riding on the unit reaches etapa `entregado`, monotonically — UNLESS part
+        // of it is still riding somewhere else.
+        //
+        // A CASO IS NOT DELIVERED WHILE ANOTHER TRUCK IS STILL CARRYING SOME OF IT. R29 lets one caso
+        // be split across several despachos (N guías, N trips), and `etapa` is a statement about the
+        // CASO, not about this trip. Advancing it on the first POD signed marked cargo as delivered
+        // while it was demonstrably still on the road — and etapa is monotonic, so nothing later
+        // could take it back. The trip's own `estado` still becomes `entregado` (that IS true of the
+        // trip); the caso waits for the last one.
+        //
+        // "Still riding" = a partida of this caso on ANOTHER despacho that is neither `cancelado`
+        // (that trip is not happening) nor `entregado` (that trip already arrived). The current
+        // despacho is excluded by id rather than by state, because whether it just advanced is
+        // beside the point: its POD is the one being signed.
         const casos = await q(
           // `IN (...)` rather than a DISTINCT join: Postgres refuses FOR UPDATE with DISTINCT, and
           // the row lock is the point — two writers must not both read the same etapa and both
           // decide they are advancing it.
-          `SELECT o.id, o.mawb, o.etapa, o.agora_conversation_id
+          `SELECT o.id, o.mawb, o.etapa, o.agora_conversation_id,
+                  (SELECT count(*)::int
+                     FROM despacho_partidas dp
+                     JOIN despachos od ON od.id = dp.despacho_id
+                    WHERE dp.operacion_id = o.id
+                      AND od.id <> $1
+                      AND od.estado NOT IN ('cancelado', 'entregado')) AS "viajesPendientes"
              FROM operaciones o
             WHERE o.id IN (SELECT operacion_id FROM despacho_partidas WHERE despacho_id = $1)
-            FOR UPDATE`,
+            FOR UPDATE OF o`,
           [pod.despacho_id],
         );
         const avanzadas: string[] = [];
-        const sinAvanzar: Array<{ mawb: string; etapa: string }> = [];
-        for (const caso of casos.rows as Array<{ id: string; mawb: string; etapa: Etapa; agora_conversation_id: string | null }>) {
+        const sinAvanzar: Array<{ mawb: string; etapa: string; motivo: string }> = [];
+        for (const caso of casos.rows as Array<{
+          id: string; mawb: string; etapa: Etapa; agora_conversation_id: string | null; viajesPendientes: number;
+        }>) {
+          if (caso.viajesPendientes > 0) {
+            if (caso.etapa !== 'entregado') {
+              sinAvanzar.push({
+                mawb: caso.mawb,
+                etapa: caso.etapa,
+                motivo:
+                  `La operación va repartida en más de un despacho: quedan ${caso.viajesPendientes} ` +
+                  'viaje(s) sin entregar, así que el caso todavía no está entregado.',
+              });
+            }
+            continue;
+          }
           if (canAdvanceEtapa(caso.etapa, 'entregado')) {
             await q(`UPDATE operaciones SET etapa = 'entregado' WHERE id = $1`, [caso.id]);
             avanzadas.push(caso.mawb);
           } else if (caso.etapa !== 'entregado') {
-            sinAvanzar.push({ mawb: caso.mawb, etapa: caso.etapa });
+            sinAvanzar.push({
+              mawb: caso.mawb,
+              etapa: caso.etapa,
+              motivo: `La etapa '${caso.etapa}' no admite avanzar a 'entregado'.`,
+            });
           }
         }
 
@@ -673,7 +714,10 @@ podsRouter.post(
           contentHash: archivoFirmado.contentHash,
           firmaEvidenciaFileId: archivoFirma?.id ?? null,
           firmaEvidenciaContentHash: archivoFirma?.contentHash ?? null,
-          etapa: 'entregado',
+          // The ledger records which casos this signature actually closed, not a blanket 'entregado'.
+          // A split caso is still out on another truck and the timeline must not say otherwise.
+          operacionesEntregadas: avanzadas,
+          operacionesSinAvanzar: sinAvanzar,
           despachoEntregado: despachoAvanza,
         };
 
@@ -715,11 +759,9 @@ podsRouter.post(
         action: 'POD_FIRMADO',
         entity: 'pod',
         entityId: id,
-        after: {
-          ...resultado.payload,
-          operacionesEntregadas: resultado.avanzadas,
-          operacionesSinAvanzar: resultado.sinAvanzar,
-        },
+        // The payload already carries `operacionesEntregadas`/`operacionesSinAvanzar`, so the audit
+        // row and the ledger event tell exactly the same story about which casos this closed.
+        after: resultado.payload,
         ip: req.ip,
       });
 
@@ -744,8 +786,6 @@ podsRouter.post(
         ok: true,
         estado: 'firmado',
         ...resultado.payload,
-        operacionesEntregadas: resultado.avanzadas,
-        operacionesSinAvanzar: resultado.sinAvanzar,
         eventosRegistrados: resultado.eventos,
         // A delivery signed without an arrival ever recorded is not refused — the signature is the
         // fact, and blocking it because a button went unpressed would be the system arguing with the

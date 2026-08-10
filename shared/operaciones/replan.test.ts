@@ -78,7 +78,7 @@ const vueloOk = {
 
 describe('ruleset', () => {
   it('is version-stamped and hashed, like the risk engine', () => {
-    expect(REPLAN_RULESET_VERSION).toBe('2026-08a');
+    expect(REPLAN_RULESET_VERSION).toBe('2026-08b');
     expect(REPLAN_RULESET.version).toBe(REPLAN_RULESET_VERSION);
     expect(REPLAN_RULESET_HASH).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -155,6 +155,55 @@ describe('CT-1 · vuelo', () => {
       }),
     );
     // Still CT-1 — ten hours is out of today's dispatch window — but the date did not move.
+    expect(tipos(acciones)).toContain('CT-1:excluir_del_plan');
+    expect(de(acciones, 'reprogramar')).toHaveLength(0);
+  });
+
+  /**
+   * THE OPERATING DAY IS CDMX, NOT UTC (`fechaDe` → `fechaLocalMexico`).
+   *
+   * Mexico City runs six hours behind UTC, so everything from 18:00 local onwards is already
+   * TOMORROW in UTC. While `fechaDe` sliced an ISO string, a flight landing at 19:30 CDMX on the
+   * 10th was reprogrammed to the 11th — a day when the warehouse would not be working that cargo,
+   * and a date the coordinator would then have to argue with. 01:30Z on the 11th IS 19:30 on the
+   * 10th, and the action has to say so.
+   */
+  it('an evening arrival reprograms to the CDMX day it lands on, not to the UTC one', () => {
+    const acciones = evaluarContingencias(
+      estado({
+        vuelo: {
+          ...vueloOk,
+          estado: 'demorado',
+          // 2026-08-09 14:00 CDMX planned; now expected 2026-08-10 19:30 CDMX (= 08-11 01:30Z).
+          etaProgramado: '2026-08-09T20:00:00.000Z',
+          etaEstimado: '2026-08-11T01:30:00.000Z',
+        },
+      }),
+    );
+    const repro = de(acciones, 'reprogramar')[0] as any;
+    expect(repro.nuevaFecha).toBe('2026-08-10');
+    expect(repro.nuevaFecha).not.toBe('2026-08-11');
+    // The motivo is what a human reads off the timeline, so it carries the same local day.
+    expect(repro.motivo).toContain('2026-08-10');
+  });
+
+  /**
+   * The mirror-image half of the same bug: the UTC day flipped at 18:00 local, so a delay that never
+   * left the operating day still manufactured a `reprogramar` — the engine telling the warehouse to
+   * move cargo to a date it was already working.
+   */
+  it('does not reprogram an evening delay that stays inside the same CDMX day', () => {
+    const acciones = evaluarContingencias(
+      estado({
+        vuelo: {
+          ...vueloOk,
+          estado: 'demorado',
+          // 2026-08-10 09:00 CDMX planned, 2026-08-10 19:30 CDMX expected: one day, ten hours late.
+          etaProgramado: '2026-08-10T15:00:00.000Z',
+          etaEstimado: '2026-08-11T01:30:00.000Z',
+        },
+      }),
+    );
     expect(tipos(acciones)).toContain('CT-1:excluir_del_plan');
     expect(de(acciones, 'reprogramar')).toHaveLength(0);
   });

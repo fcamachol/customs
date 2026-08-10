@@ -29,6 +29,7 @@ import {
   type EnvioResultado,
 } from '../services/notificaciones';
 import { avisarInternoPorEvento } from '../services/whatsappFanout';
+import { fechaLocalMexico } from '../../../shared/operaciones/eta';
 
 /**
  * PLANEACIÓN — the living plan (PRD-02 R13, R14, R16, R19, principle P4).
@@ -64,8 +65,16 @@ type Q = (text: string, params?: unknown[]) => Promise<any>;
 /** Serializes version minting per operating day. `(fecha, version)` UNIQUE is the backstop. */
 const LOCK_PLAN_PUBLICACION = 5100001;
 
+/**
+ * Today's operating day, in CDMX — the default when `GET /` is asked without a `fecha`.
+ *
+ * NOT `toISOString().slice(0,10)`. That is the UTC day, and CDMX runs six hours behind it: from
+ * 18:00 local onwards the plan screen would silently open on TOMORROW's programme, which is the
+ * exact hour a coordinator is looking at today's remaining trips. `fechaLocalMexico` is the same
+ * helper the ETA bands and the contingency engine use, so there is one answer to "what day is it".
+ */
 function hoyISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return fechaLocalMexico(new Date()) ?? new Date().toISOString().slice(0, 10);
 }
 
 /** Casos that are done with; nothing about them belongs on a forward-looking plan. */

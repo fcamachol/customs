@@ -168,8 +168,28 @@ duro** · **#26 motor de contingencias** · **#31 fan-out WhatsApp** · **#29 de
 transporte** · **#30 POD firmado** + **#32 trazabilidad financiera** + reportes operativos/lead-times
 (Fase C) · **NOM-151/Cincel** para convenios de cliente · **TrazabilidadView** · pase de integración
 final (replan↔despachos reales, fan-out de `NOTIFICACION_REQUERIDA` en vivo, vocabulario compartido
-de guía-despachable, orden de fases del tick probado, 410 honesto en el frontend, demo-reset limpia
-las 25 tablas de ops).
+de guía-despachable, orden de fases del tick probado, 410 honesto en el frontend, demo-reset
+consciente de las tablas de PRD-02 — **con radio de alcance acotado**, ver abajo).
+
+**`POST /api/admin/demo-reset` — alcance.** Al enseñarle las tablas de PRD-02 se pasó de la raya: una
+petición **sin cuerpo** truncaba toda la superficie operativa, incluido el ledger append-only
+`operacion_eventos` y los convenios firmados de transportista. Hoy:
+
+- **Siempre borra**: el grafo de manifiestos (manifests + cascada) y todo archivo que ya no esté
+  referenciado por algo que sobrevive.
+- **Sólo con `{"incluirOperaciones": true}`**: casos y guías, el ledger `operacion_eventos`, evidencia
+  de campo, prealertas, holds/retenciones/requerimientos, evaluaciones y acciones de replan,
+  despachos y partidas, planes publicados, PODs, facturas y vuelos. Por omisión hace lo de antes de
+  PRD-02, así que un clic accidental no puede borrar el ledger.
+- **Nunca borra**: usuarios, clientes, catálogos, config, `integracion_cursores`, la bitácora de
+  auditoría — y los **catálogos comerciales durables** (`transportistas`, `transportista_unidades`,
+  `transportista_convenios`, `transportista_tarifas`, `client_direcciones`, `client_tarifas`,
+  `convenios`) junto con los documentos NOM-151 que cuelgan de ellos.
+
+La respuesta declara qué superficies tocó (`deleted` / `superficies` / `conservado`) y la fila
+`DEMO_RESET` de auditoría lleva el mismo objeto. `RESET_DATA_KEEP_USERS`
+(`server/scripts/resetData.ts`, arranque del contenedor) **no cambió**: sigue truncando todo excepto
+`users`/`pgmigrations` enumerando `pg_tables`.
 
 Lo único que sigue abierto es lo que ninguna sesión puede cerrar sola: infraestructura de Coolify,
 credenciales de terceros, rotación de secretos, una unificación de diseño deliberadamente diferida, y

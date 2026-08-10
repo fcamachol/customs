@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { query } from '../../src/db/pool';
 import { hashPassword } from '../../src/auth/password';
@@ -163,6 +163,63 @@ describe('vista del día — R13 / R16', () => {
     expect(hold.detalle).toContain('falta la cesión');
     // Neither caso is offered for planning any more.
     expect(res.body.elegibles).toHaveLength(0);
+  });
+
+  /**
+   * THE DEFAULT DAY IS THE CDMX OPERATING DAY, NOT THE UTC ONE.
+   *
+   * `hoyISO()` was `new Date().toISOString().slice(0,10)`. CDMX runs six hours behind UTC, so from
+   * 18:00 local onwards the two disagree — and the planning screen, opened with no `fecha`, silently
+   * showed TOMORROW's programme: an empty board where the day's remaining trips should be. That is
+   * precisely the hour a coordinator is checking the trucks still out on the road, so the failure
+   * landed where it did the most damage and nowhere a daytime test would ever see it.
+   *
+   * Only `Date` is faked; timers stay real so pg and supertest still work. The token is minted AFTER
+   * the clock moves, or its `exp` would be in the fake past.
+   */
+  describe('la fecha por omisión es el día de operación en CDMX', () => {
+    async function tokenBajoElRelojFalso(): Promise<string> {
+      const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
+      return signToken({ userId: rows[0].id, role: 'admin', tv: 0 });
+    }
+
+    beforeEach(async () => {
+      // One trip on FECHA (2026-08-14), so "which day did it default to" has a visible answer.
+      await crearDespachoCon([{ operacionId: opA, operacionGuiaId: guiaA1 }]);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a las 19:30 CDMX sigue mostrando el día en curso, no el siguiente', async () => {
+      // 2026-08-14 19:30 CDMX === 2026-08-15 01:30Z.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-08-15T01:30:00Z'));
+
+      const res = await request(app)
+        .get('/api/planeacion')
+        .set('Authorization', `Bearer ${await tokenBajoElRelojFalso()}`)
+        .expect(200);
+
+      expect(res.body.fechaOperacion).toBe(FECHA);
+      expect(res.body.fechaOperacion).not.toBe('2026-08-15');
+      // The day's actual programme, not an empty tomorrow.
+      expect(res.body.despachos).toHaveLength(1);
+    });
+
+    it('el día sí cambia a la medianoche local', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-08-15T06:00:00Z')); // 00:00 CDMX on the 15th
+
+      const res = await request(app)
+        .get('/api/planeacion')
+        .set('Authorization', `Bearer ${await tokenBajoElRelojFalso()}`)
+        .expect(200);
+
+      expect(res.body.fechaOperacion).toBe('2026-08-15');
+      expect(res.body.despachos).toHaveLength(0);
+    });
   });
 
   it('is readable by the authority — the exclusions with causes are exactly what gets asked for', async () => {

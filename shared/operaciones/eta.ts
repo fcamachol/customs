@@ -82,6 +82,12 @@ const FACTOR_BANDA: Record<BandaTrafico, number> = {
 };
 
 /**
+ * The IANA zone the operation actually runs in. Every "what day is it / what hour is it" question in
+ * this system is asked about the AICM apron and the Valle de México, never about UTC.
+ */
+export const ZONA_OPERATIVA = 'America/Mexico_City';
+
+/**
  * The hour of `instante` in Mexico City local time.
  *
  * Local time, not UTC: rush hour is a local phenomenon and a server in another zone must not shift
@@ -91,11 +97,40 @@ const FACTOR_BANDA: Record<BandaTrafico, number> = {
  */
 export function horaLocalMexico(instante: Date): number {
   const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Mexico_City',
+    timeZone: ZONA_OPERATIVA,
     hour: 'numeric',
     hour12: false,
   });
-  return Number(fmt.format(instante));
+  // 'en-US' with hour12:false renders midnight as '24' in some ICU versions; the operating day runs
+  // 0–23 and a stray 24 would fall through every band comparison.
+  return Number(fmt.format(instante)) % 24;
+}
+
+/**
+ * The CDMX CALENDAR DAY of an instant, as `YYYY-MM-DD`.
+ *
+ * THE OPERATING DAY IS LOCAL, AND THIS IS WHERE THAT WAS BEING LOST. `new Date(t).toISOString()`
+ * answers with the UTC day, and CDMX is six hours behind: everything from 18:00 to 23:59 local is
+ * already TOMORROW in UTC. A flight landing at 19:30 was therefore reprogrammed to the day after the
+ * one the warehouse would work it, and "today's plan" flipped over at six in the evening. Both are
+ * off-by-one-day bugs that only appear in the evening, which is exactly when the day's replanning
+ * happens.
+ *
+ * Pure: the instant is an argument, never `Date.now()`. Built from `formatToParts` rather than a
+ * locale that happens to print ISO order, so the shape does not depend on ICU's idea of `en-CA`.
+ */
+export function fechaLocalMexico(instante: Date): string | null {
+  if (Number.isNaN(instante.getTime())) return null;
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: ZONA_OPERATIVA,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(instante);
+  const buscar = (tipo: Intl.DateTimeFormatPartTypes): string =>
+    partes.find((p) => p.type === tipo)?.value ?? '';
+  const [y, m, d] = [buscar('year'), buscar('month'), buscar('day')];
+  return y && m && d ? `${y.padStart(4, '0')}-${m}-${d}` : null;
 }
 
 export function bandaDeTrafico(instante: Date): BandaTrafico {

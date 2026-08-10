@@ -29,9 +29,17 @@
 
 import { rulesetHash } from '../risk/hash';
 import { GUIA_ESTADOS_NO_DESPACHABLES } from './catalogos';
+import { ZONA_OPERATIVA, fechaLocalMexico } from './eta';
 import type { Etapa, EstadoDocumental, EstadoPlaneacion, TipoEvento } from './estados';
 
-export const REPLAN_RULESET_VERSION = '2026-08a';
+/**
+ * `2026-08b` — bumped from `2026-08a` when `fechaDe` stopped answering in UTC and started answering
+ * in the operating timezone (`zonaOperativa` below, now part of the hashed ruleset). The rule's
+ * observable output changed for every evening arrival, so the version and the hash have to change
+ * with it: a `reprogramar` decision taken under the old rule and one taken under the new one are not
+ * the same decision, and August's records must not be replayable as if they were.
+ */
+export const REPLAN_RULESET_VERSION = '2026-08b';
 
 export const CONTINGENCIAS = ['CT-1', 'CT-2', 'CT-3', 'CT-4', 'CT-5', 'CT-6', 'CT-7'] as const;
 export type ContingenciaId = (typeof CONTINGENCIAS)[number];
@@ -142,6 +150,13 @@ export const REPLAN_RULESET = {
   ] as const,
   /** How many replacement candidates travel with a proposal. A coordinator picks from a short list. */
   maxCandidatas: 5,
+  /**
+   * The timezone whose calendar day a `reprogramar` action names. In the ruleset, and therefore in
+   * the hash, because "which day is this cargo moving?" is answered differently under a different
+   * zone — that is a rule, not an implementation detail, and a stored decision has to record which
+   * one it was taken under.
+   */
+  zonaOperativa: ZONA_OPERATIVA,
 } as const;
 
 /** sha256 of the canonicalized ruleset — the same primitive the risk engine uses (shared/risk/hash.ts). */
@@ -341,10 +356,19 @@ function ms(iso: string | null | undefined): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-/** ISO calendar date (UTC) of an instant. Dates, not instants, are what a daily plan is keyed by. */
+/**
+ * The CDMX calendar date of an instant. Dates, not instants, are what a daily plan is keyed by.
+ *
+ * LOCAL, NOT UTC, and that is the whole point. This used to be `toISOString().slice(0,10)`, which
+ * answers with the UTC day; CDMX runs six hours behind, so every arrival from 18:00 local onwards
+ * was reported as the NEXT day. A flight landing at 19:30 got the caso reprogrammed to a day when
+ * the warehouse would not be working it, and the reprogramming even fired spuriously — `nuevaFecha`
+ * and `fechaPrevia` could differ purely because one instant crossed midnight UTC and the other did
+ * not. `fechaLocalMexico` keeps this pure: the instant is an argument, no clock is read.
+ */
 function fechaDe(iso: string): string | null {
   const t = ms(iso);
-  return t === null ? null : new Date(t).toISOString().slice(0, 10);
+  return t === null ? null : fechaLocalMexico(new Date(t));
 }
 
 function incluye<T extends string>(lista: readonly T[], v: string): boolean {

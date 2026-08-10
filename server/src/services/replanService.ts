@@ -3,6 +3,7 @@ import { withTransaction } from '../db/tx';
 import { recordAudit } from './audit';
 import { mirrorEstadoDeOperacion, mirrorEventoToAgora } from './agoraMirror';
 import { materializarHoldActivo } from './holdActivo';
+import { decryptField } from '../crypto/fieldCrypto';
 import {
   contactosDeRol,
   enviarNotificaciones,
@@ -423,6 +424,33 @@ export function construirAvisoReplan(aviso: {
 }
 
 /**
+ * A carrier contact, as a human can read it.
+ *
+ * `transportistas.contacto_email` / `contacto_telefono` are ENCRYPTED AT REST (`routes/transportistas.ts`,
+ * PRD-02 §8.5): what the column holds is a `v1:<iv>:<tag>:<ct>` envelope, not an address. Handing
+ * that envelope to `services/notificaciones.ts` classifies it as neither an email nor a phone, so
+ * every carrier advice came back `omitido` — the engine reporting "no channel" for a carrier whose
+ * number was on file all along, and writing the ciphertext into `replan_acciones.payload` on the way
+ * past. `decryptField` is a passthrough for anything without the envelope, so hand-seeded plaintext
+ * rows still read.
+ *
+ * Never throws. A contact that cannot be decrypted (rotated key, corrupted row) is treated as
+ * absent and logged: a notification path must not cost the caller a committed evaluation, and a
+ * decryption failure is emphatically not a reason to send an envelope to a WhatsApp gateway.
+ */
+function contactoLegible(valor: string | null | undefined): string | null {
+  const bruto = (valor ?? '').trim();
+  if (!bruto) return null;
+  try {
+    const claro = decryptField(bruto).trim();
+    return claro || null;
+  } catch (err) {
+    console.warn('[replan] no se pudo descifrar un contacto de transportista:', err);
+    return null;
+  }
+}
+
+/**
  * WHO each `destinatario` actually is, resolved at the moment of sending.
  *
  * `cliente` and `transportista` are rows, so they are looked up: the client on the caso, and the
@@ -444,8 +472,11 @@ async function resolverDestinos(operacionId: string, destinatario: Destinatario)
     return [rows[0]?.email, rows[0]?.phone].filter((v): v is string => Boolean((v ?? '').trim()));
   }
   if (destinatario === 'transportista') {
+    // DISTINCT on the carrier id, not on the contact columns: two encryptions of the same phone are
+    // different ciphertexts, so SQL cannot dedupe what it cannot read. The dedup happens below, on
+    // the plaintext, which is where "the same carrier twice" is actually visible.
     const { rows } = await query<{ email: string | null; telefono: string | null }>(
-      `SELECT DISTINCT t.contacto_email AS email, t.contacto_telefono AS telefono
+      `SELECT DISTINCT t.id, t.contacto_email AS email, t.contacto_telefono AS telefono
          FROM despacho_partidas p
          JOIN despachos d ON d.id = p.despacho_id
          JOIN transportistas t ON t.id = d.transportista_id
@@ -453,9 +484,18 @@ async function resolverDestinos(operacionId: string, destinatario: Destinatario)
           AND d.estado <> 'cancelado'`,
       [operacionId],
     );
-    return rows
-      .flatMap((r) => [r.email, r.telefono])
-      .filter((v): v is string => Boolean((v ?? '').trim()));
+    const vistos = new Set<string>();
+    const destinos: string[] = [];
+    for (const r of rows) {
+      for (const cifrado of [r.email, r.telefono]) {
+        const claro = contactoLegible(cifrado);
+        if (claro && !vistos.has(claro)) {
+          vistos.add(claro);
+          destinos.push(claro);
+        }
+      }
+    }
+    return destinos;
   }
   return contactosDeRol(destinatario);
 }

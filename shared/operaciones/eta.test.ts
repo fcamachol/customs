@@ -5,6 +5,7 @@ import {
   desviacionArriboMin,
   distanciaHaversineKm,
   estimarArribo,
+  fechaLocalMexico,
   horaLocalMexico,
 } from './eta';
 
@@ -55,6 +56,42 @@ describe('bandas de tráfico — local time, not UTC', () => {
     expect(bandaDeTrafico(new Date('2026-08-15T01:00:00Z'))).toBe('pico_vespertino'); // 19:00 local
     expect(bandaDeTrafico(new Date('2026-08-15T08:00:00Z'))).toBe('nocturno'); // 02:00 local
     expect(bandaDeTrafico(new Date('2026-08-14T18:00:00Z'))).toBe('valle'); // 12:00 local
+  });
+});
+
+/**
+ * The CDMX CALENDAR DAY — the operating day every daily plan is keyed by.
+ *
+ * `toISOString().slice(0,10)` answers with the UTC day, and CDMX is six hours behind it, so from
+ * 18:00 local onwards the two disagree. Two real defects lived in that gap: the contingency engine
+ * reprogrammed evening arrivals to the following day (`shared/operaciones/replan.ts`), and the
+ * planning screen's default `fecha` rolled over at six in the evening (`routes/planeacion.ts`).
+ * Pure by construction: the instant is an argument, never a clock read.
+ */
+describe('fechaLocalMexico — the operating day', () => {
+  it('keeps an evening instant on its LOCAL day even when UTC has already turned over', () => {
+    // 19:30 on the 10th in CDMX is 01:30Z on the 11th.
+    const tarde = new Date('2026-08-11T01:30:00Z');
+    expect(fechaLocalMexico(tarde)).toBe('2026-08-10');
+    expect(tarde.toISOString().slice(0, 10)).toBe('2026-08-11'); // what it used to answer
+  });
+
+  it('turns the day over at local midnight, not at 18:00 local', () => {
+    expect(fechaLocalMexico(new Date('2026-08-11T05:59:59Z'))).toBe('2026-08-10'); // 23:59:59 local
+    expect(fechaLocalMexico(new Date('2026-08-11T06:00:00Z'))).toBe('2026-08-11'); // 00:00:00 local
+  });
+
+  it('pads to a sortable YYYY-MM-DD and survives a year boundary', () => {
+    expect(fechaLocalMexico(new Date('2027-01-01T04:00:00Z'))).toBe('2026-12-31'); // 22:00 local
+    expect(fechaLocalMexico(new Date('2026-03-05T18:00:00Z'))).toBe('2026-03-05');
+  });
+
+  it('returns null for an invalid instant instead of inventing a day', () => {
+    expect(fechaLocalMexico(new Date('no es una fecha'))).toBeNull();
+  });
+
+  it('midnight local reads as hour 0, never as 24', () => {
+    expect(horaLocalMexico(new Date('2026-08-11T06:00:00Z'))).toBe(0);
   });
 });
 

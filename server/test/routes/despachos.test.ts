@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { query } from '../../src/db/pool';
 import { hashPassword } from '../../src/auth/password';
@@ -219,6 +219,62 @@ describe('D7 — tipo de unidad primero, transportista después', () => {
     expect(res.body.opciones).toHaveLength(0);
   });
 
+  /**
+   * THE DEFAULT `fecha` IS THE CDMX OPERATING DAY.
+   *
+   * The date decides which convenios and tarifas are IN FORCE. With `new Date().toISOString()` the
+   * default rolled to tomorrow at 18:00 local, so every evening a convenio that expires today
+   * stopped being priced half a day early — the coordinator would see `tarifa: null` and
+   * "sin convenio firmado" for a carrier whose agreement was still valid, and go re-negotiate a rate
+   * that was already agreed.
+   *
+   * Only `Date` is faked; timers stay real so pg and supertest still work, and the token is minted
+   * after the clock moves so its `exp` is not in the fake past.
+   */
+  describe('la fecha por omisión es el día de operación en CDMX', () => {
+    async function tokenBajoElRelojFalso(): Promise<string> {
+      const { rows } = await query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
+      return signToken({ userId: rows[0].id, role: 'admin', tv: 0 });
+    }
+
+    beforeEach(async () => {
+      // The convenio expires at the end of 2026-08-14 — the day the clock will be sitting inside.
+      await query(`UPDATE transportista_convenios SET vigencia_hasta = $1`, [FECHA]);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a las 19:30 CDMX cotiza contra el convenio que sigue vigente hoy', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-08-15T01:30:00Z')); // 2026-08-14 19:30 CDMX
+
+      const res = await request(app)
+        .get('/api/despachos/opciones?tipoUnidad=tracto')
+        .set('Authorization', `Bearer ${await tokenBajoElRelojFalso()}`)
+        .expect(200);
+
+      expect(res.body.fecha).toBe(FECHA);
+      expect(res.body.opciones[0].tarifaId).not.toBeNull();
+      expect(Number(res.body.opciones[0].tarifa)).toBe(8500);
+    });
+
+    it('al día siguiente el convenio vencido deja de cotizarse, con su advertencia', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-08-15T06:00:00Z')); // 00:00 CDMX on the 15th
+
+      const res = await request(app)
+        .get('/api/despachos/opciones?tipoUnidad=tracto')
+        .set('Authorization', `Bearer ${await tokenBajoElRelojFalso()}`)
+        .expect(200);
+
+      expect(res.body.fecha).toBe('2026-08-15');
+      expect(res.body.opciones[0].tarifaId).toBeNull();
+      expect(res.body.opciones[0].advertencia).toContain('Sin tarifa vigente');
+    });
+  });
+
   it('is closed to the field and authority roles', async () => {
     await request(app)
       .get('/api/despachos/opciones?tipoUnidad=tracto')
@@ -355,6 +411,61 @@ describe('edición de la asignación — R28', () => {
     expect(res.body.tarifaMonto).toBeNull();
   });
 
+  /**
+   * PLACAS ARE A DENORMALIZED COPY, AND A COPY MUST NOT OUTLIVE WHAT IT IS A COPY OF.
+   *
+   * `despachos.placas` duplicates the unit's plate so the published plan and the POD read like the
+   * paper they replace. `placas` went through `textoOpcional`, which collapses BOTH `null` and `''`
+   * to "field absent", so once a plate had been written there was no request in the API that could
+   * take it off — not even the one that unassigns the unit. The plan then went out naming a truck
+   * that was no longer on the trip, to the warehouse and the carrier, in a document whose entire
+   * selling point is that it is the version of record.
+   */
+  it('drops the plates when the unit is unassigned — and says so on the ledger', async () => {
+    await agregarPartida(id, { operacionId: opA, operacionGuiaId: guiaA1 }).expect(201);
+    await editar({ transportistaId, unidadId: unidadTractoId }).expect(200);
+    const conUnidad = await query<{ placas: string | null }>('SELECT placas FROM despachos WHERE id=$1', [id]);
+    expect(conUnidad.rows[0].placas).toBe('ABC1234');
+
+    const res = await editar({ unidadId: null }).expect(200);
+
+    expect(res.body.placas).toBeNull();
+    const fila = await query<{ placas: string | null }>('SELECT placas FROM despachos WHERE id=$1', [id]);
+    expect(fila.rows[0].placas).toBeNull();
+
+    // The event that records the change carries the NEW truth, not the plate that just went away.
+    const ev = await eventosDe(opA, 'DESPACHO_ACTUALIZADO');
+    expect(ev[ev.length - 1].payload.placas).toBeNull();
+    expect(ev[ev.length - 1].payload.unidadId).toBeNull();
+  });
+
+  it('clears the plates on an explicit null, distinct from leaving them alone', async () => {
+    await editar({ transportistaId, unidadId: unidadTractoId }).expect(200);
+
+    // Absent means "leave alone" — the distinction the schema has to preserve.
+    await editar({ operadorNombre: 'Juan Pérez' }).expect(200);
+    expect((await query<{ placas: string | null }>('SELECT placas FROM despachos WHERE id=$1', [id])).rows[0].placas)
+      .toBe('ABC1234');
+
+    const res = await editar({ placas: null }).expect(200);
+    expect(res.body.placas).toBeNull();
+  });
+
+  it("treats an emptied form field as 'unknown', not as the old plate", async () => {
+    await editar({ transportistaId, unidadId: unidadTractoId }).expect(200);
+    const res = await editar({ placas: '   ' }).expect(200);
+    expect(res.body.placas).toBeNull();
+  });
+
+  it('keeps caller-supplied replacement plates when the unit is dropped', async () => {
+    await editar({ transportistaId, unidadId: unidadTractoId }).expect(200);
+    // A substitute tractor showed up whose plate is not in the catalog yet: the caller's value wins.
+    const res = await editar({ unidadId: null, placas: 'xyz-98-76' }).expect(200);
+    expect(res.body.unidadId).toBeNull();
+    // Normalized on the way in, exactly like the fleet catalog does it.
+    expect(res.body.placas).toBe('XYZ9876');
+  });
+
   it('refuses to change the unit type while a unit is attached — the type is what everything hangs off', async () => {
     await editar({ transportistaId, unidadId: unidadTractoId }).expect(200);
     const res = await editar({ tipoUnidad: 'torton' }).expect(409);
@@ -457,6 +568,62 @@ describe('partidas — R29: N guías, N clientes, un destino', () => {
     await query(`UPDATE operacion_guias SET estado='csa_pendiente' WHERE id=$1`, [guiaB1]);
     const csa = await agregarPartida(id, { operacionId: opB, operacionGuiaId: guiaB1 }).expect(409);
     expect(csa.body.error).toContain('CT-3');
+  });
+
+  /**
+   * A PARTIDA WITHOUT A GUÍA CLAIMS THE WHOLE CASO — SO IT ANSWERS FOR EVERY GUÍA IN IT.
+   *
+   * `operacionGuiaId` is optional (a caso whose guías are not broken out yet rides as one line), and
+   * the refusal set only ever looked at the guía it was HANDED. So omitting it walked straight past
+   * CT-2/CT-3/CT-5: a caso with one guía `retenida` could be put on a truck in its entirety, and the
+   * pedimento would then declare cargo the authority is physically holding — the single most
+   * expensive mistake in this domain, and the one the freeze layer exists to prevent.
+   */
+  it('REFUSES a whole-caso partida when ANY guía of the caso cannot leave (CT-5)', async () => {
+    // A PARTIAL retención: AAA0002 is held, AAA0001 is free. The caso is not free.
+    await query(`UPDATE operacion_guias SET estado='retenida' WHERE id=$1`, [guiaA2]);
+
+    const res = await agregarPartida(id, { operacionId: opA }).expect(409);
+    // Per-cause message, and it NAMES the guía — the caller never mentioned one, so "no" without the
+    // name sends somebody to ask three people which of the caso's guías is stuck.
+    expect(res.body.error).toContain('CT-5');
+    expect(res.body.guia).toBe('AAA0002');
+    expect(res.body.estado).toBe('retenida');
+    expect(res.body.alcance).toBe('caso');
+    expect(res.body.error).toContain('AAA0002');
+    expect((await query('SELECT id FROM despacho_partidas')).rows).toHaveLength(0);
+
+    // And the way forward the message points at works: the free guía may go on its own.
+    await agregarPartida(id, { operacionId: opA, operacionGuiaId: guiaA1 }).expect(201);
+  });
+
+  it('names the right cause for each blocked state on a whole-caso partida', async () => {
+    await query(`UPDATE operacion_guias SET estado='no_transmitida' WHERE id=$1`, [guiaB1]);
+    const noTransmitida = await agregarPartida(id, { operacionId: opB }).expect(409);
+    expect(noTransmitida.body.error).toContain('CT-2');
+    expect(noTransmitida.body.guia).toBe('BBB0001');
+
+    await query(`UPDATE operacion_guias SET estado='csa_pendiente' WHERE id=$1`, [guiaB1]);
+    const csa = await agregarPartida(id, { operacionId: opB }).expect(409);
+    expect(csa.body.error).toContain('CT-3');
+
+    await query(`UPDATE operacion_guias SET estado='cancelada' WHERE id=$1`, [guiaB1]);
+    const cancelada = await agregarPartida(id, { operacionId: opB }).expect(409);
+    expect(cancelada.body.error).toContain('cancelada');
+  });
+
+  it('still allows a whole-caso partida when every guía of the caso can leave', async () => {
+    const res = await agregarPartida(id, { operacionId: opA }).expect(201);
+    expect(res.body.ok).toBe(true);
+    // Also the case with no guías broken out at all: absence of guías is not a refusal.
+    await query('DELETE FROM operacion_guias WHERE operacion_id = $1', [opB]);
+    await agregarPartida(id, { operacionId: opB }).expect(201);
+  });
+
+  it('a per-guía refusal still reports itself as guía-scoped, not caso-scoped', async () => {
+    await query(`UPDATE operacion_guias SET estado='retenida' WHERE id=$1`, [guiaA1]);
+    const res = await agregarPartida(id, { operacionId: opA, operacionGuiaId: guiaA1 }).expect(409);
+    expect(res.body.alcance).toBe('guia');
   });
 
   it('refuses a guía that belongs to another caso', async () => {

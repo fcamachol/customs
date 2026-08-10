@@ -296,7 +296,110 @@ describe('POST /api/pods/:id/firmado — la firma completa la entrega (R39)', ()
 
     expect(r.status).toBe(201);
     expect(r.body.operacionesEntregadas).toEqual(['160-11111111']);
-    expect(r.body.operacionesSinAvanzar).toEqual([{ mawb: '160-22222222', etapa: 'cancelada' }]);
+    expect(r.body.operacionesSinAvanzar).toEqual([
+      {
+        mawb: '160-22222222',
+        etapa: 'cancelada',
+        motivo: "La etapa 'cancelada' no admite avanzar a 'entregado'.",
+      },
+    ]);
+  });
+});
+
+/**
+ * A CASO SPLIT ACROSS TWO TRUCKS IS NOT DELIVERED UNTIL THE SECOND ONE ARRIVES.
+ *
+ * R29 lets one caso ride on several despachos — different guías, different destinations, different
+ * days. `etapa` is a statement about the CASO, so advancing it on the first POD signed marked cargo
+ * as delivered while it was demonstrably still on the road; and because `etapa` is monotonic, no
+ * later event could take that back. The trip's own `estado` still closes on its own signature: that
+ * part IS true of the trip.
+ */
+describe('POST /api/pods/:id/firmado — una operación repartida en dos despachos', () => {
+  let despachoB: string;
+  let guiaA2: string;
+
+  beforeEach(async () => {
+    // A second guía of caso A, riding on a SECOND truck that has not arrived.
+    const g = await query<{ id: string }>(
+      `INSERT INTO operacion_guias (operacion_id, guia_norm, guia_raw, piezas, cartones, estado, client_id)
+       VALUES ($1,'AAA0002','AAA-0002',50,5,'declarada',$2) RETURNING id`,
+      [opA, clientId],
+    );
+    guiaA2 = g.rows[0].id;
+    expect(guiaA2).toBeTruthy();
+    const d = await query<{ id: string }>(
+      `INSERT INTO despachos (folio, fecha_operacion, tipo_unidad, transportista_id, placas,
+                              operador_nombre, direccion_entrega_id, estado)
+       VALUES ('D-20260814-002',$1,'tracto',$2,'XYZ9876','Luis Soto',$3,'en_transito') RETURNING id`,
+      [FECHA, transportistaId, direccionId],
+    );
+    despachoB = d.rows[0].id;
+    await query(
+      `INSERT INTO despacho_partidas (despacho_id, operacion_id, operacion_guia_id, cartones_planeados, piezas, orden_carga)
+       VALUES ($1,$2,$3,5,50,1)`,
+      [despachoB, opA, guiaA2],
+    );
+  });
+
+  async function firmar(despacho: string, quien: string) {
+    const gen = await request(app)
+      .post(`/api/despachos/${despacho}/pod`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    expect(gen.status).toBe(201);
+    const r = await request(app)
+      .post(`/api/pods/${gen.body.id}/firmado`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('firmadoPor', quien)
+      .attach('file', pdf(), { filename: 'pod.pdf', contentType: 'application/pdf' });
+    expect(r.status).toBe(201);
+    return r;
+  }
+
+  async function etapaDe(id: string): Promise<string> {
+    const { rows } = await query<{ etapa: string }>('SELECT etapa FROM operaciones WHERE id = $1', [id]);
+    return rows[0].etapa;
+  }
+
+  it('firmar el POD del viaje A NO entrega el caso: parte de su carga sigue en el viaje B', async () => {
+    const r = await firmar(despachoId, 'Ing. Ramírez — viaje A');
+
+    // The TRIP closed — that is true of the trip and stays true.
+    const d = await query<{ estado: string }>('SELECT estado FROM despachos WHERE id = $1', [despachoId]);
+    expect(d.rows[0].estado).toBe('entregado');
+
+    // The split caso did not. Caso B rode only on this truck, so it did.
+    expect(await etapaDe(opA)).toBe('en_transito');
+    expect(await etapaDe(opB)).toBe('entregado');
+
+    expect(r.body.operacionesEntregadas).toEqual(['160-22222222']);
+    expect(r.body.operacionesSinAvanzar).toHaveLength(1);
+    expect(r.body.operacionesSinAvanzar[0]).toMatchObject({ mawb: '160-11111111', etapa: 'en_transito' });
+    // The reason travels with it: "it did not advance" without a cause sends somebody to ask.
+    expect(r.body.operacionesSinAvanzar[0].motivo).toMatch(/más de un despacho/);
+
+    // And the ledger says the same thing the response did.
+    const ev = await query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM operacion_eventos WHERE tipo = 'POD_FIRMADO' AND operacion_id = $1`, [opA]);
+    expect(ev.rows[0].payload.operacionesEntregadas).toEqual(['160-22222222']);
+  });
+
+  it('firmar el POD del viaje B sí entrega el caso: ya no queda carga en la calle', async () => {
+    await firmar(despachoId, 'Ing. Ramírez — viaje A');
+    expect(await etapaDe(opA)).toBe('en_transito');
+
+    const r = await firmar(despachoB, 'Ing. Ramírez — viaje B');
+    expect(await etapaDe(opA)).toBe('entregado');
+    expect(r.body.operacionesEntregadas).toEqual(['160-11111111']);
+    expect(r.body.operacionesSinAvanzar).toEqual([]);
+  });
+
+  it('un viaje CANCELADO no retiene la entrega: ya no lleva nada', async () => {
+    await query(`UPDATE despachos SET estado = 'cancelado' WHERE id = $1`, [despachoB]);
+    const r = await firmar(despachoId, 'Ing. Ramírez');
+    expect(await etapaDe(opA)).toBe('entregado');
+    expect(r.body.operacionesEntregadas).toEqual(expect.arrayContaining(['160-11111111', '160-22222222']));
   });
 });
 

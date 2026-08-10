@@ -364,6 +364,60 @@ describe('timbrado y cancelación (R48, D17)', () => {
     expect(ev.rows).toHaveLength(2);
   });
 
+  /**
+   * THE ENDPOINT IS MULTIPART, SO EVERY FIELD ARRIVES AS A STRING.
+   *
+   * `timbradoPrueba` was a bare `z.boolean()`, which rejects the string `'false'` outright. The only
+   * way to record a REAL fiscal stamp was therefore to send JSON with no file — i.e. the honest,
+   * consequential claim was the one the form could not make, while the default (`prueba: true`)
+   * sailed through. Same explicit string mapping as `campoEventoBody.override`, and for the same
+   * reason: `z.coerce.boolean()` reads 'false' as true, which HERE would silently upgrade a test
+   * stamp to a fiscal one on a form-encoded retry.
+   */
+  it("acepta timbradoPrueba='false' en multipart y registra un timbrado REAL", async () => {
+    const id = await crearCfdi();
+    const r = await request(app)
+      .post(`/api/facturacion/facturas/${id}/timbrado`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('uuidCfdi', 'REAL-0001-0002-0003-000000000004')
+      .field('timbradoPrueba', 'false')
+      .attach('file', Buffer.from('<cfdi/>'), { filename: 'cfdi.xml', contentType: 'application/xml' });
+
+    expect(r.status).toBe(201);
+    expect(r.body.timbradoPrueba).toBe(false);
+    // No "this was only a test" warning on a stamp that claims to be fiscal.
+    expect(r.body.advertencia).toBeNull();
+
+    const fila = await query<{ timbrado_prueba: boolean }>(
+      'SELECT timbrado_prueba FROM facturas WHERE id = $1', [id]);
+    expect(fila.rows[0].timbrado_prueba).toBe(false);
+  });
+
+  it("acepta timbradoPrueba='true' en multipart sin convertirlo en otra cosa", async () => {
+    const id = await crearCfdi();
+    const r = await request(app)
+      .post(`/api/facturacion/facturas/${id}/timbrado`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('uuidCfdi', 'PRUEBA-0001')
+      .field('timbradoPrueba', 'true')
+      .attach('file', Buffer.from('<cfdi/>'), { filename: 'cfdi.xml', contentType: 'application/xml' });
+    expect(r.status).toBe(201);
+    expect(r.body.timbradoPrueba).toBe(true);
+    expect(r.body.advertencia).toMatch(/PRUEBA/);
+  });
+
+  it('rechaza un timbradoPrueba que no es booleano en lugar de adivinar', async () => {
+    const id = await crearCfdi();
+    const r = await request(app)
+      .post(`/api/facturacion/facturas/${id}/timbrado`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .field('uuidCfdi', 'AMBIGUO-0001')
+      .field('timbradoPrueba', 'quizá');
+    expect(r.status).toBe(400);
+    const fila = await query<{ estado: string }>('SELECT estado FROM facturas WHERE id = $1', [id]);
+    expect(fila.rows[0].estado).not.toBe('timbrada');
+  });
+
   it('no admite un segundo UUID sobre el mismo documento', async () => {
     const id = await crearCfdi();
     await request(app)

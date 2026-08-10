@@ -33,10 +33,11 @@ import {
   canAdvanceEstadoDespacho,
   etiquetaTipoUnidad,
   GUIA_ESTADOS_DESPACHABLES,
+  GUIA_ESTADOS_NO_DESPACHABLES,
   type EstadoDespacho,
   type GuiaEstadoNoDespachable,
 } from '../../../shared/operaciones/catalogos';
-import { desviacionArriboMin, estimarArribo } from '../../../shared/operaciones/eta';
+import { desviacionArriboMin, estimarArribo, fechaLocalMexico } from '../../../shared/operaciones/eta';
 
 /**
  * DESPACHOS — one unit, one trip (PRD-02 R21–R29, R36/D14, CT-7/D10).
@@ -302,7 +303,10 @@ despachosRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { tipoUnidad, direccionEntregaId, fecha } = req.query as unknown as DespachoOpcionesQuery;
-      const dia = fecha ?? new Date().toISOString().slice(0, 10);
+      // CDMX, not UTC. The date decides which convenios and tarifas are IN FORCE, so a UTC default
+      // would, every evening from 18:00 local, price the trip against tomorrow's vigencias — and a
+      // convenio expiring today would stop being offered half a day early.
+      const dia = fecha ?? fechaLocalMexico(new Date()) ?? new Date().toISOString().slice(0, 10);
 
       const { rows } = await query(
         `SELECT t.id                AS "transportistaId",
@@ -752,8 +756,13 @@ despachosRouter.put(
         if (b.tipoUnidad !== undefined) set('tipo_unidad', tipoUnidad);
         if (b.transportistaId !== undefined) set('transportista_id', transportistaId);
         if (b.unidadId !== undefined) set('unidad_id', unidadId);
+        // Plates follow the unit unless the caller overrides them. `b.placas === null` clears them
+        // outright; and when the UNIT is dropped (`unidadId: null`) the denormalized copy goes with
+        // it, because `asignacion.placas` is null in that case. Leaving the old plate behind is how
+        // the published plan ends up naming a truck that is no longer on the trip — the copy must
+        // never outlive what it is a copy of.
         if (b.placas !== undefined) set('placas', b.placas);
-        else if (b.unidadId !== undefined && asignacion.placas) set('placas', asignacion.placas);
+        else if (b.unidadId !== undefined) set('placas', asignacion.placas);
         if (b.operadorNombre !== undefined) set('operador_nombre', b.operadorNombre);
         if (b.direccionEntregaId !== undefined) set('direccion_entrega_id', direccionEntregaId);
         if (b.citaAt !== undefined) set('cita_at', b.citaAt ? new Date(b.citaAt) : null);
@@ -869,7 +878,10 @@ despachosRouter.put(
  *     costs money (CT-3/CT-4/CT-6). Refusing here is what prevents the *flete en falso*.
  *  3. the guía is `retenida`, `no_transmitida`, `csa_pendiente` or `cancelada` — cargo that must not
  *     be declared as leaving when it is not leaving (CT-2/CT-5). Each gets its own message, because
- *     "no" without the reason sends somebody to ask three people.
+ *     "no" without the reason sends somebody to ask three people. AND WHEN NO `operacionGuiaId` IS
+ *     GIVEN THE SAME REFUSAL APPLIES TO EVERY GUÍA OF THE CASO: a partida without a guía claims all
+ *     of that caso's cargo, so one blocked guía blocks it, and the message names the guía so the
+ *     coordinator can split the caso instead of guessing.
  *  4. the guía is already on this truck — the unique constraint, surfaced as a 409.
  *
  * `ordenCarga` is assigned as the next consecutive when the caller omits it (R14: the warehouse
@@ -912,7 +924,38 @@ despachosRouter.post(
           if (!g.rows.length) return { kind: 'guia_ajena' as const };
           guia = g.rows[0];
           if (!ESTADOS_GUIA_CARGABLES.has(guia!.estado)) {
-            return { kind: 'guia_no_cargable' as const, estado: guia!.estado, guia: guia!.guiaNorm };
+            return {
+              kind: 'guia_no_cargable' as const,
+              estado: guia!.estado,
+              guia: guia!.guiaNorm,
+              alcance: 'guia' as const,
+            };
+          }
+        } else {
+          // A PARTIDA WITHOUT A GUÍA CLAIMS THE WHOLE CASO, SO IT ANSWERS FOR EVERY GUÍA IN IT.
+          //
+          // The refusal above only ever looked at the guía it was handed, so omitting `operacionGuiaId`
+          // walked straight past CT-2/CT-3/CT-5: a caso with one guía `retenida` could be put on a
+          // truck in its entirety, and the pedimento would then declare cargo the authority is
+          // holding. Refusing on the FIRST offending guía — in the shared list's declared order, so
+          // the answer is deterministic — and naming it is what lets the coordinator go split the
+          // caso guía by guía instead of guessing which one is blocked.
+          const g = await q(
+            `SELECT guia_norm AS "guiaNorm", estado
+               FROM operacion_guias
+              WHERE operacion_id = $1 AND estado <> ALL($2::text[])
+              ORDER BY array_position($3::text[], estado) NULLS LAST, guia_norm
+              LIMIT 1`,
+            [b.operacionId, [...GUIA_ESTADOS_DESPACHABLES], [...GUIA_ESTADOS_NO_DESPACHABLES]],
+          );
+          if (g.rows.length) {
+            const bloqueada = g.rows[0] as { guiaNorm: string; estado: string };
+            return {
+              kind: 'guia_no_cargable' as const,
+              estado: bloqueada.estado,
+              guia: bloqueada.guiaNorm,
+              alcance: 'caso' as const,
+            };
           }
         }
 
@@ -985,15 +1028,23 @@ despachosRouter.post(
         case 'guia_ajena':
           res.status(400).json({ error: 'La `operacionGuiaId` indicada no pertenece a esa operación.' });
           return;
-        case 'guia_no_cargable':
+        case 'guia_no_cargable': {
+          // The cause is the same sentence either way; what changes is that a whole-caso partida has
+          // to say WHICH guía blocked it, since the caller never named one.
+          const motivo =
+            MOTIVO_GUIA_NO_CARGABLE[resultado.estado as GuiaEstadoNoDespachable] ??
+            `La guía está en estado '${resultado.estado}' y no puede cargarse.`;
           res.status(409).json({
             error:
-              MOTIVO_GUIA_NO_CARGABLE[resultado.estado as GuiaEstadoNoDespachable] ??
-              `La guía está en estado '${resultado.estado}' y no puede cargarse.`,
+              resultado.alcance === 'caso'
+                ? `La partida sin guía se lleva TODA la operación, y la guía ${resultado.guia} no puede salir. ${motivo} Agrega las guías una por una si el resto sí sale.`
+                : motivo,
             guia: resultado.guia,
             estado: resultado.estado,
+            alcance: resultado.alcance,
           });
           return;
+        }
         default:
           break;
       }

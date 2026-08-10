@@ -34,12 +34,23 @@ function esArchivoFaltante(err: unknown): boolean {
  * 2026-08-07). The volume is the fix; this route is what the system says on the way there, and what
  * it will keep saying if a blob is ever lost again.
  *
- * AND THE AUDIT ROW IS WRITTEN AFTER THE FACT IT DESCRIBES. It used to be written before
- * `res.download()`, so a download that never happened was recorded as a completed one — the audit
- * chain asserting a delivery of bytes nobody received. Each request now writes EXACTLY ONE row
- * (house rule §5) naming what actually occurred: `DOWNLOAD_FILE` only once the response finished,
- * `DOWNLOAD_FILE_UNAVAILABLE` when the blob is missing, `DOWNLOAD_FILE_FAILED` when the transfer
- * broke mid-stream.
+ * BYTES NEVER LEAVE UNAUDITED, AND A FAILED TRANSFER STILL TELLS THE TRUTH. These pull in opposite
+ * directions and the resolution is ordering, not choice:
+ *
+ *   - `DOWNLOAD_FILE` is written and AWAITED BEFORE a single byte is handed to `res.download()`.
+ *     That is the guarantee, and it is the one that matters: this is archived customs evidence, and
+ *     an audit row written afterwards is an audit row that a crash, an OOM kill or a lost database
+ *     connection can skip AFTER the file has already reached the client. There is no ordering in
+ *     which "record it later" cannot lose the record of a delivery that happened. If the audit
+ *     insert fails, the request fails and nothing is sent — refusing to serve evidence we cannot
+ *     account for is the correct trade.
+ *   - When the transfer then breaks mid-stream, `DOWNLOAD_FILE_FAILED` is APPENDED as a second,
+ *     compensating row. It does not retract the first one — nothing here rewrites history — it
+ *     states the later fact: the delivery was authorised and begun, and it did not complete. Two
+ *     rows telling the true story beats one row telling half of it.
+ *
+ * `DOWNLOAD_FILE_UNAVAILABLE` stands alone: the blob was missing before anything was authorised, so
+ * there was no delivery to audit.
  */
 filesRouter.get('/:id', requireAuth, async (req, res, next) => {
   try {
@@ -96,27 +107,30 @@ filesRouter.get('/:id', requireAuth, async (req, res, next) => {
       return;
     }
 
-    // Awaited so the audit row is written after the transfer resolves, one way or the other.
-    // `res.download` is still called exactly once; its callback just settles this promise.
+    // THE GUARANTEE: the delivery is on the chain before the socket sees anything. Awaited, so a
+    // failing audit insert throws here — with nothing sent — and the outer catch turns it into a
+    // 500. Bytes do not leave this process unaccounted for.
+    await recordAudit({
+      userId: req.user!.userId, action: 'DOWNLOAD_FILE', entity: 'file', entityId: req.params.id, ip: req.ip,
+    });
+
+    // Awaited so the compensating row below is written after the transfer resolves, one way or the
+    // other. `res.download` is still called exactly once; its callback just settles this promise.
     const err = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
       res.download(file.storagePath, file.originalName, (e) =>
         resolve(e as NodeJS.ErrnoException | undefined));
     });
 
-    if (!err) {
-      await recordAudit({
-        userId: req.user!.userId, action: 'DOWNLOAD_FILE', entity: 'file', entityId: req.params.id, ip: req.ip,
-      });
-      return;
-    }
+    if (!err) return;
 
-    // The blob vanished between the stat and the read. Same fact as above, and still answerable as
-    // long as nothing has been written to the socket yet.
+    // The blob vanished between the stat and the read. Still answerable as long as nothing has been
+    // written to the socket yet — and `DOWNLOAD_FILE_UNAVAILABLE` lands beside the DOWNLOAD_FILE
+    // above rather than instead of it, because the delivery really was authorised first.
     if (esArchivoFaltante(err) && !res.headersSent) { await responderNoDisponible(); return; }
 
-    // A client that hung up, or an I/O error mid-stream: the download did NOT complete, so it is
-    // not recorded as one. Once headers are out there is no response left to send — the fact lives
-    // in the audit chain instead.
+    // A client that hung up, or an I/O error mid-stream. The compensating fact: this delivery was
+    // begun and did NOT complete. Once headers are out there is no response left to send — the
+    // record lives in the audit chain instead.
     await recordAudit({
       userId: req.user!.userId,
       action: 'DOWNLOAD_FILE_FAILED',

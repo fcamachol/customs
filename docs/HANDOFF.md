@@ -41,9 +41,31 @@ this range, in order:
   delivered after commit, not just recorded as owed; `hold_activo`'s formula was extracted to one
   helper (`services/holdActivo.ts`, 5 call sites unified); a shared guía-despachable vocabulary
   (hash-pinned) now lives in `shared/operaciones/catalogos.ts`; a tick phase-order test was added;
-  `apiDownload` surfaces the 410 body to the frontend; demo-reset truncates all 25 ops tables in
-  FK order. The Cincel ↔ `transportista_convenios` unification was **designed** in
+  `apiDownload` surfaces the 410 body to the frontend; demo-reset learned about the PRD-02 tables.
+  **Its blast radius has since been bounded** (see below). The Cincel ↔ `transportista_convenios` unification was **designed** in
   `server/src/services/cincel.ts` (a long comment, lines ~30–91) and **deliberately not built**.
+
+**`POST /api/admin/demo-reset` — what it deletes, and what it will not.** When the reset learned
+about PRD-02's tables it overshot: a request with **no body at all** truncated the whole operations
+surface, including the append-only `operacion_eventos` ledger and the signed carrier convenios. That
+is now bounded, and the three rules are worth knowing before you click it:
+
+- **Always wiped**: the manifest graph (manifests + cascade: shipments, pedimentos, scans, staging,
+  monthly_history) and every stored file that nothing surviving still points at.
+- **Only on `{"incluirOperaciones": true}`**: the Sistema de Operaciones graph — casos, guías, the
+  `operacion_eventos` ledger, campo evidence, prealertas, holds/retenciones/requerimientos, replan
+  evaluations and actions, despachos and partidas, published plans, PODs, facturas, vuelos. The
+  default is the pre-PRD-02 behaviour, so an accidental click cannot erase the ledger.
+- **Never wiped**: users, clients, catalogs, config, `integracion_cursores`, the audit log — plus the
+  **durable commercial catalogs** (`transportistas`, `transportista_unidades`,
+  `transportista_convenios`, `transportista_tarifas`, `client_direcciones`, `client_tarifas`,
+  `convenios`) and the NOM-151 signed documents attached to them.
+
+The response names exactly which surfaces it touched (`deleted` / `superficies` / `conservado`), and
+the `DEMO_RESET` audit row carries the identical object. **`RESET_DATA_KEEP_USERS`
+(`server/scripts/resetData.ts`, run by `docker-entrypoint.sh` on every boot) is unchanged and
+unrelated** — it still enumerates `pg_tables` and truncates everything except `users`/`pgmigrations`.
+That is the operator's one-shot deployment wipe; this endpoint is the in-app one.
 
 **What is genuinely still open** (none of it is closeable from a code session alone):
 

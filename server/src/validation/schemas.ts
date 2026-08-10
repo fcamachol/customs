@@ -178,6 +178,20 @@ const textoOpcional = z.preprocess(
   z.string().optional(),
 );
 
+/**
+ * An optional boolean that survives a multipart/form-encoded request, where EVERY field arrives as a
+ * string.
+ *
+ * NOT `z.coerce.boolean()`: that turns the string 'false' into `true`, so a form could only ever say
+ * yes — and on both endpoints that use this the wrong value is the dangerous one (an event silently
+ * marked a human override, a test stamp silently claimed as fiscal). Strings are mapped explicitly,
+ * and anything else is left for `z.boolean()` to reject out loud.
+ */
+const booleanoDeFormulario = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v === 'false' ? false : v === 'true' ? true : v),
+  z.boolean().optional(),
+);
+
 const fechaHora = z
   .string()
   .refine((s) => !Number.isNaN(Date.parse(s)), 'La fecha/hora no es válida.');
@@ -228,12 +242,9 @@ export const campoEventoBody = z.object({
   /** Appointment time given to the transportista, so the delay against it can be measured (R30). */
   citaAt: fechaHoraOpcional,
   motivo: textoOpcional,
-  // NOT z.coerce.boolean(): that turns the string 'false' into `true`, so a form-encoded retry could
-  // silently mark an event as a human override. Strings are mapped explicitly instead.
-  override: z.preprocess(
-    (v) => (v === '' || v === null || v === undefined ? undefined : v === 'false' ? false : v === 'true' ? true : v),
-    z.boolean().optional(),
-  ),
+  // A form-encoded retry must not be able to silently mark an event as a human override; see
+  // `booleanoDeFormulario` for why this is not `z.coerce.boolean()`.
+  override: booleanoDeFormulario,
 });
 export type CampoEventoBody = z.infer<typeof campoEventoBody>;
 
@@ -781,7 +792,30 @@ export const despachoActualizarBody = z.object({
   // carrier needs a way to say so that is not "leave the old one and hope".
   transportistaId: z.string().uuid().nullable().optional(),
   unidadId: z.string().uuid().nullable().optional(),
-  placas: textoOpcional,
+  /**
+   * Plates, and they must be CLEARABLE — the same `null`-vs-absent distinction as the two ids above.
+   *
+   * `textoOpcional` collapsed both `null` and `''` to `undefined`, i.e. to "leave it alone", so once
+   * a plate was written onto a despacho there was no request that could take it off. That is the
+   * wrong default for a DENORMALIZED value: `despachos.placas` is a copy of the unit's plate kept so
+   * the published plan and the POD read like the paper they replace, and a copy that cannot be
+   * erased outlives the assignment it was copied from — the plan then names a truck that is no
+   * longer on the trip.
+   *
+   * `''` clears too, and deliberately: a coordinator who empties the field on a form is saying the
+   * plate is unknown, and the honest record of that is NULL, not the old plate. Normalized on the
+   * way in exactly like `unidadBody.placas`, so 'abc-12-34' and 'ABC1234' are one plate here too.
+   */
+  placas: z.preprocess(
+    (v) => {
+      if (v === undefined) return undefined;
+      if (v === null) return null;
+      if (typeof v !== 'string') return v;
+      const s = v.trim().toUpperCase().replace(/[\s-]/g, '');
+      return s === '' ? null : s;
+    },
+    z.string().nullable().optional(),
+  ),
   operadorNombre: textoOpcional,
   direccionEntregaId: z.string().uuid().nullable().optional(),
   citaAt: fechaHoraOpcional,
@@ -1032,12 +1066,19 @@ export const facturaListQuery = z.object({
  * R48 — attach the stamp. `timbradoPrueba` defaults to TRUE in the route, not here: the T1-specific
  * stamping is not enabled yet, so a caller who says nothing is producing a test stamp and the record
  * must say so. Claiming a fiscal stamp requires saying it out loud.
+ *
+ * THE ENDPOINT IS MULTIPART (the stamped XML/PDF rides along), so every field arrives as a STRING.
+ * A plain `z.boolean()` therefore rejected `timbradoPrueba='false'` outright, and the only way to
+ * record a REAL stamp was to send JSON with no file — i.e. the honest claim was the one the form
+ * could not make. Same explicit string mapping as `campoEventoBody.override`, and for the same
+ * reason: `z.coerce.boolean()` reads 'false' as true, which here would silently downgrade a fiscal
+ * stamp to a test one.
  */
 export const facturaTimbradoBody = z.object({
   uuidCfdi: textoRequerido,
   folio: textoOpcional,
   timbradoAt: fechaHoraOpcional,
-  timbradoPrueba: z.boolean().optional(),
+  timbradoPrueba: booleanoDeFormulario,
 });
 export type FacturaTimbradoBody = z.infer<typeof facturaTimbradoBody>;
 
@@ -1078,3 +1119,19 @@ export const reporteOperativoQuery = z.object({
   clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
 });
 export type ReporteOperativoQuery = z.infer<typeof reporteOperativoQuery>;
+
+// ── demo reset (routes/admin.ts) ─────────────────────────────────────────────────────────────
+/**
+ * The opt-in that decides the reset's blast radius.
+ *
+ * `incluirOperaciones` defaults to FALSE, and the default is the point. The reset used to TRUNCATE
+ * the whole operations surface — including the append-only `operacion_eventos` ledger — on a request
+ * with no body at all, which meant a demo tool could erase the record of what the system had said,
+ * by accident, from a button. Wiping the operational graph is now something the caller has to ASK
+ * for in as many words; without it the endpoint does what it did before PRD-02: the manifest graph
+ * and the stored files, nothing else.
+ */
+export const demoResetBody = z.object({
+  incluirOperaciones: booleanoDeFormulario,
+});
+export type DemoResetBody = z.infer<typeof demoResetBody>;

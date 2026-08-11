@@ -58,9 +58,21 @@ export async function apiDelete<T>(path: string): Promise<T> {
   return res.json();
 }
 
+/**
+ * Multipart POST.
+ *
+ * LANZA `ApiError`, NO `Error(body.error)`, y eso es lo que hace posible el flujo de sustitución de
+ * manifiesto. `POST /api/manifests` responde 409 ante un MAWB repetido con `puedeSustituir:true` y
+ * el `manifestId` del manifiesto que ya existe — es decir, con la salida — y quedarse sólo con la
+ * frase del error tiraba justo los dos campos accionables, dejando en pantalla un callejón sin
+ * salida donde el servidor ofrecía un camino. Mismo criterio que `apiDownload`.
+ */
 export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { ...authHeaders() }, body: form });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Error');
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new ApiError((typeof body.error === 'string' && body.error) || 'Error', res.status, body);
+  }
   return res.json();
 }
 

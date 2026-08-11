@@ -3,14 +3,20 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import RegistroView from './RegistroView';
 import { AuthProvider } from '../context/AuthContext';
-import { apiGet, apiPost, apiUpload } from '../api';
+import { apiGet, apiPost, apiUpload, ApiError } from '../api';
 import { extractMawb } from '../lib/extractMawb';
 
-vi.mock('../api', () => ({
-  apiGet: vi.fn(),
-  apiPost: vi.fn(),
-  apiUpload: vi.fn(),
-}));
+// `ApiError` se toma del módulo REAL: el flujo de sustitución se decide con un `instanceof` sobre
+// ella, así que un doble vacío haría que la rama nunca se pudiera probar (ni existir).
+vi.mock('../api', async () => {
+  const actual = await vi.importActual<typeof import('../api')>('../api');
+  return {
+    ApiError: actual.ApiError,
+    apiGet: vi.fn(),
+    apiPost: vi.fn(),
+    apiUpload: vi.fn(),
+  };
+});
 vi.mock('../lib/extractMawb', () => ({ extractMawb: vi.fn() }));
 
 const mGet = apiGet as ReturnType<typeof vi.fn>;
@@ -195,6 +201,87 @@ describe('RegistroView per-client header mapping panel', () => {
         clientId: null, header: 'Detalle Mercancía', canonicalPath: 'core.description',
       }),
     );
+  });
+});
+
+/**
+ * SUSTITUIR UN MANIFIESTO — donde antes había un error muerto.
+ *
+ * El 409 por MAWB duplicado se conserva (una segunda fila `manifests` para el mismo MAWB debe
+ * seguir siendo imposible) pero ahora trae `puedeSustituir` y el manifiesto que ya existe. La UI
+ * tiene que convertir eso en camino, y el paso del diff no es decorativo: nadie debería reemplazar
+ * los datos con los que ya se calificó riesgo sin ver antes qué líneas se van.
+ */
+describe('RegistroView — sustitución por MAWB duplicado', () => {
+  const DUP = new ApiError('Ya existe un manifiesto para esta guía MAWB.', 409, {
+    error: 'Ya existe un manifiesto para esta guía MAWB.',
+    manifestId: 'm-viejo',
+    puedeSustituir: true,
+  });
+
+  async function llegarAlOfrecimiento() {
+    mUpload.mockRejectedValueOnce(DUP);
+    mPost.mockImplementation(async (path: string) => {
+      if (path.endsWith('/risk')) return { rows: [], summary: { analizados: 2 }, summaryEfectivo: { analizados: 2 } };
+      return { ok: true };
+    });
+    renderView();
+    selectFile();
+    fireEvent.click(await screen.findByRole('button', { name: /Continuar/i }));
+    await screen.findByLabelText('Cliente');
+    pickOption('Cliente', 'ACME');
+    pickOption('Plataforma', 'Plat A');
+    fireEvent.click(screen.getByRole('button', { name: /Realizar an[aá]lisis/i }));
+    await screen.findByText(/¿Sustituirlo\?/);
+  }
+
+  it('ofrece sustituir en vez de dejar el error muerto', async () => {
+    await llegarAlOfrecimiento();
+    expect(screen.getByText(/Ya existe un manifiesto para esta guía/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Sustituirlo$/ })).toBeTruthy();
+  });
+
+  it('exige motivo, enseña el diff y sólo entonces aplica con ese motivo', async () => {
+    await llegarAlOfrecimiento();
+    fireEvent.click(screen.getByRole('button', { name: /^Sustituirlo$/ }));
+
+    // Sin motivo no se puede ni pedir el diff: la v2 lo exige y la tabla tiene un CHECK.
+    const verCambios = await screen.findByRole('button', { name: /Ver cambios/i });
+    expect((verCambios as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText(/Motivo de la sustitución/i), {
+      target: { value: 'El cliente reenvió el manifiesto corregido.' },
+    });
+    mUpload.mockResolvedValueOnce({
+      version: 2, estado: 'staged',
+      counts: { total: 3, valid: 3, warning: 0, error: 0 },
+      diff: { altas: ['k3'], bajas: ['k1'], modificadas: ['k2'], sinCambio: 0 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Ver cambios/i }));
+
+    // El diff, antes de tocar nada.
+    await screen.findByText(/La versión v2 traería/);
+    await waitFor(() =>
+      expect(mUpload).toHaveBeenCalledWith('/api/manifests/m-viejo/versiones', expect.any(FormData)));
+    const fd = mUpload.mock.calls[mUpload.mock.calls.length - 1][1] as FormData;
+    expect(fd.get('motivo')).toBe('El cliente reenvió el manifiesto corregido.');
+
+    fireEvent.click(screen.getByRole('button', { name: /Aplicar sustitución/i }));
+    await waitFor(() =>
+      expect(mPost).toHaveBeenCalledWith('/api/manifests/m-viejo/promote', {
+        motivo: 'El cliente reenvió el manifiesto corregido.',
+      }));
+    // Y vuelve a correr el riesgo sobre las líneas nuevas.
+    await waitFor(() => expect(mPost).toHaveBeenCalledWith('/api/manifests/m-viejo/risk', {}));
+  });
+
+  it('dice «no hay nada que sustituir» cuando el archivo trae exactamente las mismas líneas', async () => {
+    await llegarAlOfrecimiento();
+    fireEvent.click(screen.getByRole('button', { name: /^Sustituirlo$/ }));
+    fireEvent.change(await screen.findByLabelText(/Motivo de la sustitución/i), { target: { value: 'reenvío' } });
+    mUpload.mockResolvedValueOnce({ status: 'sin_cambios', version: 1 });
+    fireEvent.click(screen.getByRole('button', { name: /Ver cambios/i }));
+    await screen.findByText(/no hay nada que sustituir/i);
   });
 });
 

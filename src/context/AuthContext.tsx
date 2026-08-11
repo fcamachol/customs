@@ -121,6 +121,23 @@ export function useAuth(): AuthValue {
 }
 
 /**
+ * El mismo contexto, sin exigirlo.
+ *
+ * Existe para los componentes de presentación que sólo quieren SABER el rol para decidir qué
+ * habilitar —`RiskResultTable` y su acción «Disponer»— y que también se renderizan fuera de un
+ * `AuthProvider` (el paso «Resultado» del alta, las pruebas de la tabla). `useAuth` lanza a
+ * propósito, porque una pantalla que necesita sesión y no la tiene está rota; una tabla que sólo
+ * necesita el rol para deshabilitar un botón no lo está, y hacerla lanzar obligaría a envolver
+ * medio árbol en un proveedor para renderizar un `<td>`.
+ *
+ * FALLA CERRADO: sin proveedor devuelve `null`, y quien lo consume trata `null` como «rol
+ * desconocido → no puede disponer». Nunca al revés.
+ */
+export function useAuthOptional(): AuthValue | null {
+  return useContext(Ctx);
+}
+
+/**
  * Call this from API error handlers when a 401 "Token revoked" response is received.
  * It clears the local session so the user is returned to the login screen.
  */

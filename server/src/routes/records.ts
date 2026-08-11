@@ -85,12 +85,16 @@ recordsRouter.get('/', requireAuth, async (req, res) => {
 
   // Risk result is per-shipment; a manifest matches a color if it CONTAINS a
   // shipment of that color. "gris" (Sin evaluar) = no scored shipments.
+  //
+  // El color filtrado es el EFECTIVO (`COALESCE`): si un humano declaró falso positivo el único
+  // hallazgo rojo de un manifiesto, filtrar por rojo no debe seguir devolviéndolo. NULL = sin
+  // disposición, así que sin ninguna en la base el filtro es idéntico al de siempre.
   const result = (req.query.result as string | undefined)?.trim();
   if (result && SCORED_COLORS.includes(result)) {
     params.push(result);
-    clauses.push(`EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND s.risk_color = $${params.length})`);
+    clauses.push(`EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND COALESCE(s.risk_color_efectivo, s.risk_color) = $${params.length})`);
   } else if (result === 'gris') {
-    clauses.push(`NOT EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND s.risk_color IN ('verde','amarillo','rojo'))`);
+    clauses.push(`NOT EXISTS (SELECT 1 FROM shipments s WHERE s.manifest_id = m.id AND COALESCE(s.risk_color_efectivo, s.risk_color) IN ('verde','amarillo','rojo'))`);
   }
 
   const { rows } = await query(

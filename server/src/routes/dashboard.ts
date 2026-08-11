@@ -12,23 +12,26 @@ dashboardRouter.get('/', requireAuth, async (req, res) => {
   const args = all ? [] : [req.user!.userId];
 
   const m = await query(`SELECT count(*)::int AS n FROM manifests${scope}`, args);
+  // El color que se cuenta es el EFECTIVO: `risk_color_efectivo` cuando un humano dispuso algo sobre
+  // la línea, el del motor cuando no. NULL = sin disposición, así que mientras no exista ninguna esto
+  // devuelve exactamente la distribución de siempre. El tablero no aprende qué es una disposición.
   const d = await query(
-    `SELECT s.risk_color, count(*)::int AS n
+    `SELECT COALESCE(s.risk_color_efectivo, s.risk_color) AS risk_color, count(*)::int AS n
      FROM shipments s JOIN manifests mf ON mf.id=s.manifest_id
      WHERE s.risk_color IS NOT NULL${all ? '' : ' AND mf.created_by=$1'}
-     GROUP BY s.risk_color`, args);
+     GROUP BY 1`, args);
 
   let byUserRows;
   if (all) {
     const bu = await query(
       `SELECT mf.created_by AS "userId", u.username,
               (SELECT count(*)::int FROM manifests m2 WHERE m2.created_by=mf.created_by) AS manifests,
-              s.risk_color, count(*)::int AS n
+              COALESCE(s.risk_color_efectivo, s.risk_color) AS risk_color, count(*)::int AS n
        FROM shipments s
        JOIN manifests mf ON mf.id=s.manifest_id
        JOIN users u ON u.id=mf.created_by
        WHERE s.risk_color IS NOT NULL
-       GROUP BY mf.created_by, u.username, s.risk_color
+       GROUP BY mf.created_by, u.username, COALESCE(s.risk_color_efectivo, s.risk_color)
        ORDER BY u.username`, []);
     byUserRows = bu.rows;
   }

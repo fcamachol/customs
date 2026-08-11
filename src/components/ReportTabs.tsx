@@ -12,8 +12,131 @@ interface ReportLockState { editable: boolean; reason: string | null }
 interface RiskBundle {
   risk: RiskRow[];
   riskStale: boolean;
+  /** `manifests.version_vigente`. Ausente en despliegues anteriores a la fase 4 → se lee como 1. */
+  version?: number;
+  /** El resumen del MOTOR y el resumen EFECTIVO. Ausentes ⇒ se cuentan de las filas, como antes. */
+  summary?: RiskSummaryData;
+  summaryEfectivo?: RiskSummaryData;
   generatedAt: string;
   contentHash: string;
+}
+
+/** Una versión del documento manifiesto, tal como la lista `GET /api/manifests/:id/versiones`. */
+interface ManifiestoVersion {
+  version: number;
+  estado: 'staged' | 'aplicada' | 'rechazada';
+  origen: string;
+  motivo: string | null;
+  motivoRechazo: string | null;
+  counts: { total?: number; valid?: number; warning?: number; error?: number } | null;
+  diff: { altas?: string[]; bajas?: string[]; modificadas?: string[]; sinCambio?: number } | null;
+  sourceFileId: string | null;
+  createdBy: string | null;
+  createdByUsuario: string | null;
+  createdAt: string;
+  aplicadaAt: string | null;
+}
+
+const ESTADO_VERSION: Record<ManifiestoVersion['estado'], string> = {
+  staged: 'En espera',
+  aplicada: 'Aplicada',
+  rechazada: 'Rechazada',
+};
+
+function fechaCorta(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+/**
+ * La lista de versiones del manifiesto — el expediente documental de la línea de arriba.
+ *
+ * ES TAMBIÉN LA PANTALLA QUE ABRE `autoridad`, y por eso enseña el documento entero y no un resumen
+ * amable: qué versión, en qué estado (incluidas las RECHAZADAS, que son archivos que llegaron y el
+ * sistema no aplicó), con qué motivo, cuántas altas/bajas/modificadas trajo y el archivo original
+ * descargable. Ocultar una versión rechazada dejaría fuera precisamente el caso que hay que poder
+ * explicar.
+ */
+function PanelVersiones({ recordId }: { recordId: string }) {
+  const [data, setData] = useState<{ vigente: number; versiones: ManifiestoVersion[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    apiGet<{ vigente: number; versiones: ManifiestoVersion[] }>(`/api/manifests/${recordId}/versiones`)
+      .then((d) => { if (active) setData(d); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar las versiones.'); });
+    return () => { active = false; };
+  }, [recordId]);
+
+  async function descargar(fileId: string, version: number) {
+    setError(null);
+    try {
+      // El listado de versiones no lleva el `original_name` del archivo, así que el nombre sugerido
+      // se construye aquí. Los bytes son los que llegaron, intactos y con su hash: el nombre es sólo
+      // la sugerencia de guardado del navegador.
+      await apiDownload(`/api/files/${fileId}`, `Manifiesto_v${version}.xlsx`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al descargar el archivo.');
+    }
+  }
+
+  if (error) return <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</p>;
+  if (!data) return <p className="px-1 py-3 text-sm text-slate-500">Cargando versiones…</p>;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <table className="min-w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <th className="px-4 py-2.5">Versión</th>
+            <th className="px-4 py-2.5">Estado</th>
+            <th className="px-4 py-2.5">Fecha</th>
+            <th className="px-4 py-2.5">Quién</th>
+            <th className="px-4 py-2.5">Motivo</th>
+            <th className="px-4 py-2.5">Altas / bajas / modif.</th>
+            <th className="px-4 py-2.5">Archivo</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {data.versiones.map((v) => (
+            <tr key={v.version} className="align-top text-slate-700">
+              <td className="px-4 py-2.5 font-semibold text-slate-800">
+                v{v.version}
+                {v.version === data.vigente && <span className="ml-1.5 text-xs font-medium text-emerald-600">vigente</span>}
+              </td>
+              <td className="px-4 py-2.5">
+                <span className={v.estado === 'rechazada' ? 'font-medium text-red-700' : 'text-slate-600'}>
+                  {ESTADO_VERSION[v.estado] ?? v.estado}
+                </span>
+                <div className="text-xs text-slate-400">{v.origen}</div>
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-xs text-slate-600">{fechaCorta(v.aplicadaAt ?? v.createdAt)}</td>
+              {/* La vía prealerta es desatendida y no tiene autor humano: «sistema» es la respuesta
+                  honesta, y es distinta de dejar la celda vacía. */}
+              <td className="px-4 py-2.5 text-slate-600">{v.createdByUsuario ?? (v.createdBy ? '—' : 'sistema')}</td>
+              <td className="px-4 py-2.5 text-slate-600">{v.motivoRechazo ?? v.motivo ?? '—'}</td>
+              <td className="px-4 py-2.5 tabular-nums text-slate-600">
+                {(v.diff?.altas?.length ?? 0)} / {(v.diff?.bajas?.length ?? 0)} / {(v.diff?.modificadas?.length ?? 0)}
+              </td>
+              <td className="px-4 py-2.5">
+                {v.sourceFileId ? (
+                  <button
+                    type="button"
+                    onClick={() => descargar(v.sourceFileId!, v.version)}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-600 transition hover:text-navy-800"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Descargar
+                  </button>
+                ) : <span className="text-slate-400">—</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // Per-PEDIMENTO report bundle (Reporte General + Layout for one subdivisión).
@@ -91,6 +214,11 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(true);
+  const [verVersiones, setVerVersiones] = useState(false);
+  // Una disposición reescribe el color efectivo en el servidor. En vez de parchear la fila en
+  // memoria —dos implementaciones de la misma regla, una de ellas condenada a mentir— se vuelve a
+  // pedir el bundle: el efectivo lo materializa `riesgoEfectivo.ts` y ésa es la única versión buena.
+  const [recarga, setRecarga] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -101,7 +229,7 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar el análisis de riesgo.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [recordId, refreshKey]);
+  }, [recordId, refreshKey, recarga]);
 
   async function handleDownload() {
     setError(null);
@@ -124,6 +252,19 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
           {open ? <ChevronDown className="h-4 w-4 text-slate-500" /> : <ChevronRight className="h-4 w-4 text-slate-500" />}
           Análisis de Riesgo
         </button>
+        {/* «Manifiesto vN · ver versiones»: la cabecera dice sobre QUÉ documento se calificó el
+            riesgo. Sin el número, dos capturas de pantalla del mismo MAWB tomadas antes y después de
+            una corrección son indistinguibles. */}
+        {bundle && (
+          <button
+            type="button"
+            onClick={() => setVerVersiones((v) => !v)}
+            aria-expanded={verVersiones}
+            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-navy-700"
+          >
+            Manifiesto v{bundle.version ?? 1} · ver versiones
+          </button>
+        )}
         <button
           type="button"
           onClick={handleDownload}
@@ -144,8 +285,17 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
               <span>Riesgo desactualizado: los datos de importación cambiaron después del análisis. Vuelva a correr el análisis de riesgo antes de continuar al previo.</span>
             </div>
           )}
-          <RiskSummary summary={summarize(bundle.risk ?? [])} />
-          <RiskResultTable rows={bundle.risk ?? []} />
+          {verVersiones && <PanelVersiones recordId={recordId} />}
+          <RiskSummary
+            summary={bundle.summaryEfectivo ?? summarize(bundle.risk ?? [])}
+            motor={bundle.summary}
+          />
+          <RiskResultTable
+            rows={bundle.risk ?? []}
+            manifestId={recordId}
+            version={bundle.version}
+            onDisposicion={() => setRecarga((n) => n + 1)}
+          />
         </div>
       )}
     </Card>
@@ -187,6 +337,8 @@ export function PedimentoReportTabs({
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [drawerRow, setDrawerRow] = useState<{ row: Record<string, string>; title: string } | null>(null);
+  /** Igual que en `RiskPanel`: tras disponer, se vuelve a pedir el bundle en vez de parchear filas. */
+  const [riskRecarga, setRiskRecarga] = useState(0);
 
   const pdfTab = pedimentoPdf ? [{ key: 'pedimento' as PedimentoTabKey, label: 'Pedimento' }] : [];
   const tabs = riskRecordId
@@ -215,7 +367,7 @@ export function PedimentoReportTabs({
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Error al cargar el análisis de riesgo.'); })
       .finally(() => { /* report bundle drives the loading state */ });
     return () => { active = false; };
-  }, [riskRecordId, refreshKey]);
+  }, [riskRecordId, refreshKey, riskRecarga]);
 
   // Reset reveal + tab when switching pedimentos.
   useEffect(() => { setRevealed(false); setDrawerRow(null); setTab(riskRecordId ? 'riesgo' : 'reporte'); }, [pedimentoId, riskRecordId]);
@@ -291,7 +443,14 @@ export function PedimentoReportTabs({
                 </div>
               )}
               {riskBundle
-                ? <RiskResultTable rows={riskBundle.risk ?? []} />
+                ? (
+                  <RiskResultTable
+                    rows={riskBundle.risk ?? []}
+                    manifestId={riskRecordId}
+                    version={riskBundle.version}
+                    onDisposicion={() => setRiskRecarga((n) => n + 1)}
+                  />
+                )
                 : <p className="px-1 py-6 text-sm text-slate-500">Cargando…</p>}
             </div>
           )}

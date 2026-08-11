@@ -34,14 +34,12 @@ riskRouter.post(
       // No promoted shipments. Previously this produced an empty-but-successful score; saying so
       // explicitly is more useful, because the usual cause is a manifest whose rows all failed
       // validation and therefore never reached the gold layer.
-      res.json({
-        rows: [],
-        summary: { analizados: 0, aprobados: 0, noIdentificados: 0, validarEnPrevio: 0, sinDatos: 0 },
-      });
+      const vacio = { analizados: 0, aprobados: 0, noIdentificados: 0, validarEnPrevio: 0, sinDatos: 0 };
+      res.json({ rows: [], summary: vacio, summaryEfectivo: vacio });
       return;
     }
 
-    const { scored, shipments, summary } = result;
+    const { scored, shipments, summary, summaryEfectivo } = result;
 
     await recordAudit({
       userId: req.user!.userId,
@@ -75,6 +73,10 @@ riskRouter.post(
         motivo: s.incidences.join('; '),
       })),
       summary,
+      // El resumen tras las disposiciones humanas vigentes. Idéntico a `summary` mientras no exista
+      // ninguna —el estado normal— y distinto justo después de sustituir un manifiesto que sí las
+      // tenía: la pantalla del alta necesita poder enseñar los dos sin volver a preguntar.
+      summaryEfectivo,
     });
   },
 );

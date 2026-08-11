@@ -9,6 +9,7 @@ import { rawBlindIndex } from '../crypto/blindIndex';
 import { deleteManifestHistory, loadHistoryCounts, recordNames } from './monthlyHistory';
 import { buildRiskWorkbook } from './artifacts';
 import { saveFile } from '../storage/files';
+import { materializarRiesgoEfectivo } from './riesgoEfectivo';
 import { traducirDescripcion } from '../../../shared/i18n/descripcionEs';
 
 /**
@@ -32,7 +33,18 @@ export interface RiskSummary {
 }
 
 export interface RunRiskResult {
+  /** Lo que dijo el MOTOR. Se conserva íntegro en la fila, en el artefacto y aquí. */
   summary: RiskSummary;
+  /**
+   * Lo que queda tras las disposiciones humanas vigentes (`COALESCE(risk_color_efectivo, risk_color)`).
+   * Idéntico a `summary` mientras no exista ninguna disposición, que es el estado normal.
+   *
+   * La MÁQUINA DE ESTADOS se cuelga de éste, no del crudo (`services/prealertaIngest.ts`): si alguien
+   * ya declaró falso positivo el único hallazgo de un caso, mantenerlo en `riesgo_con_hallazgos`
+   * exigiría documentos por algo que ya se resolvió. El crudo no desaparece de ningún sitio; deja de
+   * ser lo que MANDA.
+   */
+  summaryEfectivo: RiskSummary;
   scored: ScoredShipment[];
   /** Table PKs, index-aligned with `scored`, so callers can join back to shipments rows. */
   shipmentIds: string[];
@@ -45,6 +57,35 @@ export interface RunRiskResult {
 async function loadConfig<T>(key: string): Promise<T | undefined> {
   const { rows } = await query<{ value: T }>('SELECT value FROM config WHERE key=$1', [key]);
   return rows[0]?.value;
+}
+
+/**
+ * El mismo resumen, contado sobre el color EFECTIVO — leído de la fila, no recalculado en memoria.
+ *
+ * Se lee de la base a propósito: el efectivo lo acaba de escribir `materializarRiesgoEfectivo` y
+ * volver a derivarlo aquí sería una segunda implementación de la misma regla, con la garantía de que
+ * un día discreparán. `COALESCE` es exactamente lo que hacen las cuatro superficies de lectura, así
+ * que este resumen y lo que ve un humano en pantalla no pueden separarse.
+ *
+ * `analizados` viene del crudo: cuántas líneas se calificaron es un hecho del motor y no cambia
+ * porque alguien afirme algo sobre una de ellas.
+ */
+async function resumenEfectivo(manifestId: string, crudo: RiskSummary): Promise<RiskSummary> {
+  const { rows } = await query<{ color: string | null; n: string }>(
+    `SELECT COALESCE(risk_color_efectivo, risk_color) AS color, count(*)::int AS n
+       FROM shipments
+      WHERE manifest_id = $1 AND risk_color IS NOT NULL
+      GROUP BY 1`,
+    [manifestId],
+  );
+  const n = (color: string): number => Number(rows.find((r) => r.color === color)?.n ?? 0);
+  return {
+    analizados: crudo.analizados,
+    aprobados: n('verde'),
+    noIdentificados: n('amarillo'),
+    validarEnPrevio: n('rojo'),
+    sinDatos: n('gris'),
+  };
 }
 
 export async function runRiskForManifest(input: {
@@ -84,13 +125,44 @@ export async function runRiskForManifest(input: {
   const scored = scoreManifest(shipments, history, scoreOptions);
 
   // Index by the table PK, not the id inside the data JSON — they can differ.
+  // `risk_insufficient_data` is persisted (and not merely computed) because the effective-colour
+  // layer re-runs `scoreRow` outside this function; see the field's doc in `shared/risk/classify.ts`.
   for (const [i, sc] of scored.entries()) {
     await query(
-      'UPDATE shipments SET risk_score=$1, risk_color=$2, risk_incidences=$3, risk_reasons=$4, ruleset_hash=$5 WHERE id=$6',
-      [sc.score, sc.color, JSON.stringify(sc.incidences), JSON.stringify(sc.reasons), sc.ruleset_hash, rows[i].id],
+      `UPDATE shipments
+          SET risk_score=$1, risk_color=$2, risk_incidences=$3, risk_reasons=$4, ruleset_hash=$5,
+              risk_insufficient_data=$6
+        WHERE id=$7`,
+      [
+        sc.score, sc.color, JSON.stringify(sc.incidences), JSON.stringify(sc.reasons), sc.ruleset_hash,
+        sc.insufficientData, rows[i].id,
+      ],
     );
   }
   await recordNames(shipments.map((s) => s.consignee.name), period, manifestId);
+
+  /**
+   * EL ACARREO QUE NO CAMBIÓ NADA SE BORRA. `manifiestoVersiones.aplicarVersion` copia el color viejo
+   * a `risk_*_anterior` dentro del mismo upsert que lo anula, ANTES de saber cuál va a ser el nuevo.
+   * Aquí ya se sabe. Anular los tres cuando el color recalculado coincide con el viejo deja una regla
+   * de lectura que ningún consumidor tiene que interpretar: **si `risk_color_anterior` no es NULL,
+   * hubo cambio y hay algo que enseñar**. La alternativa —dejarlo siempre puesto y que cada pantalla
+   * compare— garantiza que tarde o temprano una de ellas compare mal y anuncie un cambio inexistente.
+   */
+  await query(
+    `UPDATE shipments
+        SET risk_color_anterior = NULL, risk_score_anterior = NULL, risk_version_anterior = NULL
+      WHERE manifest_id = $1 AND risk_color_anterior IS NOT NULL
+        AND risk_color_anterior IS NOT DISTINCT FROM risk_color`,
+    [manifestId],
+  );
+
+  /**
+   * El color efectivo, recalculado sobre las razones que acaban de escribirse. Va DESPUÉS del bucle
+   * porque lee `risk_reasons` de la fila: es la misma disciplina absoluta de `holdActivo`, preguntarle
+   * a la tabla qué es verdad en vez de arrastrar el resultado en memoria.
+   */
+  await materializarRiesgoEfectivo(query, { manifestId });
 
   const summary: RiskSummary = {
     analizados: scored.length,
@@ -99,6 +171,7 @@ export async function runRiskForManifest(input: {
     validarEnPrevio: scored.filter((s) => s.color === 'rojo').length,
     sinDatos: scored.filter((s) => s.color === 'gris').length,
   };
+  const summaryEfectivo = await resumenEfectivo(manifestId, summary);
 
   const branding = await loadConfig<{ companyName?: string; rfc?: string }>('branding');
   const riskBuffer = buildRiskWorkbook(
@@ -127,6 +200,7 @@ export async function runRiskForManifest(input: {
 
   return {
     summary,
+    summaryEfectivo,
     scored,
     shipmentIds: rows.map((r) => r.id),
     shipments,

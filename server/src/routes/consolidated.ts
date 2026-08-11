@@ -89,11 +89,14 @@ consolidatedRouter.get(
       data: Shipment;
       risk_color: string | null;
     }>(
+      // `Resultado` y `Valida` son el color EFECTIVO: el consolidado que ve la autoridad no puede
+      // marcar como no válida una línea cuyo hallazgo alguien ya declaró falso positivo o mitigado,
+      // con su motivo y su autor en el expediente. NULL = sin disposición → el color del motor.
       `SELECT
          m.mawb_reference AS mawb,
          m.client_name,
          s.data,
-         s.risk_color
+         COALESCE(s.risk_color_efectivo, s.risk_color) AS risk_color
        FROM shipments s
        JOIN manifests m ON m.id = s.manifest_id
        WHERE m.created_at >= $1 AND m.created_at < $2${clientFilter}

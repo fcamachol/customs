@@ -7,6 +7,7 @@ import { usersRouter } from './routes/users';
 import { manifestsRouter } from './routes/manifests';
 import { pedimentoUploadRouter } from './routes/pedimentoUpload';
 import { riskRouter } from './routes/risk';
+import { riesgoDisposicionesRouter } from './routes/riesgoDisposiciones';
 import { pedimentoRouter } from './routes/pedimento';
 import { recordsRouter } from './routes/records';
 import { exportsRouter, pedimentoExportsRouter } from './routes/exports';
@@ -81,6 +82,11 @@ export function createApp(): Express {
   app.use('/api/manifests', manifestsRouter);
   app.use('/api/manifests', pedimentoUploadRouter);
   app.use('/api/manifests', riskRouter);
+  // Disposición humana de un hallazgo de riesgo (diseño 2026-08-10 §7). Cuarto router sobre el mismo
+  // prefijo, misma garantía que los otros tres: sus rutas son multi-segmento
+  // (`/:id/riesgo/disposiciones`) con el `:id` validado como UUID, así que ninguna puede ser leída
+  // como otra cosa por `manifestsRouter`.
+  app.use('/api/manifests', riesgoDisposicionesRouter);
   app.use('/api/pedimentos', pedimentoRouter);
   app.use('/api/pedimentos', pedimentoReportsRouter);
   app.use('/api/pedimentos', pedimentoExportsRouter);

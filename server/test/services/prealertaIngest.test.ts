@@ -33,6 +33,15 @@ const MANIFIESTO_CSV = [
   '160-94705516-002,FUNDA PARA TELEFONO,9901000100,25,42.00,USD,CN',
 ].join('\n');
 
+// The SAME manifiesto after the client fixed it: …-001 now declares 99 pieces instead of 10, and the
+// second line is gone. Same guía máster, same idempotency keys for the line that survives — so a
+// correct pipeline UPDATES that line and RETIRES the other, and a broken one silently keeps both at
+// their original values.
+const MANIFIESTO_CSV_CORREGIDO = [
+  'No. de guia aerea o documento de transporte,Descripcion de la mercancia,Fraccion arancelaria,Cantidad de la mercancia,Valor en aduana declarado,Moneda,Pais de procedencia',
+  '160-94705516-001,AURICULARES INALAMBRICOS,9901000100,99,85.50,USD,CN',
+].join('\n');
+
 // A second manifiesto that shares a house guía with the first (…-001) while being a different file for
 // a different guía máster. That overlap is duplicate cargo — the same shipment declared on two casos —
 // which is what PA-07 exists to catch.
@@ -486,20 +495,62 @@ describe('ingestPrealerta — the manifiesto reaches the manifest pipeline', () 
     ).toHaveLength(0);
   });
 
-  it('attaches to an existing manifest for the same MAWB instead of violating the unique index', async () => {
-    // mawb_reference is globally unique, so a manual upload or a resend must be joined, not duplicated.
-    await query(
-      `INSERT INTO manifests (mawb_reference, ingestion_status) VALUES ('16094705516','draft')`,
+  it('attaches a resend to the existing manifest AND applies the corrected lines to the gold layer', async () => {
+    // Two claims in one test, because the second is what the first is FOR.
+    //
+    // (1) `mawb_reference` is globally unique, so a resend must be joined to the existing manifiesto,
+    //     never duplicated. That part always worked.
+    // (2) Joining has to mean the corrected document actually replaces the data. It did not: the
+    //     attach branch archived the new file, ignored the new parse and re-promoted the OLD staging
+    //     rows, then reported `adjuntado` with the counts of the file it had just thrown away. The
+    //     client corrected 10 pieces to 99 and the system kept scoring risk on the 10.
+    //
+    // The old version of this test seeded an EMPTY manifests row and asserted only that a row
+    // existed, so zero ingested lines passed it just as happily as two. It counts shipments now.
+    const primera = await ingestPrealerta(payload(), { eventId: 'evt-a', expectedInboxId: '21' });
+    expect(primera.status).toBe('processed');
+
+    const lineas = async () =>
+      (
+        await query<{ guia: string; cantidad: string }>(
+          `SELECT data->>'guideId' AS guia, data->>'quantity' AS cantidad
+             FROM shipments ORDER BY 1`,
+        )
+      ).rows.map((r) => `${r.guia}:${r.cantidad}`);
+    expect(await lineas()).toEqual(['160-94705516-001:10', '160-94705516-002:25']);
+
+    // Same guía máster, corrected spreadsheet, new message — the everyday resend.
+    downloadAttachment.mockImplementation(async (_c: unknown, url: string) =>
+      String(url).endsWith('.csv')
+        ? Buffer.from(MANIFIESTO_CSV_CORREGIDO, 'utf8')
+        : Buffer.from('%PDF-1.4 fake\n'),
     );
-    const out = await ingestPrealerta(payload(), { eventId: 'evt-a', expectedInboxId: '21' });
+    const out = await ingestPrealerta(
+      payload({
+        id: 5002,
+        content_attributes: {
+          email: {
+            subject: 'Prealert 160-94705516',
+            message_id: '<msg-2@client.example>',
+            from: ['robot@shein.example'],
+            text_content: { full: BODY },
+          },
+        },
+      }),
+      { eventId: 'evt-a2', expectedInboxId: '21' },
+    );
     expect(out.status).toBe('processed');
     if (out.status !== 'processed') return;
 
-    const man = await query('SELECT 1 FROM manifests');
-    expect(man.rows).toHaveLength(1);
+    // One manifiesto, one caso — the join held.
+    expect((await query('SELECT 1 FROM manifests')).rows).toHaveLength(1);
     const op = await query<{ manifest_id: string }>(
       'SELECT manifest_id FROM operaciones WHERE id = $1', [out.operacionId]);
     expect(op.rows[0].manifest_id).toBeTruthy();
+
+    // …and the gold layer is the corrected document: the surviving line carries the new quantity and
+    // the line the client withdrew is gone.
+    expect(await lineas()).toEqual(['160-94705516-001:99']);
   });
 
   it('keeps the caso when the manifiesto cannot be parsed', async () => {

@@ -28,6 +28,15 @@ export interface ScoredShipment {
   incidences: string[];    // derived from reasons (back-compat: reasons.map(r => r.detail))
   ruleset_version: string;
   ruleset_hash: string;
+  /**
+   * Whether the row lacked description, customs value or RFC/CURP — the input that made `scoreRow`
+   * answer `gris`. It was computed here and thrown away; it is surfaced (and, by the server,
+   * persisted as `shipments.risk_insufficient_data`) because the effective-colour layer has to
+   * re-run `scoreRow` later, when suppressing a forced-rojo finding. Without it, removing the flag
+   * from an incomplete row would answer `verde` ("all in order") instead of `gris` ("could not be
+   * evaluated") — turning missing data into an approval.
+   */
+  insufficientData: boolean;
 }
 
 export interface ScoreOptions {
@@ -221,6 +230,7 @@ export function scoreManifest(
       incidences: reasons.map((r) => r.detail),
       ruleset_version: version,
       ruleset_hash: hash,
+      insufficientData,
     };
   });
 }

@@ -15,6 +15,9 @@ import {
   buildReportRowsForPedimento,
   subsetForCoverage,
   layoutRowsFor,
+  loadDatoCambio,
+  loadUsuarios,
+  resumirRiesgo,
 } from '../services/reportData';
 import type { RiskBundle, PedimentoReportsBundle } from '../../../shared/types/reports';
 
@@ -66,11 +69,19 @@ reportsRouter.get('/:id/reports.json', requireAuth, async (req, res, next) => {
 
   if (!(await assertManifestAccess(req.params.id, req.user!))) { res.status(403).json({ error: 'Forbidden' }); return; }
 
-  const meta = await query<{ risk_stale: boolean }>('SELECT risk_stale FROM manifests WHERE id=$1', [req.params.id]);
+  const meta = await query<{ risk_stale: boolean; version_vigente: number }>(
+    'SELECT risk_stale, version_vigente FROM manifests WHERE id=$1', [req.params.id]);
   if (!meta.rows.length) { res.status(404).json({ error: 'Not found' }); return; }
 
   const loaded = await loadShipments(req.params.id);
-  const risk = buildRiskScreenRows(loaded);
+  // Dos lecturas de contexto, ambas por manifiesto (no por fila): el diff de bronce que distingue
+  // «cambió tu dato» de «cambió el conjunto», y los nombres de quienes dispusieron. Un popover que
+  // enseñara un uuid no contestaría «¿quién lo tapó?», que es media pregunta del auditor.
+  const datoCambio = await loadDatoCambio(req.params.id);
+  const usuarios = await loadUsuarios(
+    loaded.flatMap((r) => (r.risk_disposiciones?.aplicadas ?? []).map((d) => d.createdBy ?? '')),
+  );
+  const risk = buildRiskScreenRows(loaded, { datoCambio, usuarios });
 
   const generatedAt = new Date().toISOString();
   const contentHash = createHash('sha256').update(stableStringify({ risk })).digest('hex');
@@ -84,7 +95,18 @@ reportsRouter.get('/:id/reports.json', requireAuth, async (req, res, next) => {
     ip: req.ip,
   });
 
-  const bundle: RiskBundle = { risk, riskStale: !!meta.rows[0].risk_stale, generatedAt, contentHash };
+  const bundle: RiskBundle = {
+    risk,
+    riskStale: !!meta.rows[0].risk_stale,
+    version: meta.rows[0].version_vigente ?? 1,
+    // Los dos resúmenes se cuentan sobre ESTAS filas y no con una segunda consulta: si el resumen
+    // saliera de la base y las filas del bundle, una corrida concurrente podría dejar las cifras y
+    // la tabla contando cosas distintas en la misma pantalla.
+    summary: resumirRiesgo(risk, 'resultadoMotor'),
+    summaryEfectivo: resumirRiesgo(risk, 'resultado'),
+    generatedAt,
+    contentHash,
+  };
   res.json(bundle);
  } catch (err) {
   next(err);

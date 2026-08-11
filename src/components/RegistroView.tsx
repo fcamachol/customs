@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Upload, Check } from 'lucide-react';
-import { apiGet, apiPost, apiUpload } from '../api';
+import { Upload, Check, RefreshCw } from 'lucide-react';
+import { apiGet, apiPost, apiUpload, ApiError } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { Stepper, Button, Field, Input, SearchSelect } from './ui';
+import { Stepper, Button, Field, Input, Textarea, SearchSelect } from './ui';
 import type { SearchSelectOption } from './ui';
 import { CANONICAL_PATHS } from '../../shared/parsing/headerSynonyms';
 import { extractMawb } from '../lib/extractMawb';
@@ -26,7 +26,35 @@ interface StagingResponse {
 interface RiskResponse {
   rows: RiskRow[];
   summary: RiskSummaryData;
+  /** Presente desde la fase 2: el resumen tras las disposiciones humanas vigentes. */
+  summaryEfectivo?: RiskSummaryData;
 }
+
+/** El diff que devuelve `POST /api/manifests/:id/versiones` — lo que cambia si se sustituye. */
+interface VersionStaged {
+  version: number;
+  estado?: 'staged';
+  status?: 'sin_cambios';
+  counts?: { total: number; valid: number; warning: number; error: number };
+  diff?: { altas?: string[]; bajas?: string[]; modificadas?: string[]; sinCambio?: number };
+}
+
+/**
+ * El estado del flujo de SUSTITUCIÓN, que arranca donde antes había un error muerto.
+ *
+ * `POST /api/manifests` sigue respondiendo 409 ante un MAWB repetido y eso no va a cambiar: crear una
+ * SEGUNDA fila `manifests` para el mismo MAWB debe seguir siendo imposible, porque todo el modelo se
+ * apoya en «un MAWB = un manifiesto = un caso». Lo que cambia es que el 409 ahora trae
+ * `puedeSustituir` y un `manifestId`, así que hay una salida: subir el archivo como VERSIÓN del
+ * manifiesto que ya existe. Tres pasos, y el de en medio es el que justifica los otros dos —
+ * `motivo` → ver el diff → aplicar: nadie debería reemplazar datos con los que ya se calificó riesgo
+ * sin ver antes qué líneas se van y cuáles llegan.
+ */
+type Sustitucion =
+  | { fase: 'ofrecida'; manifestId: string }
+  | { fase: 'motivo'; manifestId: string }
+  | { fase: 'diff'; manifestId: string; staged: VersionStaged }
+  | { fase: 'aplicando'; manifestId: string };
 
 const VALIDATION_LABELS = [
   'Validación ID',
@@ -58,6 +86,9 @@ export default function RegistroView() {
   const [staging, setStaging] = useState<StagingResponse | null>(null);
   const [result, setResult] = useState<RiskResponse | null>(null);
   const [checkedCount, setCheckedCount] = useState(0);
+  const [sustitucion, setSustitucion] = useState<Sustitucion | null>(null);
+  const [motivoSustitucion, setMotivoSustitucion] = useState('');
+  const [avisoSustitucion, setAvisoSustitucion] = useState<string | null>(null);
   // Admin header-mapping panel state: chosen canonical path per unmapped header, whether to save it
   // for this client or globally, and which headers have already been saved this session.
   const [mappingChoices, setMappingChoices] = useState<Record<string, string>>({});
@@ -155,6 +186,8 @@ export default function RegistroView() {
     setStaging(null);
     setMappingChoices({});
     setSavedHeaders([]);
+    setSustitucion(null);
+    setAvisoSustitucion(null);
     setMappingScope(clientId ? 'client' : 'global');
 
     if (!file) { setError('Selecciona un archivo de manifiesto.'); return; }
@@ -191,7 +224,64 @@ export default function RegistroView() {
       setCheckedCount(VALIDATION_LABELS.length);
       setCurrent(3);
     } catch (err) {
+      // El 409 por MAWB duplicado ya NO es el final del camino: el servidor dice `puedeSustituir` y
+      // devuelve el manifiesto que ya existe, así que en vez de un error rojo se ofrece la salida.
+      if (
+        err instanceof ApiError && err.status === 409 && err.body.puedeSustituir === true
+        && typeof err.body.manifestId === 'string'
+      ) {
+        setSustitucion({ fase: 'ofrecida', manifestId: err.body.manifestId });
+        setMotivoSustitucion('');
+        setCurrent(1);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Ocurrió un error al procesar el manifiesto.');
+      setCurrent(1);
+    }
+  }
+
+  /** Paso 2: sube el archivo como versión n+1 y trae el diff. NO aplica nada todavía. */
+  async function verCambiosDeSustitucion() {
+    if (!sustitucion || !file) return;
+    const manifestId = sustitucion.manifestId;
+    setError(null);
+    setAvisoSustitucion(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('motivo', motivoSustitucion.trim());
+      const staged = await apiUpload<VersionStaged>(`/api/manifests/${manifestId}/versiones`, form);
+      if (staged.status === 'sin_cambios') {
+        // La compuerta de no-op del servidor: el `line_set_hash` coincide con el de la versión
+        // vigente. Decirlo así evita que alguien busque un cambio que su archivo no trae.
+        setAvisoSustitucion('El archivo tiene exactamente las mismas líneas que el manifiesto vigente: no hay nada que sustituir.');
+        setSustitucion({ fase: 'ofrecida', manifestId });
+        return;
+      }
+      setSustitucion({ fase: 'diff', manifestId, staged });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo preparar la sustitución.');
+    }
+  }
+
+  /** Paso 3: aplica la versión con su motivo, re-corre el riesgo y enseña el resumen nuevo. */
+  async function aplicarSustitucion() {
+    if (!sustitucion) return;
+    const manifestId = sustitucion.manifestId;
+    setError(null);
+    setSustitucion({ fase: 'aplicando', manifestId });
+    setCurrent(2);
+    setCheckedCount(0);
+    try {
+      await apiPost(`/api/manifests/${manifestId}/promote`, { motivo: motivoSustitucion.trim() });
+      const risk = await apiPost<RiskResponse>(`/api/manifests/${manifestId}/risk`, {});
+      setResult(risk);
+      setSustitucion(null);
+      setCheckedCount(VALIDATION_LABELS.length);
+      setCurrent(3);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo aplicar la sustitución.');
+      setSustitucion({ fase: 'ofrecida', manifestId });
       setCurrent(1);
     }
   }
@@ -203,6 +293,84 @@ export default function RegistroView() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
           {error}
+        </div>
+      )}
+
+      {avisoSustitucion && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+          {avisoSustitucion}
+        </div>
+      )}
+
+      {/* Sustitución de manifiesto: los tres pasos viven aquí, encima del formulario, porque son la
+          respuesta a lo que el usuario acaba de intentar y no un flujo aparte. */}
+      {sustitucion && (
+        <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+            <RefreshCw className="h-4 w-4 shrink-0" />
+            Ya existe un manifiesto para esta guía. ¿Sustituirlo?
+          </p>
+
+          {sustitucion.fase === 'ofrecida' && (
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => setSustitucion({ fase: 'motivo', manifestId: sustitucion.manifestId })}>
+                Sustituirlo
+              </Button>
+              <Button variant="secondary" type="button" onClick={() => { setSustitucion(null); setAvisoSustitucion(null); }}>
+                Cancelar
+              </Button>
+            </div>
+          )}
+
+          {sustitucion.fase === 'motivo' && (
+            <div className="space-y-3">
+              <Field label="Motivo de la sustitución" htmlFor="motivo-sustitucion">
+                <Textarea
+                  id="motivo-sustitucion"
+                  rows={2}
+                  value={motivoSustitucion}
+                  onChange={(e) => setMotivoSustitucion(e.target.value)}
+                  placeholder="Ej. El cliente reenvió el manifiesto con los valores corregidos."
+                />
+              </Field>
+              {/* El motivo es obligatorio desde la v2 y lo exige también un CHECK de la tabla: un
+                  documento que sustituye a otro sin decir por qué no es una corrección, es un
+                  reemplazo sin expediente. */}
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" disabled={!motivoSustitucion.trim()} onClick={verCambiosDeSustitucion}>
+                  Ver cambios
+                </Button>
+                <Button variant="secondary" type="button" onClick={() => setSustitucion({ fase: 'ofrecida', manifestId: sustitucion.manifestId })}>
+                  Atrás
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {sustitucion.fase === 'diff' && (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-700">
+                La versión v{sustitucion.staged.version} traería{' '}
+                <span className="font-semibold">{sustitucion.staged.diff?.altas?.length ?? 0}</span> alta(s),{' '}
+                <span className="font-semibold">{sustitucion.staged.diff?.bajas?.length ?? 0}</span> baja(s) y{' '}
+                <span className="font-semibold">{sustitucion.staged.diff?.modificadas?.length ?? 0}</span> línea(s) modificada(s).
+                {sustitucion.staged.diff?.sinCambio != null && ` ${sustitucion.staged.diff.sinCambio} sin cambio.`}
+              </p>
+              <p className="text-xs text-amber-800">
+                Las bajas se retiran del manifiesto y el análisis de riesgo se vuelve a correr sobre las líneas nuevas.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" onClick={aplicarSustitucion}>Aplicar sustitución</Button>
+                <Button variant="secondary" type="button" onClick={() => setSustitucion({ fase: 'motivo', manifestId: sustitucion.manifestId })}>
+                  Atrás
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {sustitucion.fase === 'aplicando' && (
+            <p className="text-sm font-medium text-amber-900">Aplicando la sustitución y recalculando el riesgo…</p>
+          )}
         </div>
       )}
 
@@ -407,7 +575,10 @@ export default function RegistroView() {
       {/* Step 3: Resultado */}
       {current === 3 && result && (
         <div className="space-y-4">
-          <RiskSummary summary={result.summary} />
+          {/* El efectivo manda en pantalla y el crudo va debajo cuando difieren. Recién corrido el
+              motor los dos coinciden casi siempre; tras una sustitución sobre un manifiesto con
+              disposiciones vigentes, no necesariamente. */}
+          <RiskSummary summary={result.summaryEfectivo ?? result.summary} motor={result.summary} />
           <RiskResultTable rows={result.rows} />
         </div>
       )}

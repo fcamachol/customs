@@ -51,6 +51,15 @@ function demoOnly(_req: Request, res: Response, next: NextFunction): void {
  * scheduler's watermark, not demo data — removing them does not reset the tick, it breaks it.
  */
 const TABLAS_OPERACIONES = [
+  /**
+   * `riesgo_disposiciones` NO es una tabla de operaciones y está aquí por una razón ESTRUCTURAL: su
+   * `requerimiento_id` apunta a `riesgo_requerimientos`, y Postgres rechaza un TRUNCATE de una tabla
+   * referenciada por una FK salvo que la referenciante se trunque en el MISMO statement. No cambia
+   * nada de lo que se borra: cuelga de `manifests` con CASCADE y el `DELETE FROM manifests` de más
+   * abajo la vacía siempre, se pida o no la superficie operativa. Truncarla aquí tampoco dispara su
+   * trigger append-only, por la misma razón que no lo dispara en `operacion_eventos`.
+   */
+  'riesgo_disposiciones',
   'operacion_eventos',
   'operacion_evidencias',
   'operacion_guias',
@@ -116,6 +125,20 @@ const REFERENCIAS_FILES_DURABLES: ReadonlyArray<readonly [string, string]> = [
   ['client_tarifas', 'contrato_file_id'],
   ['transportista_convenios', 'file_id'],
   ['transportista_convenios', 'firma_evidencia_file_id'],
+  /**
+   * `riesgo_disposiciones.evidencia_file_id` — el documento con el que un humano respaldó un
+   * `mitigado` (diseño 2026-08-10, §3).
+   *
+   * HOY NO FIJA NADA Y ESTÁ AQUÍ A PROPÓSITO: la tabla cuelga de `manifests` con CASCADE, así que el
+   * `DELETE FROM manifests` de más abajo la vacía ANTES de que esta consulta la mire, y el archivo se
+   * va con ella. Se lista porque la regla que gobierna esta limpieza —*un archivo muere sólo cuando
+   * nada en pie lo apunta*— vale por enumeración completa de las FK hacia `files`, no por una
+   * coincidencia en el orden de los statements. Si mañana ese orden cambia, la omisión no fallaría
+   * ruidosamente: borraría el `files` y el `ON DELETE SET NULL` dejaría la afirmación humana en pie,
+   * con su motivo, y sin el documento en que se apoyaba. Ese es el fallo silencioso que esta lista
+   * existe para impedir.
+   */
+  ['riesgo_disposiciones', 'evidencia_file_id'],
 ];
 
 const REFERENCIAS_FILES_OPERACIONES: ReadonlyArray<readonly [string, string]> = [

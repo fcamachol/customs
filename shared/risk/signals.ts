@@ -194,11 +194,18 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
     add('cantidad', (s.quantity - t.cantidad) / t.cantidad, 'Demasiados productos', { quantity: s.quantity });
   }
 
-  // monto: below min → full weight; above max → graded by excess
+  // monto: below min → full weight; above max → graded by excess.
+  //
+  // `direccion` es el DISCRIMINADOR, no decoración: hasta ahora las dos variantes sólo se distinguían
+  // por el texto de `detail`, y `detail` es copy humano que se edita (i18n, erratas) y por eso queda
+  // FUERA de la huella del hallazgo (`shared/risk/efectivo.ts`). Sin este campo, disponer "el valor
+  // bajo está justificado" taparía también un valor ALTO posterior sobre la misma línea — dos
+  // hallazgos opuestos con la misma huella. No toca `ruleset_hash`: éste cubre umbrales, pesos,
+  // bandas y listas, no la forma de la evidencia.
   if (s.customsValueUsd < t.montoMin) {
-    add('monto', 1, 'Valor declarado incorrecto (muy bajo)', { value: s.customsValueUsd });
+    add('monto', 1, 'Valor declarado incorrecto (muy bajo)', { value: s.customsValueUsd, direccion: 'bajo' });
   } else if (s.customsValueUsd > t.montoMax) {
-    add('monto', (s.customsValueUsd - t.montoMax) / t.montoMax, 'Valor declarado incorrecto (muy alto)', { value: s.customsValueUsd });
+    add('monto', (s.customsValueUsd - t.montoMax) / t.montoMax, 'Valor declarado incorrecto (muy alto)', { value: s.customsValueUsd, direccion: 'alto' });
   }
 
   // agregado (F13): cross-row split-shipment cap — fires when the aggregate value

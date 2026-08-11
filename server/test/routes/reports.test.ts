@@ -66,6 +66,70 @@ describe('GET /api/records/:id/reports.json — per-manifest risk', () => {
     expect(res.body.layout).toBeUndefined();
   });
 
+  // ---- Fase 4: el bundle empieza a llevar el riesgo efectivo, la historia y las razones ----
+
+  it('lleva version, los dos resúmenes y los campos nuevos por fila', async () => {
+    const res = await getRisk(capToken);
+    expect(res.status).toBe(200);
+    expect(res.body.version).toBe(1);
+    expect(res.body.summary).toMatchObject({ analizados: 1, validarEnPrevio: 1 });
+    // Sin ninguna disposición los dos resúmenes son idénticos: el estado normal del sistema.
+    expect(res.body.summaryEfectivo).toEqual(res.body.summary);
+    expect(res.body.risk[0]).toMatchObject({
+      resultado: 'rojo', resultadoMotor: 'rojo', resultadoAnterior: null,
+      versionAnterior: null, revalidacionPendiente: false,
+    });
+    expect(res.body.risk[0].shipmentId).toBeTruthy();
+    expect(res.body.risk[0].reasons).toEqual([]);
+    expect(res.body.risk[0].disposiciones).toEqual([]);
+  });
+
+  it('el pill lleva el EFECTIVO y el crudo del motor no desaparece del bundle', async () => {
+    await query(`UPDATE shipments SET risk_color_efectivo='verde', risk_score_efectivo=0 WHERE manifest_id=$1`, [manifestId]);
+    const res = await getRisk(capToken);
+    expect(res.body.risk[0].resultado).toBe('verde');
+    expect(res.body.risk[0].resultadoMotor).toBe('rojo');
+    expect(res.body.summary).toMatchObject({ validarEnPrevio: 1, aprobados: 0 });
+    expect(res.body.summaryEfectivo).toMatchObject({ validarEnPrevio: 0, aprobados: 1 });
+  });
+
+  /**
+   * LA TRAMPA DE LA FASE 4, fijada de punta a punta. `risk_reasons` no había salido nunca del
+   * servidor; ahora sale, y con él la `evidence` del motor. Ni el nombre de un sancionado ni el
+   * RFC en claro pueden aparecer en NINGÚN sitio de la respuesta — ni en un campo, ni concatenados
+   * dentro de otra cosa. Por eso se comprueba sobre el JSON entero y no campo a campo.
+   */
+  it('NUNCA expone el nombre coincidente de denied_party ni el RFC en claro en reports.json', async () => {
+    const NOMBRE = 'ZZ ENTIDAD SANCIONADA SA DE CV';
+    await query(
+      `UPDATE shipments SET risk_reasons=$2 WHERE manifest_id=$1`,
+      [manifestId, JSON.stringify([
+        { signalId: 'id', points: 30, weight: 30, detail: 'RFC/CURP inválido', evidence: { id: RFC } },
+        {
+          signalId: 'denied_party', points: 100, weight: 100, forcesBand: 'rojo',
+          detail: 'Coincidencia en lista de sancionados (OFAC)',
+          evidence: { matched: NOMBRE, source: 'OFAC', program: 'SDNTK' },
+        },
+      ])],
+    );
+    const res = await getRisk(capToken);
+    const crudo = JSON.stringify(res.body);
+    expect(crudo).not.toContain(NOMBRE);
+    expect(crudo).not.toContain(RFC);
+    // Lo que sí sale: la prosa ya redactada, la fuente de la lista y la huella con la que se dispone.
+    const dp = res.body.risk[0].reasons.find((r: { signalId: string }) => r.signalId === 'denied_party');
+    expect(dp.detail).toBe('Coincidencia en lista de sancionados (OFAC)');
+    expect(dp.evidence.source).toBe('OFAC');
+    expect(dp.evidence.matched).toBeUndefined();
+    expect(dp.hallazgoHash).toHaveLength(64);
+  });
+
+  it('autoridad —la testigo— ve el mismo bundle redactado', async () => {
+    const res = await getRisk(autToken);
+    expect(res.status).toBe(200);
+    expect(res.body.risk[0].resultadoMotor).toBe('rojo');
+  });
+
   it('records a best-effort VIEW_RISK audit', async () => {
     await getRisk(capToken);
     const audit = await query(`SELECT action FROM audit_log WHERE action='VIEW_RISK'`);

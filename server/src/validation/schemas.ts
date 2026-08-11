@@ -109,6 +109,28 @@ export const manifestClientBody = z.object({
   platformId: z.string().min(1).optional(),
 });
 
+/**
+ * Sustituir un manifiesto (POST /:id/versiones y POST /:id/promote).
+ *
+ * `motivo` es `optional()` aquí y OBLIGATORIO en la ruta desde la v2 — no al revés. La v1 es la carga
+ * original y no sustituye nada, así que exigirle un motivo sería ruido en el único caso donde no hay
+ * nada que explicar; de la v2 en adelante alguien está reemplazando datos con los que ya se calificó
+ * riesgo, y el zod no puede saber en qué versión va. El `trim` + `refine` está para que " " no cuente
+ * como motivo: un espacio en blanco satisface un `min(1)` y no le dice nada a nadie.
+ */
+export const manifiestoVersionAplicarBody = z.object({
+  motivo: z
+    .string()
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, 'El `motivo` es obligatorio al sustituir un manifiesto.')
+    .optional(),
+});
+
+/** `?version=n` en GET /:id/staging. Ausente = la versión vigente del manifiesto. */
+export const manifiestoStagingQuery = z.object({
+  version: z.coerce.number().int().positive().optional(),
+});
+
 // importData
 export const importDataBody = z.object({
   cveT1: z.unknown().optional(),
@@ -466,6 +488,60 @@ export const requerimientoListaQuery = z.object({
   operacionId: z.string().uuid('operacionId debe ser un UUID.').optional(),
 });
 export type RequerimientoListaQuery = z.infer<typeof requerimientoListaQuery>;
+
+// ---------------------------------------------------------------------------------------------
+// riesgo_disposiciones — el humano afirma sobre un hallazgo del motor (diseño 2026-08-10, §3/§7)
+//
+// LO QUE NO ESTÁ EN ESTE ESQUEMA ES LO MÁS IMPORTANTE: no hay campo `hallazgoHash`. La huella la
+// calcula el SERVIDOR desde la razón almacenada en `shipments.risk_reasons` (routes/
+// riesgoDisposiciones.ts). Un cliente que puede elegir la huella puede disponer un hallazgo que el
+// motor nunca produjo, y entonces la tabla dejaría de responder "¿qué afirmó un humano, y sobre
+// qué?" para responder "¿qué escribió alguien?". El `signalId` basta como asa porque el motor emite
+// como mucho UNA razón por señal y por línea (`shared/risk/signals.ts`).
+// ---------------------------------------------------------------------------------------------
+
+/** Las rutas de disposiciones cuelgan de `/api/manifests`, que hoy no valida su `:id` en ningún sitio. */
+export const manifiestoIdParam = z.object({
+  id: z.string().uuid('El id del manifiesto debe ser un UUID.'),
+});
+
+/** Espejo exacto de `SignalId` (`shared/risk/signals.ts`). */
+export const signalIds = [
+  'id',
+  'cantidad',
+  'monto',
+  'agregado',
+  'direcciones',
+  'prohibidos',
+  'pirateria',
+  'bbdd',
+  'denied_party',
+] as const;
+
+export const disposicionCrearBody = z.object({
+  shipmentId: z.string().uuid('shipmentId debe ser un UUID.'),
+  signalId: z.enum(signalIds),
+  estado: z.enum(['falso_positivo', 'mitigado', 'confirmado']),
+  /**
+   * Trimmed-nonempty, igual que en holds y requerimientos, y aquí por el mismo motivo elevado a
+   * regla del negocio: tapar una bandera sin decir por qué no es disponer, es borrar. El CHECK de la
+   * tabla dice lo mismo; esto lo dice antes, con una frase en vez de un nombre de constraint.
+   */
+  motivo: z
+    .string()
+    .transform((s) => s.trim())
+    .refine((s) => s.length > 0, 'El `motivo` es obligatorio: una disposición sin razón no es auditable.'),
+  /** El respaldo de un `mitigado`: el documento que resuelve el hallazgo… */
+  evidenciaFileId: z.string().uuid('evidenciaFileId debe ser un UUID.').optional(),
+  /** …o el requerimiento que el cliente ya contestó. Uno de los dos, por CHECK. */
+  requerimientoId: z.string().uuid('requerimientoId debe ser un UUID.').optional(),
+  /**
+   * La disposición que ésta reemplaza. Retractarse en una tabla append-only es INSERTAR un
+   * `confirmado` apuntando a la anterior, nunca borrar ni actualizar.
+   */
+  supersedeA: z.string().uuid('supersedeA debe ser un UUID.').optional(),
+});
+export type DisposicionCrearBody = z.infer<typeof disposicionCrearBody>;
 
 // ---------------------------------------------------------------------------------------------
 // motor de contingencias — replaneación (PRD-02 §8.8, CT-1…CT-7)

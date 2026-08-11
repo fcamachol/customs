@@ -1,10 +1,9 @@
-import { withTransaction } from '../db/tx';
 import { query } from '../db/pool';
 import { isUniqueViolation } from '../db/errors';
 import { recordAudit } from './audit';
 import { ingestWorkbook } from './manifestIngest';
 import { loadHeaderMappings } from './headerMappings';
-import { encryptShipmentPii } from '../crypto/fieldCrypto';
+import { aplicarVersion, stageVersion } from './manifiestoVersiones';
 import { normGuia } from '../../../shared/pedimento/guia';
 import type { Shipment } from '../../../shared/types/shipment';
 
@@ -22,6 +21,21 @@ import type { Shipment } from '../../../shared/types/shipment';
  *     (a manual upload, or a prealerta resend) we ATTACH to it instead of trying to insert a second
  *     one, which would violate the constraint and fail the whole ingest.
  *   - the same file may legitimately arrive twice (resend), so the content hash is checked first.
+ *
+ * DÓNDE ESTABA EL DEFECTO, porque este módulo afirmaba lo contrario. La rama de attach hacía
+ * `manifestId = existing.rows[0].id; attached = true;` y NADA MÁS: `parsed.rows` sólo se usaba dentro
+ * de la rama de inserción. En un reenvío con el manifiesto corregido, el sistema archivaba el
+ * adjunto, volvía a promover las filas VIEJAS de staging, marcaba `risk_stale`, recorría el riesgo
+ * sobre los datos viejos y devolvía `adjuntado` con los `counts` del archivo que acababa de tirar.
+ * Tampoco actualizaba `file_content_hash` ni `source_file_id`, así que la cabecera seguía describiendo
+ * el primer envío. El comentario de arriba decía que un resend corregido "hace lo correcto"; no lo
+ * hacía, y nada lo probaba: el test que cubría este camino sembraba un manifiesto VACÍO y sólo
+ * afirmaba que existía una fila, así que cero líneas ingestadas lo pasaban igual de bien.
+ *
+ * CÓMO MUERE. Las dos ramas ahora convergen en `services/manifiestoVersiones.ts`: se resuelve (o se
+ * crea) la fila `manifests`, y el parse nuevo entra SIEMPRE por `stageVersion` + `aplicarVersion`.
+ * La corrección deja de depender de que alguien recuerde escribirla en dos sitios — que es la única
+ * forma en que un defecto así no vuelve.
  */
 
 export interface ManifiestoTotales {
@@ -48,6 +62,15 @@ export type ManifiestoIngestResult =
       /** House guías materialized into `operacion_guias` — the unit PA-07 and planning work on. */
       guias: number;
       totales: ManifiestoTotales;
+      /**
+       * La corrección llegó y NO se aplicó porque ya hay un pedimento `cargado`.
+       *
+       * No es un fallo de la ingesta y por eso no es un `status` propio: el correo se archivó, el
+       * caso existe y el manifiesto vigente sigue siendo válido. Lo que cambió es que el documento
+       * nuevo quedó registrado como versión `rechazada` —con su archivo, su hash y su motivo— y eso
+       * viaja aquí para que el cotejo lo cuente y el humano lo vea. Ausente en el caso normal.
+       */
+      bloqueado?: { version: number; motivoRechazo: string };
     };
 
 const MAX_ROWS = 20_000;
@@ -236,35 +259,17 @@ export async function ingestManifiestoFromPrealerta(input: {
     attached = true;
   } else {
     try {
-      manifestId = await withTransaction(async (q) => {
-        const m = await q(
-          `INSERT INTO manifests
-             (mawb_reference, client_id, created_by, ingestion_status, source_file_id,
-              source_header, file_content_hash)
-           VALUES ($1,$2,NULL,'staged',$3,$4,$5) RETURNING id`,
-          [mawb, clientId, fileId, JSON.stringify(parsed.headerRow), contentHash],
-        );
-        const id = m.rows[0].id as string;
-        for (const row of parsed.rows) {
-          // PII is encrypted before it is written, exactly as the UI path does.
-          const encrypted = encryptShipmentPii(row.shipment);
-          await q(
-            `INSERT INTO manifest_staging_rows
-               (manifest_id, row_index, idempotency_key, data, status, errors, warnings)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-            [
-              id,
-              row.rowIndex,
-              row.idempotencyKey,
-              JSON.stringify(encrypted),
-              row.status,
-              JSON.stringify(row.errors),
-              JSON.stringify(row.warnings),
-            ],
-          );
-        }
-        return id;
-      });
+      // Sólo la CABECERA. Las filas de bronce las escribe `stageVersion`, que es también quien las
+      // escribe en una sustitución — un solo escritor, que es lo que impide que las dos ramas vuelvan
+      // a divergir.
+      const m = await query<{ id: string }>(
+        `INSERT INTO manifests
+           (mawb_reference, client_id, created_by, ingestion_status, source_file_id,
+            source_header, file_content_hash)
+         VALUES ($1,$2,NULL,'staged',$3,$4,$5) RETURNING id`,
+        [mawb, clientId, fileId, JSON.stringify(parsed.headerRow), contentHash],
+      );
+      manifestId = m.rows[0].id;
     } catch (err) {
       // Backstop for a concurrent insert winning the race on the unique MAWB.
       if (isUniqueViolation(err)) {
@@ -281,16 +286,66 @@ export async function ingestManifiestoFromPrealerta(input: {
     }
   }
 
-  // Promote to the gold layer. Rows with hard errors are NOT promoted — the UI route refuses the
-  // whole promotion in that case, but here refusing would leave an operación with no shipments and
-  // therefore no risk analysis at all, so we promote what is valid and let the row errors surface as
-  // warnings on the prealerta. The distinction is recorded in the event payload.
-  const promovidas = await promoteStagedRows(manifestId);
-
+  // ANTES de aplicar la versión, no después. `aplicarVersion` escribe el evento
+  // `MANIFIESTO_VERSIONADO` en la línea de tiempo del caso, y el ledger exige un caso: si el enlace
+  // se hiciera después, la PRIMERA ingesta de cada manifiesto perdería su evento en silencio.
   await query('UPDATE operaciones SET manifest_id = $2 WHERE id = $1 AND manifest_id IS NULL', [
     operacionId,
     manifestId,
   ]);
+
+  /**
+   * El parse nuevo entra SIEMPRE, venga de una primera ingesta o de un reenvío corregido.
+   *
+   * El motivo lo genera el sistema y dice de dónde vino. La versión de la prealerta va dentro porque
+   * es lo que permite empatar esta corrección con el correo que la trajo; un motivo vacío pasaría el
+   * CHECK y no le serviría a nadie.
+   */
+  const pre = await query<{ version: number; message_id: string | null }>(
+    `SELECT version, message_id FROM prealertas
+      WHERE operacion_id = $1 ORDER BY version DESC LIMIT 1`,
+    [operacionId],
+  );
+  const staged = await stageVersion({
+    manifestId,
+    parsed,
+    origen: 'prealerta',
+    motivo: `Reenvío de prealerta v${pre.rows[0]?.version ?? 1} (${pre.rows[0]?.message_id ?? 'sin Message-ID'})`,
+    sourceFileId: fileId,
+    fileContentHash: contentHash,
+    userId: null,
+  });
+
+  // Reentrega de webhook o reenvío byte-idéntico: la huella del conjunto de líneas coincide con la de
+  // la versión vigente, así que no hay versión nueva y el oro ya dice lo correcto. Se sigue adelante
+  // con los totales y las guías —el cotejo del correo puede haber cambiado aunque el manifiesto no—,
+  // pero no se reescribe nada.
+  let promovidas = 0;
+  let bloqueado: { version: number; motivoRechazo: string } | null = null;
+  if (staged.status === 'staged') {
+    /**
+     * Las filas con error NO se promueven, pero tampoco abortan la promoción entera. La ruta de UI sí
+     * la aborta, y hace bien: ahí hay un humano que puede corregir el archivo. Aquí, negarse dejaría
+     * a la operación sin ningún `shipments` y por tanto sin análisis de riesgo — peor que analizar lo
+     * que sí se pudo leer. La distinción queda en los `counts` del evento y de la respuesta.
+     *
+     * `correrRiesgo: false` porque `prealertaIngest` corre el riesgo inmediatamente después y es la
+     * dueña del evento `RIESGO_EVALUADO` y de su espejo en AGORA. Correrlo dos veces sobre un
+     * manifiesto de 20 000 líneas sería pagar el doble por el mismo número.
+     */
+    const aplicada = await aplicarVersion({
+      manifestId,
+      version: staged.version,
+      userId: null,
+      correrRiesgo: false,
+    });
+    if (aplicada.status === 'aplicada') promovidas = aplicada.promovidas;
+    else if (aplicada.status === 'rechazada') {
+      bloqueado = { version: aplicada.version, motivoRechazo: aplicada.motivoRechazo };
+    }
+  } else if (staged.status === 'rechazada') {
+    bloqueado = { version: staged.version, motivoRechazo: staged.motivoRechazo };
+  }
 
   // One scan of the gold layer feeds both the cotejo totals and the operación's house guías.
   const { totales, porGuia } = await scanManifestShipments(manifestId);
@@ -308,6 +363,9 @@ export async function ingestManifiestoFromPrealerta(input: {
       promovidas,
       guias,
       totales,
+      version: staged.version,
+      versionEstado: staged.status,
+      bloqueado,
       sheetName: parsed.sheetName,
       unmappedHeaders: parsed.unmappedHeaders,
     },
@@ -321,44 +379,6 @@ export async function ingestManifiestoFromPrealerta(input: {
     promovidas,
     guias,
     totales,
+    ...(bloqueado ? { bloqueado } : {}),
   };
-}
-
-/**
- * Promote valid/warning staging rows into `shipments`, idempotently.
- *
- * Mirrors POST /api/manifests/:id/promote, minus its interactive gates (finalized-pedimento lock and
- * the all-or-nothing error check) which belong to a human-driven flow. Re-running is safe: the
- * ON CONFLICT clause refreshes the row and clears its stale risk scores, which is what makes a
- * prealerta resend with a corrected manifest do the right thing.
- */
-async function promoteStagedRows(manifestId: string): Promise<number> {
-  const staged = await query<{ idempotency_key: string; data: unknown }>(
-    `SELECT idempotency_key, data FROM manifest_staging_rows
-      WHERE manifest_id = $1 AND status IN ('valid','warning')`,
-    [manifestId],
-  );
-  if (!staged.rows.length) return 0;
-
-  await withTransaction(async (q) => {
-    for (const r of staged.rows) {
-      await q(
-        `INSERT INTO shipments (id, manifest_id, data, idempotency_key)
-         VALUES (gen_random_uuid(), $1, $2, $3)
-         ON CONFLICT (manifest_id, idempotency_key)
-         DO UPDATE SET data = EXCLUDED.data,
-                       risk_score = NULL, risk_color = NULL, risk_incidences = NULL`,
-        [manifestId, JSON.stringify(r.data), r.idempotency_key],
-      );
-    }
-    await q(
-      `UPDATE manifest_staging_rows SET promoted_at = now()
-        WHERE manifest_id = $1 AND status IN ('valid','warning')`,
-      [manifestId],
-    );
-    await q(`UPDATE manifests SET ingestion_status='promoted', risk_stale=true WHERE id=$1`, [
-      manifestId,
-    ]);
-  });
-  return staged.rows.length;
 }

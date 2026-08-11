@@ -583,7 +583,13 @@ export async function ingestPrealerta(
           if (risk) {
             // Eje 2 of the state machine: hallazgos are anything the engine flagged rojo. Only advance
             // from an earlier state — never walk backwards over a resolution someone already recorded.
-            const conHallazgos = risk.summary.validarEnPrevio > 0;
+            //
+            // Se lee el resumen EFECTIVO, no el crudo (diseño 2026-08-10, §4). Si un humano ya declaró
+            // falso positivo —o mitigado, con evidencia— el único hallazgo rojo del caso, dejarlo en
+            // `riesgo_con_hallazgos` seguiría exigiendo documentos por algo que ya se resolvió, y el
+            // congelamiento CT-4 acabaría cayendo sobre carga limpia. El crudo no se pierde: viaja
+            // íntegro en el payload del evento y en la fila.
+            const conHallazgos = risk.summaryEfectivo.validarEnPrevio > 0;
             await query(
               `UPDATE operaciones
                   SET estado_documental = $2
@@ -599,7 +605,10 @@ export async function ingestPrealerta(
                 result.operacion.mawb,
                 JSON.stringify({
                   manifestId: res.manifestId,
+                  // Los dos, siempre: el crudo es lo que dijo el motor y el efectivo es lo que movió
+                  // la máquina de estados. Guardar sólo uno obliga a adivinar cuál fue cuál.
                   summary: risk.summary,
+                  summaryEfectivo: risk.summaryEfectivo,
                   rulesetVersion: risk.rulesetVersion,
                   riskFileId: risk.riskFileId,
                   period: risk.period,
@@ -615,6 +624,7 @@ export async function ingestPrealerta(
                 operacionId: result.operacion.id,
                 mawb: result.operacion.mawb,
                 summary: risk.summary,
+                summaryEfectivo: risk.summaryEfectivo,
                 rulesetVersion: risk.rulesetVersion,
               },
               ip: null,

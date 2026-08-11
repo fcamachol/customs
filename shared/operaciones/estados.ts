@@ -3,7 +3,12 @@
 // These arrays are the single source of truth for the app layer. The DB CHECK constraints in
 // server/migrations/1700003800000_operaciones.ts and 1700003900000_operacion_eventos.ts spell the
 // same values out inline (migrations stay dependency-free by house convention), so any change here
-// needs a matching migration. The `estadosMatchMigration` test guards that pairing.
+// needs a matching migration. test/migrations/opsEstadosParity.test.ts guards that pairing.
+//
+// ONE EXCEPTION, and it is worth knowing before trusting this file: `operacion_eventos.tipo` has NO
+// CHECK — only `origen` does. So TIPOS_EVENTO is enforced by nothing but reading, which is exactly
+// how four REQUERIMIENTO_* types ended up being written to the ledger for months without appearing
+// here. If that keeps happening, the fix is a CHECK, not a bigger comment.
 //
 // Three axes, deliberately independent (PRD-02 §8.4). Collapsing them into one status is what makes
 // the Excel this replaces unable to express "flight landed but risk unresolved, so excluded from the
@@ -107,6 +112,36 @@ export const TIPOS_EVENTO = [
   'HOLD_GLOBAL_CERRADO',
   'RETENCION_CREADA',
   'RETENCION_LIBERADA',
+  /**
+   * Requerimientos de riesgo (R18 / D13 / CT-4). Estos cuatro YA se escribían en `operacion_eventos`
+   * desde `routes/riesgoRequerimientos.ts` y `services/requerimientosService.ts`, y ya se leían desde
+   * `agoraMirror.ts` y `whatsappFanout.ts`, pero no estaban en esta lista. `operacion_eventos.tipo`
+   * es `text` sin CHECK — a diferencia de `origen` — así que nada falló y nadie se enteró: el
+   * vocabulario decía una cosa y el ledger contenía otra. Se añaden aquí para que la lista vuelva a
+   * ser lo que dice ser, la fuente única de la verdad, y no un subconjunto optimista de ella.
+   */
+  'REQUERIMIENTO_EMITIDO',
+  'REQUERIMIENTO_RESUELTO',
+  'REQUERIMIENTO_CANCELADO',
+  'REQUERIMIENTO_VENCIDO',
+  /**
+   * Manifiesto versionado (diseño 2026-08-10 §8). Una CORRECCIÓN del documento con el mismo MAWB:
+   * qué versión, con qué motivo, y el diff en claves de idempotencia — nunca en valores.
+   *
+   * MANIFIESTO_VERSION_RECHAZADA es un evento y no un silencio porque el documento del cliente NO se
+   * descarta cuando hay un pedimento `cargado`: queda archivado, la fila de versión queda
+   * `rechazada` con su `motivo_rechazo`, y el ledger dice que llegó y por qué no se aplicó. Un
+   * rechazo que no deja rastro es indistinguible de un envío que nunca ocurrió, y esa ambigüedad
+   * siempre se resuelve en contra de quien mandó el archivo.
+   */
+  'MANIFIESTO_VERSIONADO',
+  'MANIFIESTO_VERSION_RECHAZADA',
+  /**
+   * Un humano afirma algo sobre una bandera del motor (fase 3 del mismo diseño): falso positivo,
+   * mitigado o confirmado. Se declara aquí desde ya para que el vocabulario lo espere; la tabla
+   * `riesgo_disposiciones` y su ruta llegan en su propia fase.
+   */
+  'RIESGO_HALLAZGO_DISPUESTO',
   /**
    * Contingency engine — the replanning layer (shared/operaciones/replan.ts, CT-1…CT-7).
    *

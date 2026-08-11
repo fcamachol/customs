@@ -85,6 +85,21 @@ describe('gradeSignals', () => {
     expect(codes).toEqual([]);
   });
 
+  /**
+   * El discriminador de `monto`. Hasta el diseño 2026-08-10 las dos variantes sólo se distinguían por
+   * el texto de `detail`, y `detail` NO entra en la huella de un hallazgo (es copy humano que se
+   * edita). Sin `direccion`, disponer "el valor bajo está justificado" taparía después un valor ALTO
+   * sobre la misma línea: dos hallazgos opuestos con la misma huella.
+   */
+  it('monto distingue "muy bajo" de "muy alto" en la EVIDENCIA, no sólo en el texto', () => {
+    const bajo = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', customsValueUsd: 0.5 }), ctx())
+      .find((c) => c.signalId === 'monto')!;
+    const alto = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', customsValueUsd: 5000 }), ctx())
+      .find((c) => c.signalId === 'monto')!;
+    expect(bajo.evidence).toEqual({ value: 0.5, direccion: 'bajo' });
+    expect(alto.evidence).toEqual({ value: 5000, direccion: 'alto' });
+  });
+
   it('prohibited hit fires full weight and forces rojo', () => {
     const codes = gradeSignals(gradeShip({ name: 'A', rfc: 'PERJ800101AA8', description: 'pastilla' }), ctx());
     const p = codes.find((c) => c.signalId === 'prohibidos')!;

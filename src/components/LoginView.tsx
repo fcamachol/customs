@@ -84,19 +84,19 @@ export function LoginView() {
   // --- MFA Enrollment: setup step ---
   if (enrollmentPhase === 'setup') {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-navy-900 via-navy-800 to-navy-950 px-4 font-sans antialiased">
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 px-4 font-sans antialiased">
         <div className="w-full max-w-sm">
           <div className="flex flex-col items-center mb-8 select-none">
-            <div className="w-14 h-14 rounded-2xl bg-gold-500/15 border border-gold-400/30 flex items-center justify-center shadow-lg mb-4">
-              <ShieldCheck className="w-7 h-7 text-gold-400" />
+            <div className="w-14 h-14 rounded-2xl bg-navy-800 flex items-center justify-center shadow-sm mb-4">
+              <ShieldCheck className="w-7 h-7 text-white" />
             </div>
-            <h1 className="text-white font-black tracking-tight text-xl leading-none">Configurar MFA</h1>
-            <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-gold-400 font-bold mt-2">
+            <h1 className="text-slate-900 font-extrabold tracking-tight text-xl leading-none">Configurar MFA</h1>
+            <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-navy-700 font-bold mt-2">
               Autenticación requerida
             </p>
           </div>
-          <div className="bg-white/95 backdrop-blur rounded-2xl shadow-2xl border border-white/10 p-7 space-y-5">
-            <p className="text-sm text-gray-700">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-7 space-y-5">
+            <p className="text-sm text-slate-700">
               Tu rol requiere autenticación de dos factores (MFA). Debes configurarlo antes de continuar.
             </p>
             {err && (
@@ -122,38 +122,38 @@ export function LoginView() {
   // --- MFA Enrollment: enable step ---
   if (enrollmentPhase === 'enable') {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-navy-900 via-navy-800 to-navy-950 px-4 font-sans antialiased">
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 px-4 font-sans antialiased">
         <div className="w-full max-w-sm">
           <div className="flex flex-col items-center mb-8 select-none">
-            <div className="w-14 h-14 rounded-2xl bg-gold-500/15 border border-gold-400/30 flex items-center justify-center shadow-lg mb-4">
-              <ShieldCheck className="w-7 h-7 text-gold-400" />
+            <div className="w-14 h-14 rounded-2xl bg-navy-800 flex items-center justify-center shadow-sm mb-4">
+              <ShieldCheck className="w-7 h-7 text-white" />
             </div>
-            <h1 className="text-white font-black tracking-tight text-xl leading-none">Verificar MFA</h1>
-            <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-gold-400 font-bold mt-2">
+            <h1 className="text-slate-900 font-extrabold tracking-tight text-xl leading-none">Verificar MFA</h1>
+            <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-navy-700 font-bold mt-2">
               Escanea y confirma
             </p>
           </div>
           <form
             onSubmit={onEnableMfa}
-            className="bg-white/95 backdrop-blur rounded-2xl shadow-2xl border border-white/10 p-7 space-y-5"
+            className="bg-white rounded-2xl border border-slate-200 shadow-sm p-7 space-y-5"
           >
-            <p className="text-sm text-gray-700">
+            <p className="text-sm text-slate-700">
               Escanea este código con tu app de autenticación (Google Authenticator, Authy, etc.) e ingresa el código de 6 dígitos.
             </p>
             {enrollOtpauthUrl && (
               <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">URL de configuración</p>
-                <code className="block text-[10px] text-gray-600 bg-gray-100 rounded p-2 break-all select-all">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">URL de configuración</p>
+                <code className="block text-[10px] text-slate-600 bg-slate-100 rounded p-2 break-all select-all">
                   {enrollOtpauthUrl}
                 </code>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-slate-500">
                   O ingresa la clave manualmente:{' '}
-                  <span className="font-mono font-bold text-gray-700 select-all">{enrollSecret}</span>
+                  <span className="font-mono font-bold text-slate-700 select-all">{enrollSecret}</span>
                 </p>
               </div>
             )}
             <div className="space-y-1.5">
-              <label htmlFor="enroll-code" className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+              <label htmlFor="enroll-code" className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
                 Código de verificación
               </label>
               <input
@@ -165,7 +165,7 @@ export function LoginView() {
                 maxLength={6}
                 value={enrollCode}
                 onChange={(e) => setEnrollCode(e.target.value.replace(/\D/g, ''))}
-                className="w-full rounded-lg border border-navy-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30 tracking-widest font-mono"
+                className="w-full rounded-lg border border-navy-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30 tracking-widest font-mono"
               />
             </div>
             {err && (
@@ -189,15 +189,15 @@ export function LoginView() {
 
   // --- Normal login form ---
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-navy-900 via-navy-800 to-navy-950 px-4 font-sans antialiased">
+    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 px-4 font-sans antialiased">
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="flex flex-col items-center mb-8 select-none">
-          <div className="w-14 h-14 rounded-2xl bg-gold-500/15 border border-gold-400/30 flex items-center justify-center shadow-lg mb-4">
-            <ShieldCheck className="w-7 h-7 text-gold-400" />
+          <div className="w-14 h-14 rounded-2xl bg-navy-800 flex items-center justify-center shadow-sm mb-4">
+            <ShieldCheck className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-white font-black tracking-tight text-xl leading-none">Capital Centennials</h1>
-          <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-gold-400 font-bold mt-2">
+          <h1 className="text-slate-900 font-extrabold tracking-tight text-xl leading-none">Capital Centennials</h1>
+          <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-navy-700 font-bold mt-2">
             Análisis de Riesgo · T1
           </p>
         </div>
@@ -205,10 +205,10 @@ export function LoginView() {
         {/* Card */}
         <form
           onSubmit={onSubmit}
-          className="bg-white/95 backdrop-blur rounded-2xl shadow-2xl border border-white/10 p-7 space-y-5"
+          className="bg-white rounded-2xl border border-slate-200 shadow-sm p-7 space-y-5"
         >
           <div className="space-y-1.5">
-            <label htmlFor="usuario" className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+            <label htmlFor="usuario" className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
               Usuario
             </label>
             <input
@@ -217,12 +217,12 @@ export function LoginView() {
               placeholder="Usuario"
               value={u}
               onChange={(e) => setU(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
+              className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="contrasena" className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+            <label htmlFor="contrasena" className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
               Contraseña
             </label>
             <input
@@ -232,13 +232,13 @@ export function LoginView() {
               placeholder="••••••••"
               value={p}
               onChange={(e) => setP(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
+              className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30"
             />
           </div>
 
           {mfaRequired && (
             <div className="space-y-1.5">
-              <label htmlFor="mfa-code" className="block text-xs font-bold text-gray-700 uppercase tracking-wide">
+              <label htmlFor="mfa-code" className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
                 Código MFA
               </label>
               <input
@@ -250,7 +250,7 @@ export function LoginView() {
                 maxLength={6}
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                className="w-full rounded-lg border border-navy-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30 tracking-widest font-mono"
+                className="w-full rounded-lg border border-navy-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-500/30 tracking-widest font-mono"
               />
             </div>
           )}
@@ -271,7 +271,7 @@ export function LoginView() {
           </button>
         </form>
 
-        <p className="text-center text-[10px] font-mono text-white/40 mt-6 select-none">
+        <p className="text-center text-[10px] font-mono text-slate-400 mt-6 select-none">
           Plataforma de cumplimiento aduanero · Acceso restringido
         </p>
       </div>

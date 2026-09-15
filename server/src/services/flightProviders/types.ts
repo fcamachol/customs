@@ -22,6 +22,15 @@ export interface FlightQuery {
   callsign: string | null;
   /** YYYY-MM-DD, the operating date of the flight leg. */
   fechaOperacion: string;
+  /**
+   * Ruta declarada en la prealerta, para desempatar cuando un mismo número de vuelo opera VARIAS
+   * patas el mismo día (verificado con 5Y8174, que el 14-sep voló ANC→NLU por la mañana y NLU→DOV
+   * por la noche). Sin esto, la selección dependía del orden en que AeroAPI devolviera la lista y
+   * podía cotejar la carga contra el itinerario del viaje de regreso. Opcional: la prealerta no
+   * siempre declara ruta.
+   */
+  origenIata?: string | null;
+  destinoIata?: string | null;
 }
 
 export interface FlightSnapshot {

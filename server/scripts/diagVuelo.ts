@@ -24,6 +24,8 @@ import { flightProviderChain, lookupFlight } from '../src/services/flightProvide
 async function main(): Promise<void> {
   const raw = process.argv[2];
   const fecha = process.argv[3] ?? new Date().toISOString().slice(0, 10);
+  const origen = process.argv[4] ?? null;
+  const destino = process.argv[5] ?? null;
   if (!raw) {
     console.error('uso: npx tsx server/scripts/diagVuelo.ts <numeroVuelo> [YYYY-MM-DD]');
     process.exit(2);
@@ -44,10 +46,11 @@ async function main(): Promise<void> {
   console.log(`IATA                ${parts.iataFlight}   (lo que se le pregunta a AeroAPI)`);
   console.log(`ICAO/callsign       ${parts.callsign ?? 'SIN MAPEO — ADS-B no puede buscarlo'}   (lo que transmite el avión)`);
   console.log(`fecha de operación  ${fecha}`);
+  if (origen || destino) console.log(`ruta declarada      ${origen ?? '?'} → ${destino ?? '?'}`);
 
   const t0 = Date.now();
   const { snapshot, errors } = await lookupFlight(
-    { iataFlight: parts.iataFlight, callsign: parts.callsign, fechaOperacion: fecha },
+    { iataFlight: parts.iataFlight, callsign: parts.callsign, fechaOperacion: fecha, origenIata: origen, destinoIata: destino },
     'desconocido',
   );
   const ms = Date.now() - t0;

@@ -41,6 +41,7 @@ import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/c
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
 import { AddClientModal } from './AddClientModal';
+import { ClienteConvenios } from './ClienteConvenios';
 import { TransportistasTab } from './TransportistasTab';
 
 interface Props {
@@ -1004,6 +1005,8 @@ function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onEditPlat
           </div>
         </dl>
       </section>
+
+      <ClienteConvenios clientId={client.id} isAdmin={isAdmin} />
 
       <section className="border-t border-slate-200 pt-4">
         <h4 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">

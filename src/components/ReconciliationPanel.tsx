@@ -56,6 +56,63 @@ export function ReconciliationPanel({ report }: { report: ReconciliationReport |
         </div>
       </Card>
 
+      {/* Estimado informativo de impuesto.
+          Pedido por Luis y Roberto el 15-sep. Dos decisiones viven en este bloque y ambas se dicen
+          en voz alta en pantalla: (1) se estima SÓLO sobre las partidas que van al pedimento, que
+          es lo que resuelve la objeción de fondo —no se puede cobrar impuesto de mercancía que no
+          va a pasar—; y (2) NO es el cálculo legal, que lo determina el agente aduanal. Cuando el
+          pedimento declara su propia tasa se muestran las dos, porque la diferencia entre lo que
+          corresponde y lo que se aplicó es un control, no un adorno. */}
+      {report.estimadoImpuesto && (() => {
+        const e = report.estimadoImpuesto;
+        const tasaNuestra = e.tasasUsadas[0]?.tasaPct ?? null;
+        const difiere = e.tasaPedimentoPct != null && tasaNuestra != null
+          && Math.abs(e.tasaPedimentoPct - tasaNuestra) > 0.01;
+        return (
+          <Card className="p-4">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Estimado de impuesto
+              </h4>
+              <span className="text-[11px] text-slate-400">
+                Informativo · el cálculo legal lo determina el agente aduanal
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Base gravable</div>
+                <div className="font-mono text-sm tabular-nums text-slate-800">{money(e.totalValorUsd)} USD</div>
+                <div className="text-[11px] text-slate-400">sólo lo que va al pedimento</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Impuesto estimado</div>
+                <div className="font-mono text-sm font-semibold tabular-nums text-slate-900">{money(e.totalImpuestoUsd)} USD</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Tasa aplicada</div>
+                <div className="font-mono text-sm tabular-nums text-slate-800">
+                  {e.tasasUsadas.map((x) => `${x.tasaPct}% ${x.origen}`).join(' · ') || '—'}
+                </div>
+                {e.tasasUsadas[0] && (
+                  <div className="text-[11px] text-slate-400">vigente desde {e.tasasUsadas[0].desde}</div>
+                )}
+              </div>
+            </div>
+            {difiere && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                El pedimento declara una tasa de <b>{e.tasaPedimentoPct}%</b> y la vigente para este
+                origen es <b>{tasaNuestra}%</b>. Verificar cuál corresponde antes de informarle al cliente.
+              </p>
+            )}
+            {e.sinEstimar > 0 && (
+              <p className="mt-3 text-[11px] text-amber-700">
+                {e.sinEstimar} partida(s) sin estimar por falta de tasa vigente — el total no las incluye.
+              </p>
+            )}
+          </Card>
+        );
+      })()}
+
       {/* Validación de montos manifiesto vs pedimento.
           Petición explícita del cliente (correo 10-ago, punto 1): la comparación de importes ya se
           calculaba —reconcile.ts compara `valorUsd` por guía y el total— pero la pantalla sólo

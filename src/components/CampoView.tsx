@@ -286,7 +286,14 @@ function CapturaPanel({ tarea, onBack }: { tarea: TareaItem; onBack: () => void 
           onChoose={(s) => void handleModulacion(s)}
         />
 
-        <CampoButton label="Salida de rojo" evento={eventos.SALIDA_ROJO ?? IDLE_EVENTO} onClick={() => void postEvento('SALIDA_ROJO')} />
+        {/* Salida de rojo sólo aparece cuando el semáforo salió ROJO — que es el único caso en que
+            existe un reconocimiento del que salir. Antes se mostraba siempre y el servidor lo
+            rechazaba con un 409; para alguien de pie en la aduana con el celular, un botón que
+            siempre falla es peor que un botón que no está. El servidor sigue siendo la autoridad
+            (la guarda de etapa no se movió): esto sólo deja de ofrecer lo que no procede. */}
+        {tarea.semaforo === 'red' && (
+          <CampoButton label="Salida de rojo" evento={eventos.SALIDA_ROJO ?? IDLE_EVENTO} onClick={() => void postEvento('SALIDA_ROJO')} />
+        )}
       </div>
     </div>
   );

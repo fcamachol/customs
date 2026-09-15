@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, X, Inbox, AlertTriangle, Download } from 'lucide-react';
-import { apiGet, apiDownload } from '../api';
+import { Search, X, Inbox, AlertTriangle, Download, RefreshCw, Plane } from 'lucide-react';
+import { apiGet, apiPost, apiDownload } from '../api';
 import { Card, EmptyState, Modal, StatusPill, Button } from './ui';
 import type { Resultado } from './ui';
 
@@ -34,6 +34,15 @@ interface VueloObservado {
   etaEstimado: string | null; arriboReal: string | null; estado: string;
   fuente: string | null; ultimaLat: number | null; ultimaLon: number | null;
   ultimaAltitudFt: number | null; ultimaConsultaAt: string | null;
+  aeronaveTipo: string | null; matricula: string | null; progresoPct: number | null;
+}
+
+/** Lo que responde POST /api/operaciones/:id/vuelo/refresh. */
+interface RefreshVueloResult {
+  status: 'sin_vuelo_declarado' | 'no_identificado' | 'actualizado' | 'sin_cambio' | 'error_proveedor';
+  estadoVuelo?: string;
+  discrepancias?: number;
+  errores?: Array<{ provider: string; message: string }>;
 }
 
 interface ParserWarning { code: string; field?: string; detail?: string }
@@ -106,6 +115,49 @@ function fmtNumber(n: number | null): string {
 function fmtRoute(origen: string | null, destino: string | null): string {
   if (!origen && !destino) return '—';
   return `${origen ?? '—'} → ${destino ?? '—'}`;
+}
+
+// Un feed de vuelo sin fecha de consulta miente por omisión: un dato de hace tres días se ve
+// idéntico a uno de hace un minuto. Por eso la antigüedad se muestra SIEMPRE, en lenguaje llano.
+function fmtAntiguedad(iso: string | null): string {
+  if (!iso) return 'nunca consultado';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return 'nunca consultado';
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return 'hace unos segundos';
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  return `hace ${Math.floor(h / 24)} d`;
+}
+
+// Nombre del proveedor tal como lo emite services/flightProviders, traducido a algo que un
+// operador pueda citarle a la autoridad.
+const FUENTE_LABELS: Record<string, string> = {
+  'flightaware.aeroapi': 'FlightAware AeroAPI',
+  'adsb.lol': 'ADS-B comunitario',
+};
+
+// El estado del vuelo es la única parte del panel que debe leerse de un vistazo: el color va por
+// consecuencia operativa, no por estética. Rojo = la carga no llega como se planeó.
+const ESTADO_VUELO_STYLE: Record<string, string> = {
+  aterrizado: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+  en_ruta: 'bg-blue-50 text-blue-700 ring-blue-600/20',
+  demorado: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+  cancelado: 'bg-red-50 text-red-700 ring-red-600/20',
+  desviado: 'bg-red-50 text-red-700 ring-red-600/20',
+  programado: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+  desconocido: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+};
+
+/** Minutos de diferencia entre lo programado y lo real, con signo legible. */
+function fmtDesfase(programado: string | null, real: string | null): string | null {
+  if (!programado || !real) return null;
+  const d = (new Date(real).getTime() - new Date(programado).getTime()) / 60000;
+  if (!Number.isFinite(d) || Math.abs(d) < 1) return null;
+  const m = Math.round(Math.abs(d));
+  const txt = m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+  return d > 0 ? `+${txt} tarde` : `−${txt} antes`;
 }
 
 function humanize(v: string): string {
@@ -393,14 +445,49 @@ export default function PrealertasView() {
           {detailError && (
             <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{detailError}</p>
           )}
-          {detail && !detailLoading && <OperacionDetailBody detail={detail} />}
+          {detail && !detailLoading && (
+            <OperacionDetailBody detail={detail} onRefreshed={() => { void openDetail(detail.id); }} />
+          )}
         </Modal>
       )}
     </div>
   );
 }
 
-function OperacionDetailBody({ detail }: { detail: OperacionDetail }) {
+function OperacionDetailBody({ detail, onRefreshed }: { detail: OperacionDetail; onRefreshed: () => void }) {
+  const [vueloRefreshing, setVueloRefreshing] = useState(false);
+  const [vueloMsg, setVueloMsg] = useState<{ tono: 'ok' | 'aviso' | 'error'; texto: string } | null>(null);
+
+  /**
+   * Consulta el feed AHORA. Los cinco `status` del servicio se traducen a mensajes distintos a
+   * propósito: `error_proveedor` (el feed falló) NO significa lo mismo que `no_identificado`
+   * (el feed contestó y no conoce el vuelo). Colapsarlos en un "no se pudo" genérico sería
+   * exactamente la ambigüedad que este sistema existe para eliminar.
+   */
+  async function refrescarVuelo(id: string) {
+    setVueloRefreshing(true);
+    setVueloMsg(null);
+    try {
+      const r = await apiPost<RefreshVueloResult>(`/api/operaciones/${id}/vuelo/refresh`, {});
+      if (r.status === 'error_proveedor') {
+        const detalle = r.errores?.map((e) => `${e.provider}: ${e.message}`).join(' · ') ?? '';
+        setVueloMsg({ tono: 'error', texto: `El proveedor de vuelos falló — no dice nada sobre este vuelo. ${detalle}` });
+      } else if (r.status === 'no_identificado') {
+        setVueloMsg({ tono: 'aviso', texto: 'El proveedor respondió y no reconoce este vuelo en la fecha declarada.' });
+      } else if (r.status === 'sin_vuelo_declarado') {
+        setVueloMsg({ tono: 'aviso', texto: 'La prealerta no declara un número de vuelo que se pueda consultar.' });
+      } else {
+        const disc = r.discrepancias ? ` · ${r.discrepancias} discrepancia(s) de cotejo` : '';
+        setVueloMsg({ tono: 'ok', texto: `Verificado contra el feed${disc}.` });
+      }
+      onRefreshed();
+    } catch (err) {
+      setVueloMsg({ tono: 'error', texto: err instanceof Error ? err.message : 'No se pudo consultar el feed de vuelo.' });
+    } finally {
+      setVueloRefreshing(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* The three state axes + semáforo — the axes are free-form operational states, semáforo is
@@ -418,29 +505,141 @@ function OperacionDetailBody({ detail }: { detail: OperacionDetail }) {
       {/* Declared (client email) vs observed (flight-tracking feed). The client DECLARES; the feed
           VERIFIES — those are different sources and must never be conflated. */}
       <Card className="p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-800">Vuelo declarado vs. observado</h3>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-slate-800">Vuelo declarado vs. observado</h3>
+          <Button
+            variant="secondary"
+            className="px-3 py-1.5 text-xs"
+            disabled={vueloRefreshing}
+            onClick={() => refrescarVuelo(detail.id)}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${vueloRefreshing ? 'animate-spin' : ''}`} />
+            {vueloRefreshing ? 'Consultando…' : 'Consultar feed'}
+          </Button>
+        </div>
+
+        {vueloMsg && (
+          <p
+            role="status"
+            className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+              vueloMsg.tono === 'ok'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : vueloMsg.tono === 'aviso'
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-red-200 bg-red-50 text-red-800'
+            }`}
+          >
+            {vueloMsg.texto}
+          </p>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Declarado (prealerta)</div>
             <dl className="mt-2 space-y-1 text-sm">
               <div className="flex justify-between gap-2"><dt className="text-slate-500">Vuelo</dt><dd className="font-mono text-slate-800">{detail.numeroVuelo ?? '—'}</dd></div>
-              <div className="flex justify-between gap-2"><dt className="text-slate-500">Ruta</dt><dd className="text-slate-800">{fmtRoute(detail.origenIata, detail.destinoIata)}</dd></div>
+              <div className="flex justify-between gap-2"><dt className="text-slate-500">Ruta</dt><dd className="font-mono text-slate-800">{fmtRoute(detail.origenIata, detail.destinoIata)}</dd></div>
               <div className="flex justify-between gap-2"><dt className="text-slate-500">ETA declarada</dt><dd className="text-slate-800">{fmtDateTime(detail.etaPais)}</dd></div>
             </dl>
           </div>
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Observado (feed de vuelo)</div>
             {detail.vuelo ? (
-              <dl className="mt-2 space-y-1 text-sm">
-                <div className="flex justify-between gap-2"><dt className="text-slate-500">Vuelo</dt><dd className="font-mono text-slate-800">{detail.vuelo.numeroVuelo}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-slate-500">Estado</dt><dd className="text-slate-800">{humanize(detail.vuelo.estado)}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-slate-500">ETA estimada</dt><dd className="text-slate-800">{fmtDateTime(detail.vuelo.etaEstimado)}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-slate-500">Arribo real</dt><dd className="text-slate-800">{fmtDateTime(detail.vuelo.arriboReal)}</dd></div>
-              </dl>
+              <>
+                <dl className="mt-2 space-y-1 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">Vuelo</dt>
+                    <dd className="font-mono text-slate-800">
+                      {detail.vuelo.numeroVuelo}
+                      {detail.vuelo.callsign && detail.vuelo.callsign !== detail.vuelo.numeroVuelo && (
+                        <span className="ml-1.5 text-xs text-slate-400" title="Identificador que transmite la aeronave (ICAO)">
+                          {detail.vuelo.callsign}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">Estado</dt>
+                    <dd>
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                        ESTADO_VUELO_STYLE[detail.vuelo.estado] ?? ESTADO_VUELO_STYLE.desconocido}`}>
+                        {humanize(detail.vuelo.estado)}
+                      </span>
+                    </dd>
+                  </div>
+                  {/* La ruta observada va JUNTO a la declarada a propósito: esa comparación es
+                      literalmente lo que evalúan PA-04 y PA-05, y verla lado a lado permite que un
+                      humano confirme en un segundo lo que la regla concluyó. */}
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Ruta</dt>
+                    <dd className={`font-mono ${
+                      detail.origenIata && detail.vuelo.origenIata &&
+                      (detail.origenIata !== detail.vuelo.origenIata || detail.destinoIata !== detail.vuelo.destinoIata)
+                        ? 'font-semibold text-red-700' : 'text-slate-800'}`}>
+                      {fmtRoute(detail.vuelo.origenIata, detail.vuelo.destinoIata)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Salida real</dt>
+                    <dd className="text-right text-slate-800">
+                      {fmtDateTime(detail.vuelo.etdReal)}
+                      {fmtDesfase(detail.vuelo.etdProgramado, detail.vuelo.etdReal) && (
+                        <span className="ml-1.5 text-xs text-amber-700">{fmtDesfase(detail.vuelo.etdProgramado, detail.vuelo.etdReal)}</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-2"><dt className="text-slate-500">ETA estimada</dt><dd className="text-slate-800">{fmtDateTime(detail.vuelo.etaEstimado)}</dd></div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500">Arribo real</dt>
+                    <dd className="text-right text-slate-800">
+                      {fmtDateTime(detail.vuelo.arriboReal)}
+                      {fmtDesfase(detail.vuelo.etaProgramado, detail.vuelo.arriboReal) && (
+                        <span className="ml-1.5 text-xs text-amber-700">{fmtDesfase(detail.vuelo.etaProgramado, detail.vuelo.arriboReal)}</span>
+                      )}
+                    </dd>
+                  </div>
+                  {(detail.vuelo.aeronaveTipo || detail.vuelo.matricula) && (
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-slate-500">Aeronave</dt>
+                      <dd className="font-mono text-slate-800">
+                        {[detail.vuelo.aeronaveTipo, detail.vuelo.matricula].filter(Boolean).join(' · ')}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+
+                {typeof detail.vuelo.progresoPct === 'number' && detail.vuelo.estado === 'en_ruta' && (
+                  <div className="mt-2.5">
+                    <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                      <span className="inline-flex items-center gap-1"><Plane className="h-3 w-3" />En vuelo</span>
+                      <span className="font-mono">{detail.vuelo.progresoPct}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-navy-800 transition-[width]" style={{ width: `${Math.min(100, Math.max(0, detail.vuelo.progresoPct))}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* La procedencia del dato y su antigüedad NO son adorno: sin ellas, un valor de
+                    hace tres días se ve igual que uno recién verificado, y eso es precisamente la
+                    clase de silencio que este sistema no se permite. */}
+                <p className="mt-3 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+                  {detail.vuelo.fuente
+                    ? <>Fuente: <span className="text-slate-700">{FUENTE_LABELS[detail.vuelo.fuente] ?? detail.vuelo.fuente}</span></>
+                    : <span className="text-amber-700">Sin fuente registrada</span>}
+                  {' · '}
+                  <span className={detail.vuelo.ultimaConsultaAt ? '' : 'font-semibold text-amber-700'}>
+                    {fmtAntiguedad(detail.vuelo.ultimaConsultaAt)}
+                  </span>
+                </p>
+              </>
             ) : (
-              <p className="mt-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                Sin verificar — no hay datos de vuelo
-              </p>
+              <div className="mt-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
+                <p className="text-sm text-slate-500">Sin verificar — no hay datos de vuelo</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Nadie ha consultado el feed para este caso, o el proveedor no reconoció el vuelo declarado.
+                </p>
+              </div>
             )}
           </div>
         </div>

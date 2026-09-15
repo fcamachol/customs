@@ -37,7 +37,10 @@ export const adsbLolProvider: FlightProvider = {
     if (!q.callsign) return null;
 
     const res = await fetchWithTimeout(`${BASE}/v2/callsign/${encodeURIComponent(q.callsign)}`, {
-      headers: { Accept: 'application/json' },
+      // User-Agent OBLIGATORIO: adsb.lol responde 403 al agente por defecto de Node (undici).
+      // Verificado en vivo — con cualquier UA responde 200, sin UA responde 403. Sin esto el
+      // proveedor de respaldo está muerto y todo cae como `error_proveedor`.
+      headers: { Accept: 'application/json', 'User-Agent': 'customs-t1/1.0 (+compliance-aduanal)' },
     });
     if (!res.ok) throw new Error(`adsb.lol respondió ${res.status}`);
     const body = (await res.json()) as { ac?: AdsbAircraft[]; total?: number };

@@ -120,7 +120,13 @@ export async function refreshVueloForOperacion(operacionId: string): Promise<Ref
   const previous = vuelo.estado;
 
   const { snapshot, errors } = await lookupFlight(
-    { iataFlight: parts.iataFlight, callsign: parts.callsign, fechaOperacion },
+    {
+      iataFlight: parts.iataFlight,
+      callsign: parts.callsign,
+      fechaOperacion,
+      origenIata: op.origen_iata,
+      destinoIata: op.destino_iata,
+    },
     previous,
   );
 

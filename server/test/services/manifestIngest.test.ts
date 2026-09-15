@@ -15,6 +15,27 @@ function buildMultiSheetXlsx(sheets: { name: string; aoa: unknown[][] }[]): Buff
 }
 
 describe('ingestWorkbook', () => {
+  // Regresión: un CSV en UTF-8 SIN BOM llegaba con los acentos rotos porque SheetJS, sin
+  // `codepage`, asume CP1252 y parte los bytes de "Ñ" en dos caracteres. El nombre del
+  // consignatario es uno de los campos que la reconciliación compara contra el pedimento, así
+  // que corromperlo produce discrepancias falsas — por eso esto se prueba, no se supone.
+  it('lee un CSV UTF-8 sin BOM sin romper los acentos', () => {
+    const csv = [
+      'Numero de guia de embarque,Destinatario CNNE,Descripcion del producto,Codigo HS,Numero de productos,Valor total declarado,Divisa,Codigo de pais del remitente',
+      '695-44821908,ROSA MARIA MAGAÑA GUTIERREZ,Blusa de algodón,6106100000,3,55.50,USD,CN',
+      '695-44821909,HECTOR PEÑA LOZANO,Lámpara LED,9405409900,2,19.80,USD,CN',
+    ].join('\n');
+    const bytes = Buffer.from(csv, 'utf-8'); // sin BOM a propósito
+
+    const { rows } = ingestWorkbook(bytes, '695-44821907');
+
+    const nombres = rows.map((r) => r.shipment.consignee?.name);
+    expect(nombres).toContain('ROSA MARIA MAGAÑA GUTIERREZ');
+    expect(nombres).toContain('HECTOR PEÑA LOZANO');
+    // Y explícitamente: nada de mojibake.
+    expect(JSON.stringify(rows)).not.toContain('Ã');
+  });
+
   it('reads a workbook and validates rows', () => {
     const bytes = buildXlsx([
       ['Número de guía de embarque', 'Descripción del Producto', 'Código HS', 'Número de productos', 'Valor total declarado', 'Divisa', 'Código de país del remitente'],

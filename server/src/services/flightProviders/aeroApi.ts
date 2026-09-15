@@ -142,12 +142,30 @@ export const aeroApiProvider: FlightProvider = {
     // most: the ones where there is still time to act. When the operating date is beyond that horizon we
     // query UNBOUNDED — AeroAPI then returns the forward schedule, and the leg selection below picks the
     // right day out of it.
-    const url = `${BASE}/flights/${encodeURIComponent(q.iataFlight)}?${boundsFor(q.fechaOperacion)}`;
-    let res = await fetchWithTimeout(url, { headers });
+    // Preguntar por el identificador ICAO cuando lo tengamos (5Y8174 → GTI8174).
+    //
+    // AeroAPI indexa por ICAO: con GTI8174 devuelve el vuelo y trae `ident_iata: "5Y8174"` en la
+    // respuesta, mientras que la forma IATA es ambigua — "5Y" también es el prefijo de matrículas
+    // de Kenia, y varios cargueros simplemente no resuelven por IATA. Consultar por IATA hacía que
+    // casos con vuelo real aparecieran como "sin datos de vuelo". La forma IATA queda como
+    // respaldo para las aerolíneas que aún no están en la tabla IATA→ICAO.
+    const identPreferido = q.callsign ?? q.iataFlight;
+    const bounds = boundsFor(q.fechaOperacion);
+    let res = await fetchWithTimeout(
+      `${BASE}/flights/${encodeURIComponent(identPreferido)}?${bounds}`,
+      { headers },
+    );
+    // Si el ICAO no dio nada, reintentar con la forma IATA antes de darlo por desconocido.
+    if (res.status === 404 && identPreferido !== q.iataFlight) {
+      res = await fetchWithTimeout(
+        `${BASE}/flights/${encodeURIComponent(q.iataFlight)}?${bounds}`,
+        { headers },
+      );
+    }
     if (res.status === 400) {
       // Safety net: any other bound AeroAPI dislikes degrades to unbounded rather than losing the flight.
       res = await fetchWithTimeout(
-        `${BASE}/flights/${encodeURIComponent(q.iataFlight)}?max_pages=1`,
+        `${BASE}/flights/${encodeURIComponent(identPreferido)}?max_pages=1`,
         { headers },
       );
     }
@@ -158,11 +176,35 @@ export const aeroApiProvider: FlightProvider = {
     const flights = body.flights ?? [];
     if (!flights.length) return null;
 
-    // Prefer the leg whose departure falls on the declared operating date; otherwise the closest one.
+    // Elegir la pata del día declarado — y entre las de ese día, la que REALMENTE voló.
+    //
+    // Un mismo número de vuelo puede traer varias patas el mismo día, y AeroAPI conserva las
+    // canceladas junto a la que sí operó (verificado con 5Y8174: la lista incluye una pata
+    // NLU→MIA con `cancelled: true` y estado "result unknown" conviviendo con vuelos reales).
+    // Quedarse con la primera coincidencia de fecha hacía que el sistema declarara "cancelado"
+    // un vuelo que estaba en el aire. Entre las patas del día se prefiere, en orden: la que ya
+    // despegó, la no cancelada, y sólo al final cualquiera — para no inventar un estado cuando
+    // lo único disponible es una pata cancelada.
+    const delDia = flights.filter((f) =>
+      (f.scheduled_off ?? f.estimated_off ?? f.actual_off ?? '').startsWith(q.fechaOperacion),
+    );
+    const candidatas = delDia.length ? delDia : flights;
+
+    // Si la prealerta declaró ruta, esa es la desempatadora: entre las patas del día nos quedamos
+    // con la que va de donde dijo el cliente a donde dijo el cliente. Es lo que hace que cotejar
+    // la carga contra el itinerario correcto —y no contra el viaje de regreso— sea determinista.
+    const porRuta = q.origenIata && q.destinoIata
+      ? candidatas.filter(
+          (f) =>
+            f.origin?.code_iata === q.origenIata && f.destination?.code_iata === q.destinoIata,
+        )
+      : [];
+    const finalistas = porRuta.length ? porRuta : candidatas;
+
     const target =
-      flights.find((f) =>
-        (f.scheduled_off ?? f.estimated_off ?? f.actual_off ?? '').startsWith(q.fechaOperacion),
-      ) ?? flights[0];
+      finalistas.find((f) => !f.cancelled && f.actual_off) ??
+      finalistas.find((f) => !f.cancelled) ??
+      finalistas[0];
 
     const estado = mapEstado(target, previous);
 

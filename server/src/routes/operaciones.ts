@@ -4,6 +4,7 @@ import { withTransaction } from '../db/tx';
 import { requireAuth, requireRole } from '../auth/middleware';
 import { recordAudit } from '../services/audit';
 import { manifestTotales } from '../services/manifiestoIngest';
+import { refreshVueloForOperacion } from '../services/vuelosService';
 import { parsePrealerta } from '../../../shared/operaciones/prealerta';
 import {
   CODIGOS_MANIFIESTO,
@@ -439,6 +440,61 @@ operacionesRouter.post(
         warnings: parsed.warnings.length,
         discrepancias: discrepancias.length,
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+
+/**
+ * POST /:id/vuelo/refresh — consulta AHORA el feed de vuelo para este caso.
+ *
+ * El servicio ya existía (`refreshVueloForOperacion`) pero sólo lo llamaba el tick, que corre
+ * cada 5 minutos y sólo si alguien lo programó. Sin esta ruta no hay forma de forzar una
+ * verificación desde la app: un caso se quedaba con la foto del momento en que llegó la
+ * prealerta — días antes del vuelo, cuando todavía no hay nada que ver.
+ *
+ * Devuelve el `status` del servicio SIN aplanarlo, porque sus valores distinguen cosas que la
+ * UI necesita separar: `error_proveedor` (el feed falló — no dice nada sobre el vuelo) NO es lo
+ * mismo que `no_identificado` (todos los proveedores respondieron y ninguno lo reconoció).
+ */
+operacionesRouter.post(
+  '/:id/vuelo/refresh',
+  requireAuth,
+  requireRole('admin', 'capturista', 'tramitador'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const op = await query<{ id: string; mawb: string }>(
+        `SELECT id, mawb FROM operaciones WHERE id = $1`,
+        [id],
+      );
+      if (!op.rows.length) {
+        res.status(404).json({ error: 'Operación no encontrada' });
+        return;
+      }
+
+      const resultado = await refreshVueloForOperacion(id);
+
+      // Una consulta al feed es un hecho auditable: deja constancia de quién preguntó y qué
+      // contestó, que es justo lo que un revisor necesita para rehacer el razonamiento después.
+      await recordAudit({
+        userId: req.user!.userId,
+        action: 'VUELO_CONSULTADO',
+        entity: 'operacion',
+        entityId: id,
+        after: {
+          mawb: op.rows[0].mawb,
+          status: resultado.status,
+          estadoVuelo: resultado.estadoVuelo ?? null,
+          discrepancias: resultado.discrepancias ?? null,
+          errores: resultado.errores ?? null,
+        },
+        ip: req.ip,
+      });
+
+      res.json(resultado);
     } catch (err) {
       next(err);
     }

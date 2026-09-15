@@ -442,3 +442,78 @@ manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturist
   });
   res.json({ ok: true });
 });
+
+/**
+ * DELETE /:id — borra un manifiesto completo para poder recargarlo.
+ *
+ * Petición explícita del cliente (correo 10-ago, punto 2): "borrar registro por registro de
+ * manifiestos, para volverlos a cargar o actualizar en caso de incidencias". Sin esto, un
+ * manifiesto mal cargado se queda para siempre y contamina el seguimiento.
+ *
+ * DOS GUARDAS, y las dos son sobre cosas que NO se pueden deshacer:
+ *
+ * 1. Un pedimento finalizado es una declaración ya hecha a la autoridad. Borrar el manifiesto
+ *    que le dio origen dejaría esa declaración sin respaldo documental, así que se exige
+ *    reabrirlo primero — el mismo criterio que ya aplica `DELETE /pedimentos/:id`.
+ * 2. Un caso de operaciones con bitácora es append-only por diseño. El FK es SET NULL, así que
+ *    el borrado no lo destruiría, pero lo dejaría huérfano: un caso que afirma cotejar contra un
+ *    manifiesto que ya no existe. Preferimos negarnos a producir esa inconsistencia.
+ *
+ * Todo lo demás (guías, staging, versiones, disposiciones, scans) cae por CASCADE.
+ */
+manifestsRouter.delete('/:id', requireAuth, requireRole('admin', 'capturista'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const info = await query<{
+      mawb_reference: string | null;
+      guias: string;
+      pedimentos_finalizados: string;
+      operaciones_ligadas: string;
+    }>(
+      `SELECT m.mawb_reference,
+              (SELECT count(*) FROM shipments s WHERE s.manifest_id = m.id)::text AS guias,
+              (SELECT count(*) FROM pedimentos p
+                WHERE p.manifest_id = m.id AND p.sub_status = 'cargado')::text     AS pedimentos_finalizados,
+              (SELECT count(*) FROM operaciones o WHERE o.manifest_id = m.id)::text AS operaciones_ligadas
+         FROM manifests m
+        WHERE m.id = $1`,
+      [id],
+    );
+    if (!info.rows.length) {
+      res.status(404).json({ error: 'Manifiesto no encontrado' });
+      return;
+    }
+    const row = info.rows[0];
+
+    if (Number(row.pedimentos_finalizados) > 0) {
+      res.status(409).json({
+        error: `No se puede borrar: tiene ${row.pedimentos_finalizados} pedimento(s) finalizado(s). Reábralos primero.`,
+      });
+      return;
+    }
+    if (Number(row.operaciones_ligadas) > 0) {
+      res.status(409).json({
+        error: `No se puede borrar: hay ${row.operaciones_ligadas} caso(s) de operaciones ligados a este manifiesto.`,
+      });
+      return;
+    }
+
+    await query('DELETE FROM manifests WHERE id = $1', [id]);
+
+    // recordAudit corre DESPUÉS del commit (regla de la casa: la cadena de hash toma su propio
+    // advisory lock). El `before` conserva lo borrado, que es lo único que queda como rastro.
+    await recordAudit({
+      userId: req.user!.userId,
+      action: 'DELETE_MANIFEST',
+      entity: 'manifest',
+      entityId: id,
+      before: { mawbReference: row.mawb_reference, guias: Number(row.guias) },
+      ip: req.ip,
+    });
+
+    res.json({ deleted: true, mawbReference: row.mawb_reference, guias: Number(row.guias) });
+  } catch (err) {
+    next(err);
+  }
+});

@@ -1,25 +1,32 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
+/*
+ * Tema "Hydra" (design system Ermis): canvas slate frío, superficies blancas y UN solo
+ * acento — el azul #2563eb. La identidad anterior (navy #0f2a4a + gold #c8a04b) se
+ * retira remapeando estos tokens, NO tocando el markup: `navy-*` es hoy la rampa azul
+ * del acento y `gold-*` colapsa al mismo acento (regla Hydra: un acento, cero dorados).
+ * Los verdes/rojos/ámbar semánticos de StatusPill quedan intactos.
+ */
 @theme {
-  --color-navy-50:  #eef2f8;
-  --color-navy-100: #d6e0ee;
-  --color-navy-200: #aec2dc;
-  --color-navy-300: #7d9cc4;
-  --color-navy-400: #4d72a4;
-  --color-navy-500: #2f547f;
-  --color-navy-600: #1f3e63;
-  --color-navy-700: #16304f;
-  --color-navy-800: #0f2a4a; /* primary */
-  --color-navy-900: #0a1d35;
-  --color-navy-950: #061226;
+  --color-navy-50:  #eff6ff;
+  --color-navy-100: #dbeafe;
+  --color-navy-200: #bfdbfe;
+  --color-navy-300: #93c5fd;
+  --color-navy-400: #60a5fa;
+  --color-navy-500: #3b82f6;
+  --color-navy-600: #2563eb;
+  --color-navy-700: #1d4ed8; /* hover del primario (--onyx-accent-hover) */
+  --color-navy-800: #2563eb; /* primary = acento Hydra (--onyx-accent) */
+  --color-navy-900: #1e40af;
+  --color-navy-950: #172554;
 
-  --color-gold-300: #e7cd8f;
-  --color-gold-400: #d8b45c;
-  --color-gold-500: #c8a04b; /* accent */
-  --color-gold-600: #a9853a;
+  --color-gold-300: #93c5fd;
+  --color-gold-400: #60a5fa;
+  --color-gold-500: #2563eb; /* accent */
+  --color-gold-600: #1d4ed8;
 
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
@@ -29,6 +36,21 @@ body {
   color: #0f172a;            /* slate-900 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Cifras alineables en tablas y celdas de datos (aduanas = columnas de números). */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: #dbeafe; /* blue-100 */
+}
+
+/* Foco visible para navegación con teclado, en el acento del tema. */
+:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 /* Custom styles matching our design system */
@@ -67,4 +89,11 @@ body {
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-drawer-in,
+  .animate-fade-in {
+    animation: none;
+  }
 }

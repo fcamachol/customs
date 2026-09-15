@@ -77,6 +77,58 @@ function mockFetch(handler: (url: string) => { status?: number; body: unknown })
   }));
 }
 
+
+describe('aeroApi — selección de pata (regresiones de campo)', () => {
+  const KEY = process.env.FLIGHT_API_KEY;
+  beforeEach(() => { process.env.FLIGHT_API_KEY = 'x'; });
+  afterEach(() => { process.env.FLIGHT_API_KEY = KEY; vi.restoreAllMocks(); });
+
+  const pata = (o: Record<string, unknown>) => ({
+    fa_flight_id: `id-${Math.abs(JSON.stringify(o).length)}`,
+    ident: 'GTI8174', ident_iata: '5Y8174', operator_iata: '5Y',
+    cancelled: false, diverted: false, ...o,
+  });
+
+  function mockFlights(flights: unknown[]) {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ flights }),
+    })) as unknown as typeof fetch);
+  }
+
+  // Caso real: AeroAPI conserva la pata cancelada junto a la que sí voló. Quedarse con la primera
+  // coincidencia de fecha declaraba "cancelado" un vuelo que estaba en el aire.
+  it('prefiere la pata que voló sobre una cancelada del mismo día', async () => {
+    mockFlights([
+      pata({ cancelled: true, scheduled_off: '2026-09-12T04:58:00Z', origin: { code_iata: 'NLU' }, destination: { code_iata: 'MIA' } }),
+      pata({ scheduled_off: '2026-09-12T07:05:00Z', actual_off: '2026-09-12T07:07:00Z', actual_on: '2026-09-12T13:39:00Z', origin: { code_iata: 'ANC' }, destination: { code_iata: 'NLU' } }),
+    ]);
+    const s = await aeroApiProvider.lookup(
+      { iataFlight: '5Y8174', callsign: 'GTI8174', fechaOperacion: '2026-09-12' }, 'desconocido');
+    expect(s?.estado).toBe('aterrizado');
+    expect(s?.destinoIata).toBe('NLU');
+  });
+
+  // Un mismo número vuela ida y vuelta el mismo día; la ruta declarada es la desempatadora.
+  it('elige la pata que coincide con la ruta declarada', async () => {
+    mockFlights([
+      pata({ scheduled_off: '2026-09-14T20:00:00Z', actual_off: '2026-09-14T20:11:00Z', origin: { code_iata: 'NLU' }, destination: { code_iata: 'DOV' } }),
+      pata({ scheduled_off: '2026-09-14T07:05:00Z', actual_off: '2026-09-14T07:07:00Z', origin: { code_iata: 'ANC' }, destination: { code_iata: 'NLU' } }),
+    ]);
+    const s = await aeroApiProvider.lookup(
+      { iataFlight: '5Y8174', callsign: 'GTI8174', fechaOperacion: '2026-09-14', origenIata: 'ANC', destinoIata: 'NLU' }, 'desconocido');
+    expect(s?.origenIata).toBe('ANC');
+    expect(s?.destinoIata).toBe('NLU');
+  });
+
+  // El avión transmite ICAO; preguntar por IATA hacía que cargueros reales salieran "sin datos".
+  it('consulta AeroAPI con el callsign ICAO cuando existe', async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ flights: [pata({ scheduled_off: '2026-09-14T07:05:00Z', origin: { code_iata: 'ANC' }, destination: { code_iata: 'NLU' } })] }) }));
+    vi.stubGlobal('fetch', spy as unknown as typeof fetch);
+    await aeroApiProvider.lookup({ iataFlight: '5Y8174', callsign: 'GTI8174', fechaOperacion: '2026-09-14' }, 'desconocido');
+    expect(String((spy.mock.calls as unknown as unknown[][])[0][0])).toContain('GTI8174');
+  });
+});
+
 describe('aeroApiProvider — the fields the cotejo needs', () => {
   it('returns the full itinerary and marks itself as having one', async () => {
     mockFetch((url) => (url.includes('/position') ? { body: positionBody } : { body: flightsBody() }));

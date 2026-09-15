@@ -59,15 +59,25 @@ describe('ReconciliationPanel', () => {
 
   it('renders the mismatch line with guia and status', () => {
     render(<ReconciliationPanel report={report} />);
-    expect(screen.getByText('GUIA-002')).toBeTruthy();
+    // La guía aparece en dos lugares desde que existe el bloque de montos: en el resumen de
+    // importes y en el detalle de excepciones. Ambas son intencionales.
+    expect(screen.getAllByText('GUIA-002').length).toBeGreaterThan(0);
     // The matched guia should NOT appear as a listed exception row
     // (it shows as a count, not a row)
   });
 
-  it('renders the failing diff (valorUsd expected vs actual) for the mismatch line', () => {
+  it('muestra la validación de montos manifiesto vs pedimento', () => {
+    render(<ReconciliationPanel report={report} />);
+    expect(screen.getByText(/Validación de montos/i)).toBeTruthy();
+    // El desfase por guía es lo que el operador necesita ver: 100 declarado como 90 → −10.
+    expect(screen.getByText(/guía\(s\) con importe distinto/i)).toBeTruthy();
+  });
+
+  it('renders the failing diff (importe esperado vs declarado) for the mismatch line', () => {
     render(<ReconciliationPanel report={report} />);
     // field name
-    expect(screen.getByText(/valorUsd/i)).toBeTruthy();
+    // El campo se muestra con su nombre legible ('Importe'), no con el identificador interno.
+    expect(screen.getAllByText(/importe/i).length).toBeGreaterThan(0);
     // expected value
     expect(screen.getByText('100')).toBeTruthy();
     // actual value

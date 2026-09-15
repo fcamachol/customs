@@ -236,9 +236,18 @@ export interface TransportistasTabProps {
   onToast: (msg: string) => void;
   /** Jump to Trazabilidad with this carrier already selected. Absent = no affordance rendered. */
   onVerTrazabilidad?: (transportistaId: string) => void;
+  /**
+   * Qué parte del catálogo administra esta instancia.
+   *
+   * 'transportista' es la sección de siempre; 'proveedores' muestra el resto (aerolínea, recinto,
+   * almacén). Es la MISMA pantalla sobre el MISMO catálogo: separar las secciones era la petición
+   * de la junta, duplicar el componente no lo era — y habría duplicado también convenios, tarifas
+   * y flota, que es lo que este parámetro evita.
+   */
+  ambito?: 'transportista' | 'proveedores';
 }
 
-export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: TransportistasTabProps) {
+export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad, ambito = 'transportista' }: TransportistasTabProps) {
   const [transportistas, setTransportistas] = useState<Transportista[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -248,11 +257,12 @@ export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: Trans
 
   const recargar = useCallback(() => {
     setCargando(true);
-    return apiGet<Transportista[]>('/api/transportistas')
+    const q = ambito === 'proveedores' ? '?excluir=transportista' : '?tipo=transportista';
+    return apiGet<Transportista[]>(`/api/transportistas${q}`)
       .then((r) => { setTransportistas(Array.isArray(r) ? r : []); setError(null); })
       .catch((e) => setError(errMsg(e)))
       .finally(() => setCargando(false));
-  }, []);
+  }, [ambito]);
 
   useEffect(() => { void recargar(); }, [recargar]);
 

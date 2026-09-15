@@ -66,6 +66,36 @@ describe('ReconciliationPanel', () => {
     // (it shows as a count, not a row)
   });
 
+  it('muestra el estimado de impuesto diciendo que es informativo y sobre qué base', () => {
+    const conImpuesto = {
+      ...report,
+      estimadoImpuesto: {
+        totalImpuestoUsd: 33.5, totalValorUsd: 100, sinEstimar: 0,
+        tasasUsadas: [{ origen: 'GENERAL' as const, tasaPct: 33.5, desde: '2026-01-01' }],
+        tasaPedimentoPct: 33.5,
+      },
+    };
+    render(<ReconciliationPanel report={conImpuesto} />);
+    expect(screen.getByText(/Estimado de impuesto/i)).toBeTruthy();
+    // Las dos cosas que el bloque tiene que decir en voz alta, por decisión del 15-sep.
+    expect(screen.getByText(/el cálculo legal lo determina el agente aduanal/i)).toBeTruthy();
+    expect(screen.getByText(/sólo lo que va al pedimento/i)).toBeTruthy();
+  });
+
+  // Que el agente aplique una tasa distinta a la vigente es justo lo que este bloque debe delatar.
+  it('advierte cuando la tasa del pedimento difiere de la vigente', () => {
+    const conDiferencia = {
+      ...report,
+      estimadoImpuesto: {
+        totalImpuestoUsd: 33.5, totalValorUsd: 100, sinEstimar: 0,
+        tasasUsadas: [{ origen: 'GENERAL' as const, tasaPct: 33.5, desde: '2026-01-01' }],
+        tasaPedimentoPct: 19,
+      },
+    };
+    render(<ReconciliationPanel report={conDiferencia} />);
+    expect(screen.getByText(/Verificar cuál corresponde/i)).toBeTruthy();
+  });
+
   it('muestra la validación de montos manifiesto vs pedimento', () => {
     render(<ReconciliationPanel report={report} />);
     expect(screen.getByText(/Validación de montos/i)).toBeTruthy();

@@ -85,7 +85,12 @@ interface MockOpts {
 function mockApi(o: MockOpts = {}) {
   return async (path: string) => {
     if (path.includes('/api/auth/me')) return o.me ?? { id: '1', username: 'admin', role: 'admin' };
-    if (path === '/api/transportistas') return o.transportistas ?? TRANSPORTISTAS;
+    // El listado ahora filtra por tipo (?tipo=transportista o ?excluir=transportista) para que
+    // Transportistas y Proveedores sean dos secciones sobre un solo catálogo. El mock matchea por
+    // ruta, no por la cadena exacta, para no atarse a la forma del filtro.
+    if (path.startsWith('/api/transportistas?') || path === '/api/transportistas') {
+      return o.transportistas ?? TRANSPORTISTAS;
+    }
     if (path === '/api/transportistas/t-1') return o.detalle ?? DETALLE_T1;
     if (path === '/api/catalogs/clients') return [{ id: 'cl-1', name: 'ACME' }];
     // One flat catalog for the rate picker. The old per-client fan-out is gone.
@@ -117,15 +122,16 @@ function Wrapper({ children }: { children: import('react').ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
 }
 
-async function renderPane(o: MockOpts = {}) {
+async function renderPane(o: MockOpts = {}, domain: 'cfg_transportistas' | 'cfg_proveedores' = 'cfg_transportistas') {
   const { apiGet } = await import('../api');
   vi.mocked(apiGet).mockImplementation(mockApi(o) as never);
   return render(
     <Wrapper>
-      <ConfigurationView domain="cfg_transportistas" onToast={() => {}} />
+      <ConfigurationView domain={domain} onToast={() => {}} />
     </Wrapper>,
   );
 }
+
 
 describe('Transportistas — navegación y visibilidad por rol', () => {
   it('is a Configuración destination for admin and super_admin only', () => {
@@ -468,5 +474,33 @@ describe('TransportistasTab', () => {
   it('says plainly when there is nothing registered yet', async () => {
     await renderPane({ transportistas: [] });
     await waitFor(() => expect(screen.getByText('Sin transportistas registrados')).toBeTruthy());
+  });
+});
+
+describe('Transportistas y Proveedores — dos secciones, un catálogo', () => {
+  beforeEach(() => { localStorage.setItem('token', 'mock-token'); vi.clearAllMocks(); });
+  afterEach(() => localStorage.removeItem('token'));
+
+  // Las dos secciones que pidió la junta del 15-sep viven sobre UN solo catálogo: lo único que
+  // cambia entre ellas es qué porción piden. Si esto se rompiera, Proveedores mostraría
+  // transportistas (o al revés) sin que ninguna otra prueba fallara.
+  it('la sección de transportistas pide sólo ese tipo', async () => {
+    await renderPane();
+    const { apiGet } = await import('../api');
+    await waitFor(() =>
+      expect(vi.mocked(apiGet)).toHaveBeenCalledWith('/api/transportistas?tipo=transportista'));
+  });
+
+  it('la sección de proveedores pide el resto del catálogo', async () => {
+    await renderPane({}, 'cfg_proveedores');
+    const { apiGet } = await import('../api');
+    await waitFor(() =>
+      expect(vi.mocked(apiGet)).toHaveBeenCalledWith('/api/transportistas?excluir=transportista'));
+  });
+
+  it('Proveedores es destino de Configuración con su propio título', () => {
+    expect(visibleSectionsFor('admin')).toContain('cfg_proveedores');
+    expect(SECTION_META.cfg_proveedores.title).toBe('Proveedores');
+    expect(SECTION_META.cfg_proveedores.subtitle).toMatch(/aerol/i);
   });
 });

@@ -3,10 +3,10 @@ import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Sett
 export type Section =
   | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
   | 'ops_torre' | 'ops_prealertas' | 'ops_campo' | 'ops_traza'
-  | 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
+  | 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_proveedores' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
 
-export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades';
+export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_proveedores' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades';
 
 export const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard:    { title: 'Dashboard', subtitle: 'Desempeño operativo y análisis de riesgo en tiempo real.' },
@@ -21,6 +21,7 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   cfg_motor:    { title: 'Motor de riesgo', subtitle: 'Parámetros de validación y listas de exclusión (V1–V8).' },
   cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_transportistas: { title: 'Transportistas', subtitle: 'Catálogo de transportistas, unidades, convenios y tarifas · sólo Admin.' },
+  cfg_proveedores:   { title: 'Proveedores', subtitle: 'Aerolíneas, recinto fiscalizado y almacén, con sus contratos · sólo Admin.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
   cfg_empresa:  { title: 'Empresa', subtitle: 'Identidad y branding en pantallas y reportes generados.' },
   cfg_tasa:      { title: 'Tasa global', subtitle: 'Vigencias de tasa global · sólo Super Admin.' },
@@ -66,6 +67,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         { id: 'cfg_motor', label: 'Motor de riesgo' },
         { id: 'cfg_clientes', label: 'Clientes' },
         { id: 'cfg_transportistas', label: 'Transportistas' },
+        { id: 'cfg_proveedores', label: 'Proveedores' },
         { id: 'cfg_rfcs', label: 'RFCs validados' },
         { id: 'cfg_empresa', label: 'Empresa' },
         { id: 'cfg_tasa', label: 'Tasa global', badge: 'Super' },
@@ -77,7 +79,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   ] },
 ];
 
-const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_transportistas', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
+const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_transportistas', 'cfg_proveedores', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
 
 // Role-based visibility:
 //  - tramitador stands in a warehouse or at the aduana on a phone: it sees ONLY the field-capture

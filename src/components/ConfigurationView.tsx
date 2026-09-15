@@ -41,6 +41,7 @@ import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/c
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
 import { AddClientModal } from './AddClientModal';
+import { ClienteConvenios } from './ClienteConvenios';
 import { TransportistasTab } from './TransportistasTab';
 
 interface Props {
@@ -334,6 +335,13 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
 
       {domain === 'cfg_transportistas' && (
         <TransportistasTab isAdmin={isAdmin} onToast={onToast} onVerTrazabilidad={onVerTrazabilidad} />
+      )}
+
+      {/* Proveedores: la misma pantalla sobre el mismo catálogo, filtrada al resto de los tipos
+          (aerolínea, recinto, almacén). Pedido el 15-sep porque ANAM tiene acceso a este sistema y
+          debe poder ver que los contratos con esos proveedores existen, aunque no se usen a diario. */}
+      {domain === 'cfg_proveedores' && (
+        <TransportistasTab isAdmin={isAdmin} onToast={onToast} ambito="proveedores" />
       )}
 
       {domain === 'cfg_rfcs' && (
@@ -1004,6 +1012,8 @@ function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onEditPlat
           </div>
         </dl>
       </section>
+
+      <ClienteConvenios clientId={client.id} isAdmin={isAdmin} />
 
       <section className="border-t border-slate-200 pt-4">
         <h4 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">

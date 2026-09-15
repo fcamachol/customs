@@ -125,7 +125,7 @@ describe('aeroApi — selección de pata (regresiones de campo)', () => {
     const spy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ flights: [pata({ scheduled_off: '2026-09-14T07:05:00Z', origin: { code_iata: 'ANC' }, destination: { code_iata: 'NLU' } })] }) }));
     vi.stubGlobal('fetch', spy as unknown as typeof fetch);
     await aeroApiProvider.lookup({ iataFlight: '5Y8174', callsign: 'GTI8174', fechaOperacion: '2026-09-14' }, 'desconocido');
-    expect(String(spy.mock.calls[0][0])).toContain('GTI8174');
+    expect(String((spy.mock.calls as unknown as unknown[][])[0][0])).toContain('GTI8174');
   });
 });
 

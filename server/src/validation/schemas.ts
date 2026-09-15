@@ -3,6 +3,7 @@ import {
   ESTADOS_DESPACHO,
   ESTADOS_FIRMA_CONVENIO,
   ESTADOS_TRANSPORTISTA,
+  TIPOS_PROVEEDOR,
   TIPOS_UNIDAD_IDS,
 } from '../../../shared/operaciones/catalogos';
 import { UNIDADES_TARIFA } from '../../../shared/operaciones/facturacion';
@@ -739,6 +740,9 @@ export const transportistaBody = z.object({
   contactoEmail: textoOpcional,
   estado: z.enum(ESTADOS_TRANSPORTISTA as unknown as [string, ...string[]]).optional(),
   documentosOk: z.boolean().optional(),
+  // Omitirlo lo deja en 'transportista', que es lo que era todo antes de que el catálogo se
+  // generalizara a proveedores — así ningún llamador previo cambia de comportamiento.
+  tipo: z.enum(TIPOS_PROVEEDOR as unknown as [string, ...string[]]).optional(),
 });
 export type TransportistaBody = z.infer<typeof transportistaBody>;
 

@@ -337,6 +337,13 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
         <TransportistasTab isAdmin={isAdmin} onToast={onToast} onVerTrazabilidad={onVerTrazabilidad} />
       )}
 
+      {/* Proveedores: la misma pantalla sobre el mismo catálogo, filtrada al resto de los tipos
+          (aerolínea, recinto, almacén). Pedido el 15-sep porque ANAM tiene acceso a este sistema y
+          debe poder ver que los contratos con esos proveedores existen, aunque no se usen a diario. */}
+      {domain === 'cfg_proveedores' && (
+        <TransportistasTab isAdmin={isAdmin} onToast={onToast} ambito="proveedores" />
+      )}
+
       {domain === 'cfg_rfcs' && (
         <RfcsTab isAdmin={isAdmin} rfcs={rfcs} onChanged={refreshRfcs} onToast={onToast} />
       )}

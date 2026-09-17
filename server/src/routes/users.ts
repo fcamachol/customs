@@ -27,7 +27,7 @@ usersRouter.patch('/:id/role', requireAuth, requireRole('admin'), validate({ bod
     `UPDATE users SET role=$1, token_version = token_version + 1 WHERE id=$2 RETURNING id, username, role`,
     [role, id],
   );
-  if (!rows[0]) { res.status(404).json({ error: 'User not found' }); return; }
+  if (!rows[0]) { res.status(404).json({ error: 'Usuario no encontrado.' }); return; }
   await recordAudit({ userId: req.user!.userId, action: 'UPDATE_ROLE', entity: 'user', entityId: id, after: rows[0], ip: req.ip });
   res.json(rows[0]);
 });

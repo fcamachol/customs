@@ -41,7 +41,7 @@ consolidatedRouter.get(
       // RF-23: explicit date range [start, end] inclusive of the end day.
       const s = new Date(start + 'T00:00:00Z');
       const e = new Date(end + 'T00:00:00Z');
-      if (isNaN(s.getTime()) || isNaN(e.getTime())) { res.status(400).json({ error: 'Invalid start/end' }); return; }
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) { res.status(400).json({ error: 'El rango de fechas no es válido: revisa la fecha inicial y la final.' }); return; }
       if (e < s) { res.status(400).json({ error: 'end must be >= start' }); return; }
       rangeStart = s.toISOString();
       const next = new Date(e);
@@ -51,7 +51,7 @@ consolidatedRouter.get(
     } else if (date) {
       // Daily: half-open range [date, date + 1 day)
       const d = new Date(date + 'T00:00:00Z');
-      if (isNaN(d.getTime())) { res.status(400).json({ error: 'Invalid date' }); return; }
+      if (isNaN(d.getTime())) { res.status(400).json({ error: 'La fecha no es válida.' }); return; }
       rangeStart = d.toISOString();
       const next = new Date(d);
       next.setUTCDate(next.getUTCDate() + 1);
@@ -60,7 +60,7 @@ consolidatedRouter.get(
     } else {
       // Monthly: half-open range [first of month, first of next month)
       const match = /^(\d{4})-(\d{2})$/.exec(period!);
-      if (!match) { res.status(400).json({ error: 'Invalid period, expected YYYY-MM' }); return; }
+      if (!match) { res.status(400).json({ error: 'El periodo debe tener el formato AAAA-MM (por ejemplo 2026-09).' }); return; }
       const year = parseInt(match[1], 10);
       const month = parseInt(match[2], 10);
       rangeStart = new Date(Date.UTC(year, month - 1, 1)).toISOString();

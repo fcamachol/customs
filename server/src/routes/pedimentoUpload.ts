@@ -47,7 +47,7 @@ export const pedimentoUploadRouter = Router();
 const normMasterGuide = normGuia;
 
 pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), async (req, res) => {
-  if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
+  if (!req.file) { res.status(400).json({ error: 'Falta el archivo.' }); return; }
 
   // RF-08: validate MIME type — must be a PDF
   if (req.file.mimetype !== 'application/pdf') {
@@ -119,7 +119,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   // Hard-gate (400): the parsed master guide must match the manifest's mawb_reference.
   // If the master guide could not be parsed (null), we cannot verify it — proceed (decision #2).
   const mRows = await query<{ mawb_reference: string | null }>('SELECT mawb_reference FROM manifests WHERE id=$1', [req.params.id]);
-  if (!mRows.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+  if (!mRows.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
   const mawbReference = mRows.rows[0].mawb_reference;
   if (subdivision.masterGuide && normMasterGuide(subdivision.masterGuide) !== normMasterGuide(mawbReference ?? '')) {
     res.status(400).json({

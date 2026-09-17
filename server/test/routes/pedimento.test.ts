@@ -259,7 +259,9 @@ describe('POST /api/pedimentos/:pedimentoId/pedimento', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({});
     expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/not found/i);
+    // El mensaje va al operador, así que se afirma en español: si alguien lo revierte a inglés,
+    // esta prueba lo detiene.
+    expect(res.body.error).toMatch(/no encontrado/i);
   });
 
   it('returns 422 naming the RFC when the importer RFC is unavailable to resolve with', async () => {

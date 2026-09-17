@@ -377,7 +377,7 @@ riesgoDisposicionesRouter.post(
 
       switch (resultado.kind) {
         case 'manifiesto_no_encontrado':
-          res.status(404).json({ error: 'Manifest not found' });
+          res.status(404).json({ error: 'Manifiesto no encontrado.' });
           return;
         case 'linea_ajena':
           res.status(404).json({ error: 'La línea indicada no pertenece a este manifiesto.' });
@@ -530,7 +530,7 @@ riesgoDisposicionesRouter.get(
       const manifestId = req.params.id;
       const man = await query('SELECT id FROM manifests WHERE id = $1', [manifestId]);
       if (!man.rows.length) {
-        res.status(404).json({ error: 'Manifest not found' });
+        res.status(404).json({ error: 'Manifiesto no encontrado.' });
         return;
       }
 

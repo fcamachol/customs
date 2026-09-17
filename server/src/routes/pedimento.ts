@@ -48,7 +48,7 @@ pedimentoRouter.post(
         [req.params.pedimentoId],
       );
       if (!rows.length) {
-        res.status(404).json({ error: 'Pedimento not found' });
+        res.status(404).json({ error: 'Pedimento no encontrado.' });
         return;
       }
       const { manifest_id, covered_guias, sub_status: current, numero_pedimento, import_data } = rows[0];

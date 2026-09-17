@@ -20,7 +20,7 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   );
   const user = rows[0];
   if (!user || !(await verifyPassword(password ?? '', user.password_hash))) {
-    res.status(401).json({ error: 'Invalid credentials' }); return;
+    res.status(401).json({ error: 'Usuario o contraseña incorrectos.' }); return;
   }
   // MFA second factor — required if already enrolled
   if (user.mfa_enabled) {
@@ -49,7 +49,7 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
 authRouter.get('/me', requireAuth, rejectEnrollmentScope, async (req, res) => {
   const { rows } = await query(`SELECT id, username, role, created_at FROM users WHERE id=$1`, [req.user!.userId]);
   // Narrow TOCTOU: the user can be deleted between requireAuth's lookup and this query.
-  if (!rows[0]) { res.status(401).json({ error: 'User not found' }); return; }
+  if (!rows[0]) { res.status(401).json({ error: 'Usuario no encontrado.' }); return; }
   // demoMode tells the client whether the DEMO_MODE-gated reset UI should render.
   res.json({ ...rows[0], demoMode: isDemoMode() });
 });
@@ -68,7 +68,7 @@ authRouter.post('/mfa/setup', requireAuthAllowEnrollment, async (req, res) => {
   const userId = req.user!.userId;
   const { rows } = await query(`SELECT username FROM users WHERE id=$1`, [userId]);
   const user = rows[0];
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (!user) { res.status(404).json({ error: 'Usuario no encontrado.' }); return; }
 
   const secret = generateSecret();
   const otpauthUrl = keyUri(user.username, secret);
@@ -91,7 +91,7 @@ authRouter.post('/mfa/enable', requireAuthAllowEnrollment, validate({ body: mfaE
   if (!user?.mfa_secret) { res.status(400).json({ error: 'MFA not set up. Call /mfa/setup first.' }); return; }
 
   if (!verifyTotp(user.mfa_secret, code)) {
-    res.status(400).json({ error: 'Invalid TOTP code' }); return;
+    res.status(400).json({ error: 'El código de autenticación no es correcto.' }); return;
   }
 
   await query(`UPDATE users SET mfa_enabled=true WHERE id=$1`, [userId]);

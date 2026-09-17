@@ -94,7 +94,7 @@ catalogsRouter.put(
     const { name, tax_id, address, phone, email, website } = req.body ?? {};
 
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
 
     const { rows } = await query(
       `UPDATE clients
@@ -127,7 +127,7 @@ catalogsRouter.delete(
     // Fetch before state for audit
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
     if (before.rows.length === 0) {
-      res.status(404).json({ error: 'Client not found' });
+      res.status(404).json({ error: 'Cliente no encontrado.' });
       return;
     }
 
@@ -162,7 +162,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
       `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, url, created_by)
@@ -187,7 +187,7 @@ catalogsRouter.put(
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Plataforma no encontrada.' }); return; }
     const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
       `UPDATE client_platforms
@@ -213,7 +213,7 @@ catalogsRouter.delete(
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Plataforma no encontrada.' }); return; }
     await query('DELETE FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
     await recordAudit({
       userId: req.user!.userId, action: 'DELETE_CLIENT_PLATFORM', entity: 'client_platform',
@@ -323,7 +323,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const b = req.body as ClientDireccionBody;
     try {
       const { rows } = await query(
@@ -582,7 +582,7 @@ catalogsRouter.put(
     const { id } = req.params;
     const { patente, name, agentRfc, agencyRfc, verified } = req.body;
     const before = await query(`SELECT ${AGENTE_RETURNING} FROM agentes_aduanales WHERE id=$1`, [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal no encontrado.' }); return; }
     try {
       const { rows } = await query(
         `UPDATE agentes_aduanales SET
@@ -623,7 +623,7 @@ catalogsRouter.put(
     const { id } = req.params;
     const { rfc, name, fiscalAddress, verified } = req.body;
     const before = await query(`SELECT ${IMPORTADOR_RETURNING} FROM importadores WHERE id=$1`, [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador no encontrado.' }); return; }
     try {
       const { rows } = await query(
         `UPDATE importadores SET
@@ -692,7 +692,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const b = req.body as ClientTarifaBody;
     const { rows } = await query(
       `INSERT INTO client_tarifas

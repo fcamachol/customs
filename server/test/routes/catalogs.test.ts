@@ -198,6 +198,28 @@ describe('PUT /api/catalogs/config/:key', () => {
       .send({ value: 'x' });
     expect(res.status).toBe(400);
   });
+
+  it('descripciones_genericas está en la allowlist — sin esto el catálogo sería código muerto', () => {
+    // `shared/risk/descripcion.ts` acepta un catálogo administrable y `riskService` lo carga de
+    // esta llave. Si no se puede escribir por la API, el override no existe para nadie.
+    return request(app)
+      .put('/api/catalogs/config/descripciones_genericas')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ value: ['widget', 'chunche'] })
+      .expect(200)
+      .then(async () => {
+        const { rows } = await query(`SELECT value FROM config WHERE key='descripciones_genericas'`);
+        expect(rows[0].value).toEqual(['widget', 'chunche']);
+      });
+  });
+
+  it('descripciones_genericas la edita admin, no capturista', async () => {
+    const res = await request(app)
+      .put('/api/catalogs/config/descripciones_genericas')
+      .set('Authorization', `Bearer ${capturistaToken}`)
+      .send({ value: ['x'] });
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('GET /api/catalogs/config/:key', () => {

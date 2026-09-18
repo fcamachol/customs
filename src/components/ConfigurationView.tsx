@@ -33,6 +33,7 @@ import {
   Landmark,
   UserCheck,
   RotateCcw,
+  FileQuestion,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
@@ -142,6 +143,7 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
   // Catálogos
   const [prohibitedText, setProhibitedText] = useState('');
   const [brandsText, setBrandsText] = useState('');
+  const [genericasText, setGenericasText] = useState('');
   const [clients, setClients] = useState<Client[]>([]);
 
   // Branding
@@ -172,6 +174,9 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
           .catch(() => {}),
         apiGet<ConfigResponse<string[]>>('/api/catalogs/config/piracy_brands')
           .then((r) => { if (active && r.value) setBrandsText(r.value.join('\n')); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<string[]>>('/api/catalogs/config/descripciones_genericas')
+          .then((r) => { if (active && r.value) setGenericasText(r.value.join('\n')); })
           .catch(() => {}),
         apiGet<ConfigResponse<BrandingConfig>>('/api/catalogs/config/branding')
           .then((r) => {
@@ -234,6 +239,20 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
       const value = prohibitedText.split('\n').map((s) => s.trim()).filter(Boolean);
       await apiPut('/api/catalogs/config/prohibited', { value });
       onToast('Lista de prohibidos guardada');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveGenericas() {
+    if (!isAdmin) return;
+    setSaving(true);
+    try {
+      const value = genericasText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/descripciones_genericas', { value });
+      onToast('Lista de descripciones genéricas guardada');
     } catch (e) {
       onToast(`Error: ${errMsg(e)}`);
     } finally {
@@ -330,8 +349,11 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
             setProhibitedText={setProhibitedText}
             brandsText={brandsText}
             setBrandsText={setBrandsText}
+            genericasText={genericasText}
+            setGenericasText={setGenericasText}
             onSaveProhibited={saveProhibited}
             onSaveBrands={saveBrands}
+            onSaveGenericas={saveGenericas}
           />
         </div>
       )}
@@ -557,14 +579,18 @@ interface ListasProps {
   setProhibitedText: (v: string) => void;
   brandsText: string;
   setBrandsText: (v: string) => void;
+  genericasText: string;
+  setGenericasText: (v: string) => void;
   onSaveProhibited: () => void;
   onSaveBrands: () => void;
+  onSaveGenericas: () => void;
 }
 
 function ListasTab(props: ListasProps) {
   const {
     isAdmin, saving, prohibitedText, setProhibitedText,
     brandsText, setBrandsText, onSaveProhibited, onSaveBrands,
+    genericasText, setGenericasText, onSaveGenericas,
   } = props;
 
   return (
@@ -597,6 +623,25 @@ function ListasTab(props: ListasProps) {
           placeholder={'Nike\nAdidas\nGucci'}
         />
         <Button className="mt-3" onClick={onSaveBrands} disabled={!isAdmin || saving}>
+          <Save className="h-4 w-4" /> Guardar
+        </Button>
+      </Card>
+
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={FileQuestion}>Descripciones genéricas</SectionHeader>
+        <p className="mb-2 text-xs text-slate-500">
+          Palabras que no dicen qué es la mercancía. Una por línea. Vacío usa la lista
+          predeterminada del motor; lo que se escriba aquí la <strong>reemplaza</strong>, no se suma.
+        </p>
+        <Textarea
+          rows={8}
+          value={genericasText}
+          onChange={(e) => setGenericasText(e.target.value)}
+          disabled={!isAdmin}
+          className="font-mono text-xs disabled:bg-slate-50"
+          placeholder={'artículo\nmercancía general\ngift\nsample'}
+        />
+        <Button className="mt-3" onClick={onSaveGenericas} disabled={!isAdmin || saving}>
           <Save className="h-4 w-4" /> Guardar
         </Button>
       </Card>

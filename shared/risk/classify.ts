@@ -45,6 +45,12 @@ export interface ScoreOptions {
   /** Optional override list for prohibited keywords (falls back to built-in list when omitted) */
   prohibitedKeywords?: string[];
   /**
+   * Catálogo administrable de términos genéricos de descripción (config `descripciones_genericas`).
+   * Omitido → `GENERICOS_DEFAULT` de `shared/risk/descripcion.ts`. Viaja en `resolved.lists` para
+   * que el `ruleset_hash` cambie con la lista y un score viejo se pueda volver a derivar.
+   */
+  terminosGenericos?: string[];
+  /**
    * F18: denied-party / sanctions screening list (OFAC/BIS/EU/UN).
    * Loaded from the `denied_parties` config key (see server/src/routes/risk.ts).
    * Included in `resolved.lists` so `rulesetHash` changes when the screening list changes,
@@ -184,6 +190,7 @@ export function scoreManifest(
     entityValueTotal,
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
+    terminosGenericos: options?.terminosGenericos,
     deniedParties: options?.deniedParties,
     // F14: nameToken = fuzzy-canonical + base tokenizer (for ID-less consignees only).
     // nameTokenBase = base tokenizer only (for ID-keyed consignees — no fuzzy canonical).
@@ -206,6 +213,7 @@ export function scoreManifest(
     lists: {
       piracyBrands: options?.piracyBrands ?? null,
       prohibitedKeywords: options?.prohibitedKeywords ?? null,
+      terminosGenericos: options?.terminosGenericos ?? null,
       // F18: denied-party list is included so rulesetHash changes when screening list changes.
       // This ensures replay integrity: a stored hash uniquely identifies the list snapshot used.
       deniedParties: options?.deniedParties ?? null,

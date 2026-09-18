@@ -72,7 +72,10 @@ export const clientPlatformBody = z.object({
 });
 
 // catalogs — config
-const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
+// La ÚNICA lista de llaves de config que existe: `configKeyParam` la vuelve un `z.enum` y el
+// middleware `validate` rechaza con 400 cualquier otra antes de que el router la vea.
+// `descripciones_genericas` alimenta la señal `descripcion_generica` (shared/risk/descripcion.ts).
+const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'descripciones_genericas', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
 export const configKeyParam = z.object({
   key: z.enum(ALLOWED_CONFIG_KEYS),
 });

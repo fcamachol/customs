@@ -425,3 +425,94 @@ Visible para `admin`, `super_admin`, `capturista` y `autoridad` — el mismo con
 **Verificado con pruebas, no en navegador**: `npx tsc --noEmit` limpio y `npx vitest run` en 908
 pruebas (81 archivos), de las cuales 8 son de esta vista. No se levantó la app contra una base con
 operaciones sembradas.
+
+### Addendum (2026-09-18) — `descripcion_generica`: la primera señal que sale del análisis competitivo
+
+Contexto: se revisaron nueve capturas del sistema Sabueso (Hound Express). De la lista de "qué
+conviene tomarles", ésta era la única marcada **Tomar** que seguía pendiente — su pantalla de
+riesgo evalúa "¿Es genérica?" como columna propia y nosotros no teníamos nada equivalente.
+
+El hueco era real y silencioso. Una fila cuya descripción dice `"artículo"` pasaba por el motor sin
+una sola observación: `prohibidos` y `pirateria` buscan palabras *dentro* de la descripción, así que
+una descripción que no nombra nada las deja sin materia y la fila sale **verde**. Una descripción
+*vacía* sí estaba cubierta (`insufficientData` la manda a `gris`); una vaga, no.
+
+**`shared/risk/descripcion.ts`** decide en cuatro veredictos. La regla **no mide longitud** — a
+propósito: `"anillo de acero"` son 15 caracteres y nombra el objeto, `"mercancía general para uso
+doméstico"` son 38 y no nombra nada. Lo que se mide es si queda **al menos un token informativo**
+tras descontar tres catálogos cerrados (genéricos, materiales, relleno gramatical y muletillas de
+propósito del tipo "para uso doméstico", que abundan en los manifiestos traducidos del chino).
+
+- `solo_generica` / `vacia` → peso completo (25).
+- `solo_material` (`"Plástico de cristal"`) → 0.6 del peso. Nombrar la sustancia acota el capítulo
+  arancelario aunque no identifique el producto; no es lo mismo que no decir nada.
+- `informativa` → no dispara.
+
+**No lleva `forcesBand`.** Es una señal de *calidad del dato*, no de severidad: una descripción vaga
+no acusa a nadie, impide auditar. Forzar rojo mandaría medio manifiesto de cualquier remitente
+descuidado a la cola de revisión manual y quemaría la banda roja, que hoy significa "esto tiene algo
+malo", no "esto está mal capturado".
+
+**La recalibración de bandas no es cosmética.** Agregar el peso subió `maxPoints` 348 → 373, lo que
+comprime todos los scores un 6.7%. `amarillo` bajó 7 → 6 **porque tenía que bajar**: con 373 una
+fila que sólo trae `id` (RFC con dígito verificador malo, 25 pts) puntúa 6.70, y dejando el corte en
+7 esa fila habría caído a verde — o sea que agregar una señal nueva habría *escondido* una que ya
+existía. `rojo` bajó 11 → 10 por proporción (el umbral crudo 38.28 es 10.26% de 373).
+`shared/risk/descripcion.test.ts` fija ese caso explícitamente; si alguien vuelve a tocar los pesos,
+ese test es el que avisa.
+
+Medido sobre el manifiesto golden de 501 filas: la señal dispara en **1**, y es un acierto
+(`"Plástico de cristal"`). Distribución antes → después: verde 87.82% → 87.62%, amarillo 5.39% →
+5.59%, rojo 6.79% → **6.79%** (sin cambio). Exactamente una fila cambió de banda. `enhanced.test.ts`
+fija ese 1 como guarda de **precisión**: si un cambio al catálogo hiciera disparar la señal en
+decenas de filas, ese test lo delata antes de que llegue a la cola de revisión del cliente.
+
+Catálogo administrable por config `descripciones_genericas`, igual que `prohibited` y
+`piracy_brands`. **Reemplaza al de fábrica, no se suma** (hay test, y la UI lo dice en negritas —
+quien escriba tres palabras creyendo que las agrega apagaría en silencio las ~90 de fábrica).
+Viaja en `resolved.lists`, así que el `ruleset_hash` cambia con la lista y un score viejo se puede
+volver a derivar.
+
+La llave va en `ALLOWED_CONFIG_KEYS` de **`server/src/validation/schemas.ts`** (nivel admin, no
+super_admin: es un catálogo de calidad, no una lista de sanciones) y tiene su editor en
+`ConfigurationView` → *Motor de riesgo*, junto a prohibidos y piratería. Sin esa entrada el
+override habría sido código muerto —`riskService` lo lee, pero nadie habría podido escribirlo—;
+hay una prueba en `catalogs.test.ts` que fija justamente eso.
+
+**Trampa encontrada de paso, ya desactivada:** `catalogs.ts` tenía una SEGUNDA lista de llaves
+permitidas, un `Set` llamado igual, que **nadie consultaba** — ningún `.has()` lo leía. La que
+manda siempre fue el `z.enum` de `schemas.ts`, vía `configKeyParam` + el middleware `validate`.
+Agregar la llave a la copia muerta daba un 400 con el rastro pareciendo correcto (me pasó). Se
+borró el `Set` en vez de sincronizarlo y quedó un comentario en su lugar diciendo dónde vive la
+lista real: dos listas que deben coincidir y sólo una manda es una trampa, no una redundancia.
+
+En `HUELLA_EVIDENCIA` la proyección es `['veredicto']` y **no** el texto crudo. Si el texto
+participara del hash, el remitente que siempre escribe "gift" obligaría a re-afirmar la disposición
+en cada manifiesto por una mayúscula de diferencia. El veredicto sí discrimina: disponer "sólo dice
+el material, lo verifiqué con el cliente" no puede tapar una fila posterior que ya no dice nada.
+
+`RULESET.version` → `2026-09a`. Seis guardas literales se actualizaron a mano y con su razón
+anotada (`maxPoints` 348→373, las señales de `HUELLA_EVIDENCIA` 9→10, un score 10→9 por el
+denominador nuevo, y la versión) — están escritas para atrapar cambios accidentales, así que
+cambiarlas es una decisión, no un trámite. Dos más del lado del servidor: la versión persistida en
+`risk.test.ts`, y el snapshot de paridad de `riesgoEfectivo.test.ts`, que está escrito a mano como
+"esto es lo que el sistema respondía, congelado". Ése se re-congeló **una** vez, con la razón
+anotada dentro del propio archivo: la fila gris del fixture suma el motivo "La descripción viene
+vacía" porque su semilla trae `descripcion: ''`. Sigue siendo gris y las cuatro superficies siguen
+contando 1/1/1/1 — la diferencia viene del motor, aguas arriba, que es exactamente lo que ese
+archivo NO está midiendo.
+
+La tabla de riesgo no necesitó trabajo: `RiskResultTable` pinta `r.detail` y `(r.signalId)` de
+forma genérica, así que el hallazgo aparece solo con su texto en español.
+
+**Lo que NO se hizo, y por qué** (del mismo análisis): `RRNA` y `aduana exclusiva` quedaron en
+*Evaluar* — necesitan catálogos regulatorios mantenidos al día, que es un compromiso permanente y
+no una feature. El estado de `previo` está marcado *Diseñar con Luis*. `Transportista y placas por
+guía` es *Integrar por API* contra el webhook de ellos: no hay nada que construir, hay que conectar
+algo que todavía no tenemos.
+
+**Verificado con pruebas, no en navegador**: `npx tsc --noEmit` limpio en raíz y en `server/`;
+`npx vitest run` en `server/` da **1213 pruebas / 87 archivos, todas en verde** (443s, corrida sola
+—la regla de no cruzar dos vitest contra la base de pruebas sigue viva y esta vez se respetó), y en
+raíz **723 / 54**. No se levantó la app contra una base con manifiestos sembrados: la señal se midió
+contra el fixture golden de 501 filas, que es el mismo insumo con el que se calibró el motor.

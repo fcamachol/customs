@@ -22,6 +22,20 @@ describe('enhanced engine on the 501-row golden manifest', () => {
     expect(pct('verde')).toBeGreaterThan(0.4); // repeat buyers are no longer all amarillo
   });
 
+  it('la señal de descripción genérica casi no toca este manifiesto — y lo poco que toca, lo toca bien', () => {
+    // Guarda de precisión, no de recall. Este fixture es e-commerce chino con descripciones
+    // razonables ("Auriculares inalámbricos Para comunicación"), así que una señal bien calibrada
+    // debe callarse en casi todas. Si un cambio al catálogo la hiciera disparar en decenas de
+    // filas, se estaría barriendo medio manifiesto a la cola de revisión y este número lo delata.
+    const scored = scoreManifest(ships, {});
+    const conSenal = scored.filter((s) => s.reasons.some((r) => r.signalId === 'descripcion_generica'));
+    expect(conSenal).toHaveLength(1);
+    // La única: nombra el material y no el producto. Es un acierto, no un falso positivo.
+    expect(conSenal[0].shipment.description).toContain('Plástico de cristal');
+    expect(conSenal[0].reasons.find((r) => r.signalId === 'descripcion_generica')?.evidence?.veredicto)
+      .toBe('solo_material');
+  });
+
   it('every row carries reasons-array, 0-100 score, and a ruleset hash', () => {
     const scored = scoreManifest(ships, {});
     expect(scored[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);

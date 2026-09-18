@@ -51,13 +51,15 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, apiDownload } from '../api';
 import { Card, Button, Field, Input, Textarea, Modal, StatusPill, EmptyState, type Resultado } from './ui';
-import { TIPOS_UNIDAD, ESTADOS_TRANSPORTISTA, etiquetaTipoUnidad } from '../../shared/operaciones/catalogos';
+import { TIPOS_UNIDAD, ESTADOS_TRANSPORTISTA, TIPOS_PROVEEDOR, TIPO_PROVEEDOR_LABEL, etiquetaTipoUnidad, type TipoProveedor } from '../../shared/operaciones/catalogos';
 
 // ---- API contract types ------------------------------------------------------------------------
 
 export interface Transportista {
   id: string;
   razonSocial: string;
+  /** Discrimina la misma tabla: transportista | aerolinea | recinto | almacen. */
+  tipo?: string | null;
   rfc: string | null;
   contactoNombre: string | null;
   contactoTelefono: string | null;
@@ -236,9 +238,18 @@ export interface TransportistasTabProps {
   onToast: (msg: string) => void;
   /** Jump to Trazabilidad with this carrier already selected. Absent = no affordance rendered. */
   onVerTrazabilidad?: (transportistaId: string) => void;
+  /**
+   * Qué parte del catálogo administra esta instancia.
+   *
+   * 'transportista' es la sección de siempre; 'proveedores' muestra el resto (aerolínea, recinto,
+   * almacén). Es la MISMA pantalla sobre el MISMO catálogo: separar las secciones era la petición
+   * de la junta, duplicar el componente no lo era — y habría duplicado también convenios, tarifas
+   * y flota, que es lo que este parámetro evita.
+   */
+  ambito?: 'transportista' | 'proveedores';
 }
 
-export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: TransportistasTabProps) {
+export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad, ambito = 'transportista' }: TransportistasTabProps) {
   const [transportistas, setTransportistas] = useState<Transportista[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -248,11 +259,12 @@ export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: Trans
 
   const recargar = useCallback(() => {
     setCargando(true);
-    return apiGet<Transportista[]>('/api/transportistas')
+    const q = ambito === 'proveedores' ? '?excluir=transportista' : '?tipo=transportista';
+    return apiGet<Transportista[]>(`/api/transportistas${q}`)
       .then((r) => { setTransportistas(Array.isArray(r) ? r : []); setError(null); })
       .catch((e) => setError(errMsg(e)))
       .finally(() => setCargando(false));
-  }, []);
+  }, [ambito]);
 
   useEffect(() => { void recargar(); }, [recargar]);
 
@@ -287,7 +299,7 @@ export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: Trans
           </div>
           {isAdmin && (
             <Button className="shrink-0" onClick={() => setNuevoAbierto(true)}>
-              <Plus className="h-4 w-4" /> Agregar transportista
+              <Plus className="h-4 w-4" /> {ambito === 'proveedores' ? 'Agregar proveedor' : 'Agregar transportista'}
             </Button>
           )}
         </div>
@@ -358,8 +370,13 @@ export function TransportistasTab({ isAdmin, onToast, onVerTrazabilidad }: Trans
 
       <NuevoTransportistaModal
         open={nuevoAbierto}
+        ambito={ambito}
         onClose={() => setNuevoAbierto(false)}
-        onCreated={(t) => { onToast(`Transportista «${t.razonSocial}» registrado`); setNuevoAbierto(false); void recargar(); }}
+        onCreated={(t) => {
+          onToast(`${ambito === 'proveedores' ? 'Proveedor' : 'Transportista'} «${t.razonSocial}» registrado`);
+          setNuevoAbierto(false);
+          void recargar();
+        }}
       />
 
       {detalleId && (
@@ -387,12 +404,25 @@ const NUEVO_VACIO = {
   documentosOk: false,
 };
 
-function NuevoTransportistaModal({ open, onClose, onCreated }: {
+/**
+ * Alta de contraparte. El MISMO formulario sirve para transportistas y para el resto de proveedores
+ * (aerolínea, recinto, almacén) porque son la misma tabla discriminada por `tipo`.
+ *
+ * EL `tipo` TIENE QUE VIAJAR EN EL BODY. El backend hace `COALESCE($8,'transportista')`, así que
+ * omitirlo no crea "un proveedor sin tipo": crea un transportista. Y como la lista de proveedores
+ * filtra `WHERE tipo <> 'transportista'`, la fila recién creada desaparecía de la pantalla donde se
+ * acababa de crear — un alta que se ve como un fallo silencioso.
+ */
+function NuevoTransportistaModal({ open, onClose, onCreated, ambito = 'transportista' }: {
   open: boolean;
   onClose: () => void;
   onCreated: (t: Transportista) => void;
+  ambito?: 'transportista' | 'proveedores';
 }) {
+  const esProveedor = ambito === 'proveedores';
   const [form, setForm] = useState(NUEVO_VACIO);
+  // En proveedores el tipo es una decisión del usuario; en transportistas está determinado.
+  const [tipo, setTipo] = useState<TipoProveedor>(esProveedor ? 'aerolinea' : 'transportista');
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -402,6 +432,7 @@ function NuevoTransportistaModal({ open, onClose, onCreated }: {
 
   function cerrar() {
     setForm(NUEVO_VACIO);
+    setTipo(esProveedor ? 'aerolinea' : 'transportista');
     setError(null);
     onClose();
   }
@@ -413,7 +444,7 @@ function NuevoTransportistaModal({ open, onClose, onCreated }: {
     try {
       // Empty optional fields are omitted rather than sent as '': the carrier's RFC carries a UNIQUE
       // constraint, and an empty string is a value, not an absence.
-      const body: Record<string, unknown> = { razonSocial: form.razonSocial.trim() };
+      const body: Record<string, unknown> = { razonSocial: form.razonSocial.trim(), tipo };
       if (form.rfc.trim()) body.rfc = form.rfc.trim().toUpperCase();
       if (form.contactoNombre.trim()) body.contactoNombre = form.contactoNombre.trim();
       if (form.contactoTelefono.trim()) body.contactoTelefono = form.contactoTelefono.trim();
@@ -430,7 +461,7 @@ function NuevoTransportistaModal({ open, onClose, onCreated }: {
   }
 
   return (
-    <Modal open={open} onClose={cerrar} title="Nuevo transportista">
+    <Modal open={open} onClose={cerrar} title={esProveedor ? 'Nuevo proveedor' : 'Nuevo transportista'}>
       {error && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
           {error}
@@ -440,6 +471,20 @@ function NuevoTransportistaModal({ open, onClose, onCreated }: {
         <Field label="Razón social *" htmlFor="tr-razon">
           <Input id="tr-razon" value={form.razonSocial} onChange={(e) => set('razonSocial', e.target.value)} />
         </Field>
+        {esProveedor && (
+          <Field label="Tipo de proveedor *" htmlFor="tr-tipo">
+            <select
+              id="tr-tipo"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-navy-500 focus:outline-none focus:ring-1 focus:ring-navy-500"
+              value={tipo}
+              onChange={(e) => setTipo(e.target.value as TipoProveedor)}
+            >
+              {TIPOS_PROVEEDOR.filter((t) => t !== 'transportista').map((t) => (
+                <option key={t} value={t}>{TIPO_PROVEEDOR_LABEL[t]}</option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="RFC" htmlFor="tr-rfc">
           <Input id="tr-rfc" value={form.rfc} onChange={(e) => set('rfc', e.target.value.toUpperCase())} className="font-mono" />
         </Field>
@@ -614,6 +659,7 @@ function DatosGenerales({ detalle, isAdmin, onToast, onSaved }: {
   const [guardando, setGuardando] = useState(false);
   const [form, setForm] = useState({
     razonSocial: detalle.razonSocial,
+    tipo: detalle.tipo ?? 'transportista',
     rfc: detalle.rfc ?? '',
     contactoNombre: detalle.contactoNombre ?? '',
     contactoTelefono: detalle.contactoTelefono ?? '',
@@ -625,6 +671,7 @@ function DatosGenerales({ detalle, isAdmin, onToast, onSaved }: {
   function abrir() {
     setForm({
       razonSocial: detalle.razonSocial,
+      tipo: detalle.tipo ?? 'transportista',
       rfc: detalle.rfc ?? '',
       contactoNombre: detalle.contactoNombre ?? '',
       contactoTelefono: detalle.contactoTelefono ?? '',
@@ -640,6 +687,11 @@ function DatosGenerales({ detalle, isAdmin, onToast, onSaved }: {
     try {
       await apiPut(`/api/transportistas/${detalle.id}`, {
         razonSocial: form.razonSocial.trim(),
+        // El tipo viaja también en la EDICIÓN, no sólo en el alta: los proveedores creados antes de
+        // que el modal lo mandara quedaron guardados como transportistas, y sin esto no había forma
+        // de reclasificarlos desde la pantalla — desaparecían de la lista de proveedores para
+        // siempre.
+        tipo: form.tipo,
         rfc: form.rfc.trim(),
         contactoNombre: form.contactoNombre.trim(),
         contactoTelefono: form.contactoTelefono.trim(),
@@ -673,6 +725,21 @@ function DatosGenerales({ detalle, isAdmin, onToast, onSaved }: {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Razón social" htmlFor="ed-razon">
               <Input id="ed-razon" value={form.razonSocial} onChange={(e) => setForm({ ...form, razonSocial: e.target.value })} />
+            </Field>
+            {/* Reclasificar es la única vía para reparar una contraparte guardada con el tipo
+                equivocado — el caso real: los proveedores creados cuando el alta no mandaba `tipo`
+                quedaron como transportistas y desaparecieron de la lista de proveedores. */}
+            <Field label="Tipo" htmlFor="ed-tipo">
+              <select
+                id="ed-tipo"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-navy-500 focus:outline-none focus:ring-1 focus:ring-navy-500"
+                value={form.tipo}
+                onChange={(e) => setForm({ ...form, tipo: e.target.value })}
+              >
+                {TIPOS_PROVEEDOR.map((t) => (
+                  <option key={t} value={t}>{TIPO_PROVEEDOR_LABEL[t]}</option>
+                ))}
+              </select>
             </Field>
             <Field label="RFC" htmlFor="ed-rfc">
               <Input id="ed-rfc" value={form.rfc} onChange={(e) => setForm({ ...form, rfc: e.target.value.toUpperCase() })} className="font-mono" />
@@ -748,6 +815,45 @@ function UnidadesSeccion({ transportistaId, unidades, isAdmin, onToast, onChange
   const [form, setForm] = useState(UNIDAD_VACIA);
   const [abierto, setAbierto] = useState(false);
   const [guardando, setGuardando] = useState(false);
+  // Edición en línea de una unidad ya registrada. Sin esto, renovar la vigencia del seguro o de la
+  // verificación —un trámite anual— obligaba a dar de baja el vehículo y volverlo a crear, con lo
+  // que el despacho histórico dejaba de poder nombrar la unidad que llevó la carga.
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [edicion, setEdicion] = useState(UNIDAD_VACIA);
+
+  function abrirEdicion(u: Unidad) {
+    setEditandoId(u.id);
+    setEdicion({
+      placas: u.placas ?? '',
+      tipoUnidad: u.tipoUnidad ?? TIPOS_UNIDAD[0].id,
+      numeroEconomico: u.numeroEconomico ?? '',
+      vigenciaSeguro: (u.vigenciaSeguro ?? '').slice(0, 10),
+      vigenciaVerificacion: (u.vigenciaVerificacion ?? '').slice(0, 10),
+    });
+  }
+
+  async function guardarEdicion(u: Unidad) {
+    if (!edicion.placas.trim()) { onToast('Error: las placas son obligatorias.'); return; }
+    setGuardando(true);
+    try {
+      // Las vigencias se mandan explícitamente incluso vacías: limpiar una fecha mal capturada es un
+      // cambio legítimo, y el backend distingue null de ausente.
+      await apiPut(`/api/transportistas/${transportistaId}/unidades/${u.id}`, {
+        placas: edicion.placas.trim(),
+        tipoUnidad: edicion.tipoUnidad,
+        numeroEconomico: edicion.numeroEconomico.trim() || null,
+        vigenciaSeguro: edicion.vigenciaSeguro || null,
+        vigenciaVerificacion: edicion.vigenciaVerificacion || null,
+      });
+      onToast(`Unidad ${edicion.placas.trim()} actualizada`);
+      setEditandoId(null);
+      await onChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setGuardando(false);
+    }
+  }
 
   async function agregar() {
     if (!form.placas.trim()) { onToast('Error: las placas son obligatorias.'); return; }
@@ -828,15 +934,48 @@ function UnidadesSeccion({ transportistaId, unidades, isAdmin, onToast, onChange
             <tbody className="divide-y divide-slate-100">
               {unidades.map((u) => (
                 <tr key={u.id} className={u.activo ? '' : 'bg-slate-50/60 text-slate-400'}>
-                  <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{u.placas}</td>
-                  <td className="px-3 py-2 text-slate-700">{etiquetaTipoUnidad(u.tipoUnidad)}</td>
-                  <td className="px-3 py-2 text-slate-600">{u.numeroEconomico || '—'}</td>
-                  <td className={`px-3 py-2 ${u.seguroVencido ? 'font-semibold text-red-600' : 'text-slate-600'}`}>
-                    {fmtDate(u.vigenciaSeguro)}{u.seguroVencido ? ' · vencido' : ''}
-                  </td>
-                  <td className={`px-3 py-2 ${u.verificacionVencida ? 'font-semibold text-red-600' : 'text-slate-600'}`}>
-                    {fmtDate(u.vigenciaVerificacion)}{u.verificacionVencida ? ' · vencida' : ''}
-                  </td>
+                  {editandoId === u.id ? (
+                    <>
+                      <td className="px-3 py-2">
+                        <Input className="font-mono" aria-label="Placas" value={edicion.placas}
+                          onChange={(e) => setEdicion({ ...edicion, placas: e.target.value.toUpperCase() })} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <select
+                          aria-label="Tipo de unidad"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                          value={edicion.tipoUnidad}
+                          onChange={(e) => setEdicion({ ...edicion, tipoUnidad: e.target.value })}
+                        >
+                          {TIPOS_UNIDAD.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input aria-label="Número económico" value={edicion.numeroEconomico}
+                          onChange={(e) => setEdicion({ ...edicion, numeroEconomico: e.target.value })} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input type="date" aria-label="Vigencia del seguro" value={edicion.vigenciaSeguro}
+                          onChange={(e) => setEdicion({ ...edicion, vigenciaSeguro: e.target.value })} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input type="date" aria-label="Vigencia de la verificación" value={edicion.vigenciaVerificacion}
+                          onChange={(e) => setEdicion({ ...edicion, vigenciaVerificacion: e.target.value })} />
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{u.placas}</td>
+                      <td className="px-3 py-2 text-slate-700">{etiquetaTipoUnidad(u.tipoUnidad)}</td>
+                      <td className="px-3 py-2 text-slate-600">{u.numeroEconomico || '—'}</td>
+                      <td className={`px-3 py-2 ${u.seguroVencido ? 'font-semibold text-red-600' : 'text-slate-600'}`}>
+                        {fmtDate(u.vigenciaSeguro)}{u.seguroVencido ? ' · vencido' : ''}
+                      </td>
+                      <td className={`px-3 py-2 ${u.verificacionVencida ? 'font-semibold text-red-600' : 'text-slate-600'}`}>
+                        {fmtDate(u.vigenciaVerificacion)}{u.verificacionVencida ? ' · vencida' : ''}
+                      </td>
+                    </>
+                  )}
                   <td className="px-3 py-2">
                     {u.activo ? (
                       <span className="text-xs font-semibold text-emerald-700">Activa</span>
@@ -845,27 +984,56 @@ function UnidadesSeccion({ transportistaId, unidades, isAdmin, onToast, onChange
                     )}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    {isAdmin && (
-                      u.activo ? (
+                    {isAdmin && (editandoId === u.id ? (
+                      <div className="flex justify-end gap-2">
                         <button
                           type="button"
-                          onClick={() => void darDeBaja(u)}
-                          aria-label={`Dar de baja la unidad ${u.placas}`}
-                          className="text-xs font-semibold text-slate-400 transition hover:text-red-600"
+                          onClick={() => void guardarEdicion(u)}
+                          disabled={guardando}
+                          className="text-xs font-semibold text-navy-700 hover:underline disabled:opacity-50"
                         >
-                          Dar de baja
+                          Guardar
                         </button>
-                      ) : (
                         <button
                           type="button"
-                          onClick={() => void reactivar(u)}
-                          aria-label={`Reactivar la unidad ${u.placas}`}
+                          onClick={() => setEditandoId(null)}
+                          disabled={guardando}
+                          className="text-xs font-semibold text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicion(u)}
+                          aria-label={`Editar la unidad ${u.placas}`}
                           className="text-xs font-semibold text-slate-400 transition hover:text-navy-700"
                         >
-                          Reactivar
+                          Editar
                         </button>
-                      )
-                    )}
+                        {u.activo ? (
+                          <button
+                            type="button"
+                            onClick={() => void darDeBaja(u)}
+                            aria-label={`Dar de baja la unidad ${u.placas}`}
+                            className="text-xs font-semibold text-slate-400 transition hover:text-red-600"
+                          >
+                            Dar de baja
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void reactivar(u)}
+                            aria-label={`Reactivar la unidad ${u.placas}`}
+                            className="text-xs font-semibold text-slate-400 transition hover:text-navy-700"
+                          >
+                            Reactivar
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </td>
                 </tr>
               ))}

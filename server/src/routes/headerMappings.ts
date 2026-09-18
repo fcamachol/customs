@@ -40,7 +40,7 @@ headerMappingsRouter.post(
 
     if (clientId) {
       const c = await query('SELECT id FROM clients WHERE id=$1', [clientId]);
-      if (c.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+      if (c.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     }
 
     // Upsert on the COALESCE(client_id, sentinel) unique index so re-saving a header just updates

@@ -12,6 +12,7 @@ import type { SubdivisionInfo } from '../../../shared/pedimento/subdivision';
 import { loadShipments } from '../services/reportData';
 import type { ExtractedPedimento, ReconciliationReport } from '../../../shared/types/reports';
 import { buildExpectedFromManifest, reconcile } from '../../../shared/pedimento/reconcile';
+import { estimarImpuesto, type TasaVigencia } from '../../../shared/impuestos/tasaGlobal';
 import { crossCheckEntities } from '../../../shared/pedimento/entityCrossCheck';
 import { loadImporterOfRecord, loadCustomsAgent, upsertAgente, upsertImportador } from '../services/entityMaster';
 import { normGuia, normGuiaSet } from '../../../shared/pedimento/guia';
@@ -46,7 +47,7 @@ export const pedimentoUploadRouter = Router();
 const normMasterGuide = normGuia;
 
 pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), async (req, res) => {
-  if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
+  if (!req.file) { res.status(400).json({ error: 'Falta el archivo.' }); return; }
 
   // RF-08: validate MIME type — must be a PDF
   if (req.file.mimetype !== 'application/pdf') {
@@ -118,7 +119,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
   // Hard-gate (400): the parsed master guide must match the manifest's mawb_reference.
   // If the master guide could not be parsed (null), we cannot verify it — proceed (decision #2).
   const mRows = await query<{ mawb_reference: string | null }>('SELECT mawb_reference FROM manifests WHERE id=$1', [req.params.id]);
-  if (!mRows.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+  if (!mRows.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
   const mawbReference = mRows.rows[0].mawb_reference;
   if (subdivision.masterGuide && normMasterGuide(subdivision.masterGuide) !== normMasterGuide(mawbReference ?? '')) {
     res.status(400).json({
@@ -233,6 +234,41 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
       if (xc.importerRfcMismatch) notes.push('RFC del importador en el PDF no coincide con el importador de registro.');
       if (xc.patenteMismatch) notes.push('La patente del PDF no coincide con el agente aduanal configurado.');
       const report = reconcile(expected, extracted, { notes, generatedAt: new Date().toISOString() });
+
+      // Estimado informativo de impuesto sobre las partidas que SÍ van al pedimento — `subset` ya
+      // está filtrado por las guías que el pedimento cubre, así que la decisión del 15-sep ("sólo
+      // lo que va al pedimento") queda garantizada por construcción y no por una regla aparte.
+      // La tasa se resuelve desde `tasa_vigencias` por fecha y origen; sin tabla no se estima nada,
+      // porque un número calculado con una tasa que nadie configuró se ve igual de creíble que uno
+      // real y no lo es.
+      const tasaCfg = await query<{ value: TasaVigencia[] | null }>(
+        `SELECT value FROM config WHERE key = 'tasa_vigencias'`,
+      );
+      const vigencias = tasaCfg.rows[0]?.value ?? null;
+      if (vigencias && vigencias.length) {
+        const fechaRef = extracted.header.entryDate ?? new Date().toISOString().slice(0, 10);
+        const est = estimarImpuesto(
+          subset.map((d) => ({
+            guia: d.guideId,
+            valorUsd: d.customsValueUsd,
+            codigoPaisRemitente: d.sender?.countryCode ?? null,
+          })),
+          vigencias,
+          fechaRef,
+        );
+        report.estimadoImpuesto = {
+          totalImpuestoUsd: est.totalImpuestoUsd,
+          totalValorUsd: est.totalValorUsd,
+          sinEstimar: est.sinEstimar,
+          tasasUsadas: est.tasasUsadas,
+          // La tasa que el propio pedimento declara. Mostrarla junto a la nuestra convierte un
+          // número informativo en un control: si el agente aplicó otra, se ve.
+          tasaPedimentoPct: extracted.header.tasaImportacion
+            ? Number(extracted.header.tasaImportacion)
+            : null,
+          partidas: est.partidas,
+        };
+      }
       report.header = [
         { field: 'importerRfc', expected: importer?.rfc ?? null, actual: extracted.header.importerRfc, ok: !xc.importerRfcMismatch },
         { field: 'patente', expected: agent?.patente ?? null, actual: extracted.header.patente, ok: !xc.patenteMismatch },

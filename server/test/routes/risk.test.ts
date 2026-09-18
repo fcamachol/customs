@@ -90,8 +90,8 @@ describe('POST /api/manifests/:id/risk', () => {
       .send({ period: '2025-02' });
     const { rows } = await query<{ ruleset_version: string }>(
       'SELECT ruleset_version FROM manifests WHERE id=$1', [manifestId]);
-    // F14: version bumped to 2026-07b (fuzzy entity resolution)
-    expect(rows[0].ruleset_version).toBe('2026-07b');
+    // 2026-09a: señal `descripcion_generica` + recalibración de bandas.
+    expect(rows[0].ruleset_version).toBe('2026-09a');
   });
 
   it('persists risk_reasons and ruleset_hash (non-null) after a run', async () => {

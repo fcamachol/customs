@@ -202,3 +202,21 @@ export function aduanaOrigen(iata: string | null | undefined): (typeof ADUANAS_O
   const up = iata.trim().toUpperCase();
   return ADUANAS_ORIGEN.find((a) => a.iata === up) ?? null;
 }
+
+/**
+ * Tipos de proveedor del catálogo (antes "transportistas").
+ *
+ * La junta del 15-sep pidió registrar aerolíneas, recinto fiscalizado y almacén junto con sus
+ * contratos, porque ANAM tiene acceso a este sistema y un proveedor sin contrato visible es el
+ * hueco que una auditoría señala. Un transportista ya *es* un proveedor, así que el catálogo se
+ * discrimina por tipo en vez de partirse en dos tablas con convenios y tarifas duplicados.
+ */
+export const TIPOS_PROVEEDOR = ['transportista', 'aerolinea', 'recinto', 'almacen'] as const;
+export type TipoProveedor = (typeof TIPOS_PROVEEDOR)[number];
+
+export const TIPO_PROVEEDOR_LABEL: Readonly<Record<TipoProveedor, string>> = {
+  transportista: 'Transportista',
+  aerolinea: 'Aerolínea',
+  recinto: 'Recinto fiscalizado',
+  almacen: 'Almacén',
+};

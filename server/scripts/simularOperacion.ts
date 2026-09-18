@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { query } from '../src/db/pool';
 import { refreshVueloForOperacion } from '../src/services/vuelosService';
 
@@ -23,9 +26,11 @@ import { refreshVueloForOperacion } from '../src/services/vuelosService';
  *   npx tsx server/scripts/simularOperacion.ts 695-44821907 5Y8174 ANC NLU 2026-09-14
  */
 async function main(): Promise<void> {
-  const [mawbArg, vuelo, origen, destino, fecha] = process.argv.slice(2);
+  const [mawbArg, vuelo, origen, destino, fecha, declCtns, declPcs, declKgs] = process.argv.slice(2);
   if (!mawbArg) {
-    console.error('uso: simularOperacion.ts <MAWB> [vuelo] [origen] [destino] [YYYY-MM-DD]');
+    console.error('uso: simularOperacion.ts <MAWB> [vuelo] [origen] [destino] [YYYY-MM-DD] [ctns] [pcs] [kgs]');
+    console.error('  las tres últimas son las cifras que DECLARA el correo del cliente; si se omiten');
+    console.error('  se derivan del manifiesto y entonces el cotejo no tiene nada que reprochar.');
     process.exit(2);
   }
   const numeroVuelo = vuelo ?? '5Y8174';
@@ -51,9 +56,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const m = man.rows[0];
-  const piezas = m.piezas ? Math.round(Number(m.piezas)) : null;
-  const pesoKg = m.peso ? Number(Number(m.peso).toFixed(2)) : null;
-  const cartones = Number(m.total);
+  const piezasManifiesto = m.piezas ? Math.round(Number(m.piezas)) : null;
+  const pesoManifiesto = m.peso ? Number(Number(m.peso).toFixed(2)) : null;
+
+  // Las cifras de la PREALERTA son lo que el cliente AFIRMA por correo; las del manifiesto son lo
+  // que el archivo adjunto realmente suma. Que puedan diferir es justo el punto: el cotejo existe
+  // para encontrar esa diferencia (PA-01/02/03). Derivarlas del manifiesto —como hacía la primera
+  // versión de este script— garantizaba que coincidieran y dejaba al cotejo sin nada que decir.
+  const cartones = declCtns ? Number(declCtns) : Number(m.total);
+  const piezas = declPcs ? Number(declPcs) : piezasManifiesto;
+  const pesoKg = declKgs ? Number(declKgs) : pesoManifiesto;
 
   // 2) La operación. ETD/ETA se derivan de la fecha declarada para que el cotejo tenga contra qué
   //    comparar cuando el feed responda.
@@ -76,7 +88,8 @@ async function main(): Promise<void> {
   );
   const operacion = op.rows[0];
   console.log(`[simulador] caso ${operacion.mawb} (${operacion.id})`);
-  console.log(`[simulador]   manifiesto: ${cartones} guías · ${piezas ?? '?'} piezas · ${pesoKg ?? '?'} kg`);
+  console.log(`[simulador]   manifiesto declara: ${m.total} guías · ${piezasManifiesto ?? '?'} pzs · ${pesoManifiesto ?? '?'} kg`);
+  console.log(`[simulador]   la prealerta afirma: ${cartones} ctns · ${piezas ?? '?'} pzs · ${pesoKg ?? '?'} kg`);
 
   // 3) La prealerta. `parsed` refleja lo que un parser habría extraído del correo, con su
   //    procedencia marcada como simulada — nunca como declaración del cliente.
@@ -100,6 +113,49 @@ async function main(): Promise<void> {
     ],
   );
   console.log('[simulador]   prealerta v1 registrada');
+
+  // 3b) Evidencia. Los adjuntos se archivan y hashean EXACTAMENTE como en el camino real: se copian
+  //     al almacén, se les saca sha256 y ese hash es el que se guarda. No se inventa ninguno — si
+  //     el archivo no está en disco, el adjunto simplemente no se registra, porque una evidencia
+  //     con hash fabricado sería peor que no tener evidencia.
+  const prel = await query<{ id: string }>(
+    `SELECT id FROM prealertas WHERE operacion_id = $1 ORDER BY version DESC LIMIT 1`,
+    [operacion.id],
+  );
+  const prealertaId = prel.rows[0]?.id;
+  const storageDir = process.env.FILE_STORAGE_DIR ?? './storage';
+  const adjuntos: Array<{ ruta: string; tipo: 'awb' | 'manifiesto'; nombre: string }> = [];
+  if (process.env.SIM_ADJUNTO_MANIFIESTO) {
+    adjuntos.push({ ruta: process.env.SIM_ADJUNTO_MANIFIESTO, tipo: 'manifiesto', nombre: `${mawbArg} manifiesto.csv` });
+  }
+  if (process.env.SIM_ADJUNTO_AWB) {
+    adjuntos.push({ ruta: process.env.SIM_ADJUNTO_AWB, tipo: 'awb', nombre: `${mawbArg} AWB.pdf` });
+  }
+  for (const a of adjuntos) {
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(a.ruta);
+    } catch {
+      console.log(`[simulador]   ! adjunto no encontrado, se omite: ${a.ruta}`);
+      continue;
+    }
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const destino = join('prealerta', `${hash.slice(0, 16)}-${a.tipo}`);
+    const absoluto = join(storageDir, destino);
+    mkdirSync(dirname(absoluto), { recursive: true });
+    writeFileSync(absoluto, bytes);
+    const f = await query<{ id: string }>(
+      `INSERT INTO files (kind, original_name, storage_path, size_bytes)
+       VALUES ('manifest', $1, $2, $3) RETURNING id`,
+      [a.nombre, destino, bytes.length],
+    );
+    await query(
+      `INSERT INTO prealerta_adjuntos (prealerta_id, file_id, tipo, original_name, content_hash, scan_verdict)
+       VALUES ($1,$2,$3,$4,$5,'clean')`,
+      [prealertaId, f.rows[0].id, a.tipo, a.nombre, hash],
+    );
+    console.log(`[simulador]   adjunto ${a.tipo}: ${a.nombre} · sha256 ${hash.slice(0, 16)}…`);
+  }
 
   // 4) El vuelo: esto NO se simula. Es una consulta real al feed, y su resultado es el que se
   //    guarda — incluida la posibilidad de que el proveedor no lo reconozca.

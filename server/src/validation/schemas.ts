@@ -3,6 +3,7 @@ import {
   ESTADOS_DESPACHO,
   ESTADOS_FIRMA_CONVENIO,
   ESTADOS_TRANSPORTISTA,
+  TIPOS_PROVEEDOR,
   TIPOS_UNIDAD_IDS,
 } from '../../../shared/operaciones/catalogos';
 import { UNIDADES_TARIFA } from '../../../shared/operaciones/facturacion';
@@ -71,7 +72,10 @@ export const clientPlatformBody = z.object({
 });
 
 // catalogs — config
-const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
+// La ÚNICA lista de llaves de config que existe: `configKeyParam` la vuelve un `z.enum` y el
+// middleware `validate` rechaza con 400 cualquier otra antes de que el router la vea.
+// `descripciones_genericas` alimenta la señal `descripcion_generica` (shared/risk/descripcion.ts).
+const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'descripciones_genericas', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
 export const configKeyParam = z.object({
   key: z.enum(ALLOWED_CONFIG_KEYS),
 });
@@ -664,6 +668,17 @@ const fechaOpcional = z.preprocess(
  * as "leave this alone" — right for creation, wrong for correction, where "this rate no longer
  * expires" is a legitimate thing to say and silence would keep the old expiry.
  */
+/**
+ * Texto que un EDIT puede borrar. Misma distinción que `fechaOpcionalNullable`: en una ruta con
+ * forma de PATCH, `undefined` significa "no toques este campo" y `null` significa "bórralo". Con
+ * `textoOpcional` ambos se pliegan a `undefined`, de modo que limpiar un contacto mal capturado se
+ * veía como guardado exitoso y el valor viejo se quedaba.
+ */
+const textoOpcionalNullable = z.preprocess(
+  (v) => (v === '' || v === null ? null : v),
+  z.string().nullable().optional(),
+);
+
 const fechaOpcionalNullable = z.preprocess(
   (v) => (v === '' || v === null ? null : v),
   fechaISO.nullable().optional(),
@@ -739,6 +754,9 @@ export const transportistaBody = z.object({
   contactoEmail: textoOpcional,
   estado: z.enum(ESTADOS_TRANSPORTISTA as unknown as [string, ...string[]]).optional(),
   documentosOk: z.boolean().optional(),
+  // Omitirlo lo deja en 'transportista', que es lo que era todo antes de que el catálogo se
+  // generalizara a proveedores — así ningún llamador previo cambia de comportamiento.
+  tipo: z.enum(TIPOS_PROVEEDOR as unknown as [string, ...string[]]).optional(),
 });
 export type TransportistaBody = z.infer<typeof transportistaBody>;
 
@@ -760,7 +778,30 @@ export const unidadBody = z.object({
 });
 export type UnidadBody = z.infer<typeof unidadBody>;
 
-export const unidadUpdateBody = unidadBody.partial();
+/**
+ * El UPDATE de una unidad NO es `unidadBody.partial()`.
+ *
+ * Las vigencias del seguro y de la verificación se renuevan cada año, y también se capturan mal. Con
+ * `fechaOpcional` un `null` se pliega a `undefined`, que esta ruta lee como "no toques este campo"
+ * (`if (b.vigenciaSeguro !== undefined)`), así que LIMPIAR una fecha equivocada sería imposible: la
+ * pantalla diría que guardó y el valor viejo seguiría ahí. Misma razón por la que existe
+ * `fechaOpcionalNullable` para las tarifas. El número económico se comporta igual: borrarlo es una
+ * corrección legítima, no un descuido.
+ *
+ * `placas` y `tipoUnidad` se quedan no-nullables a propósito: una unidad sin placas o sin tipo no
+ * es una unidad corregida, es una unidad inservible — el tipo decide para qué despachos elegible.
+ */
+export const unidadUpdateBody = z.object({
+  placas: unidadBody.shape.placas.optional(),
+  tipoUnidad: tipoUnidadEnum.optional(),
+  numeroEconomico: z.preprocess(
+    (v) => (v === '' || v === null ? null : v),
+    z.string().nullable().optional(),
+  ),
+  vigenciaSeguro: fechaOpcionalNullable,
+  vigenciaVerificacion: fechaOpcionalNullable,
+  activo: z.boolean().optional(),
+});
 export type UnidadUpdateBody = z.infer<typeof unidadUpdateBody>;
 
 // ── convenios y tarifas (R25 / D9) ───────────────────────────────────────────────────────────
@@ -864,7 +905,25 @@ export const clientDireccionBody = z.object({
 });
 export type ClientDireccionBody = z.infer<typeof clientDireccionBody>;
 
-export const clientDireccionUpdateBody = clientDireccionBody.partial();
+/**
+ * El UPDATE de una dirección permite BORRAR sus campos opcionales — el alias no, porque una
+ * dirección sin alias no se puede elegir en la planeación. La ruta ya distingue `null` de ausente
+ * (`if (b.x !== undefined) set(col, orNull(b.x))`); lo que faltaba era que el `null` sobreviviera
+ * a la validación.
+ */
+export const clientDireccionUpdateBody = z.object({
+  alias: textoRequerido.optional(),
+  direccion: textoOpcionalNullable,
+  ciudad: textoOpcionalNullable,
+  estado: textoOpcionalNullable,
+  cp: textoOpcionalNullable,
+  lat: latOpcional,
+  lng: lngOpcional,
+  contactoNombre: textoOpcionalNullable,
+  contactoTelefono: textoOpcionalNullable,
+  horario: textoOpcionalNullable,
+  activo: z.boolean().optional(),
+});
 export type ClientDireccionUpdateBody = z.infer<typeof clientDireccionUpdateBody>;
 
 // ── despachos (R21, R22/D7, R28, R29) ────────────────────────────────────────────────────────

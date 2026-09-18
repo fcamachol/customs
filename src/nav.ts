@@ -1,15 +1,16 @@
-import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, Truck, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, Truck, Timer, type LucideIcon } from 'lucide-react';
 
 export type Section =
-  | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
+  | 'dashboard' | 'lead_times' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
   | 'ops_torre' | 'ops_prealertas' | 'ops_campo' | 'ops_traza'
-  | 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
+  | 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_proveedores' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
 
-export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades';
+export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_proveedores' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades';
 
 export const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard:    { title: 'Dashboard', subtitle: 'Desempeño operativo y análisis de riesgo en tiempo real.' },
+  lead_times:   { title: 'Lead times', subtitle: 'Almacén, despacho, tránsito y última milla, calculados sobre marcas de tiempo que nadie puede editar.' },
   registro:     { title: 'Realizar Registro', subtitle: 'Carga un manifiesto y ejecuta el análisis de riesgo T1.' },
   seguimiento:  { title: 'Seguimiento', subtitle: 'Captura de pedimento e importación del documento.' },
   reporte:      { title: 'Reporte General', subtitle: 'Datos de remitente y plataforma, y generación del reporte.' },
@@ -21,6 +22,7 @@ export const SECTION_META: Record<Section, { title: string; subtitle: string }> 
   cfg_motor:    { title: 'Motor de riesgo', subtitle: 'Parámetros de validación y listas de exclusión (V1–V8).' },
   cfg_clientes: { title: 'Clientes', subtitle: 'Datos recurrentes del remitente. Abra un cliente para ver sus datos y administrar sus plataformas.' },
   cfg_transportistas: { title: 'Transportistas', subtitle: 'Catálogo de transportistas, unidades, convenios y tarifas · sólo Admin.' },
+  cfg_proveedores:   { title: 'Proveedores', subtitle: 'Aerolíneas, recinto fiscalizado y almacén, con sus contratos · sólo Admin.' },
   cfg_rfcs:     { title: 'RFCs validados', subtitle: 'Catálogo de RFC/CURP validados para el reporte T1.' },
   cfg_empresa:  { title: 'Empresa', subtitle: 'Identidad y branding en pantallas y reportes generados.' },
   cfg_tasa:      { title: 'Tasa global', subtitle: 'Vigencias de tasa global · sólo Super Admin.' },
@@ -44,7 +46,10 @@ export function isParent(item: NavItem): item is NavParent {
 }
 
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  { label: 'Resumen', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+  { label: 'Resumen', items: [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'lead_times', label: 'Lead times', icon: Timer },
+  ] },
   { label: 'Operación', items: [
     { id: 'registro', label: 'Realizar Registro', icon: FilePlus2 },
     { id: 'seguimiento', label: 'Seguimiento', icon: Activity },
@@ -66,6 +71,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         { id: 'cfg_motor', label: 'Motor de riesgo' },
         { id: 'cfg_clientes', label: 'Clientes' },
         { id: 'cfg_transportistas', label: 'Transportistas' },
+        { id: 'cfg_proveedores', label: 'Proveedores' },
         { id: 'cfg_rfcs', label: 'RFCs validados' },
         { id: 'cfg_empresa', label: 'Empresa' },
         { id: 'cfg_tasa', label: 'Tasa global', badge: 'Super' },
@@ -77,7 +83,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   ] },
 ];
 
-const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_transportistas', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
+const CONFIG_SECTIONS: Section[] = ['cfg_motor', 'cfg_clientes', 'cfg_transportistas', 'cfg_proveedores', 'cfg_rfcs', 'cfg_empresa', 'cfg_tasa', 'cfg_entidades'];
 
 // Role-based visibility:
 //  - tramitador stands in a warehouse or at the aduana on a phone: it sees ONLY the field-capture
@@ -90,9 +96,9 @@ export function visibleSectionsFor(role: string): Section[] {
   if (role === 'tramitador') return ['ops_campo'];
   // Trazabilidad is read-only and is precisely the trace the authority asks for ("¿con quién salió
   // esa guía?"), so autoridad sees it too.
-  if (role === 'autoridad') return ['dashboard', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_traza', 'autoridad', 'acerca'];
+  if (role === 'autoridad') return ['dashboard', 'lead_times', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_traza', 'autoridad', 'acerca'];
   if (role === 'admin' || role === 'super_admin') {
-    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
+    return ['dashboard', 'lead_times', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
   }
-  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', 'acerca'];
+  return ['dashboard', 'lead_times', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', 'acerca'];
 }

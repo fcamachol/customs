@@ -25,9 +25,20 @@ export function classifyTaxId(raw: string): TaxIdKind {
 const RFC_DICT = '0123456789ABCDEFGHIJKLMN&OPQRSTUVWXYZ ';
 const rfcValue = (c: string): number => (c === 'Ñ' ? 38 : RFC_DICT.indexOf(c));
 
+/**
+ * RFCs genéricos del SAT. Both are officially valid and appear on real pedimentos —
+ * `XAXX010101000` for "ventas al público en general" (domestic) and `XEXX010101000` for foreign
+ * residents without an RFC (Anexo 20 / RMF). `XAXX010101000` does NOT satisfy the check-digit
+ * algorithm (it expects `4`, the official value is `0`), so without this allow-list a perfectly
+ * legal pedimento is rejected at prevalidation. `XEXX010101000` happens to pass the algorithm,
+ * but is listed here too so the exception is explicit rather than accidental.
+ */
+export const RFC_GENERICOS_SAT: ReadonlySet<string> = new Set(['XAXX010101000', 'XEXX010101000']);
+
 export function isRfcChecksumValid(raw: string): boolean {
   const v = cleanId(raw);
   if (!RFC_RE.test(v)) return false;
+  if (RFC_GENERICOS_SAT.has(v)) return true;
   const check = v.slice(-1);
   const base = v.slice(0, -1).padStart(12, ' '); // morales (11) get a leading space
   let sum = 0;

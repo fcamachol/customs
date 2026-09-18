@@ -8,7 +8,7 @@ import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
 import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema, clientDireccionBody, clientDireccionUpdateBody, clientDireccionParam, clientTarifaBody, clientTarifaUpdateBody, clientTarifaParam, type ClientDireccionBody, type ClientDireccionUpdateBody, type ClientTarifaBody, type ClientTarifaUpdateBody } from '../validation/schemas';
 import { decryptField, encryptField } from '../crypto/fieldCrypto';
-import { listAgentes, listImportadores, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
+import { listAgentes, listImportadores, findImportadoresDuplicados, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
 
 export const catalogsRouter = Router();
 
@@ -613,6 +613,13 @@ catalogsRouter.get('/importadores', requireAuth, requireRole('admin'), async (_r
   res.json(await listImportadores());
 });
 
+// GET /api/catalogs/importadores/duplicados — admin + super_admin.
+// Same company recorded twice because OCR misread one character of the RFC; each pair names the
+// row to keep and the one to delete. Declared before any '/importadores/:id' route would match.
+catalogsRouter.get('/importadores/duplicados', requireAuth, requireRole('admin'), async (_req, res) => {
+  res.json(await findImportadoresDuplicados());
+});
+
 // PUT /api/catalogs/importadores/:id — admin + super_admin
 catalogsRouter.put(
   '/importadores/:id',
@@ -645,6 +652,91 @@ catalogsRouter.put(
       if (isUniqueViolation(err)) { res.status(409).json({ error: 'Ya existe un importador con ese RFC' }); return; }
       throw err;
     }
+  },
+);
+
+/**
+ * DELETE /api/catalogs/agentes-aduanales/:id y /importadores/:id — admin + super_admin.
+ *
+ * POR QUÉ ESTOS DOS SÍ SE BORRAN DURO, cuando direcciones, tarifas y unidades sólo se desactivan:
+ * aquellos son catálogos que alguien dio de alta y que documentos históricos nombran (`despachos`
+ * apunta a una dirección, `factura_partidas` a una tarifa), así que la fila tiene que sobrevivir para
+ * que el histórico siga siendo legible. Estas dos tablas son distintas: se **auto-registran** desde el
+ * OCR de un pedimento (`services/entityMaster.ts`), de modo que un PDF mal escaneado crea filas que
+ * nunca representaron a nadie. Un `UNIQUE(patente)` / `UNIQUE(rfc)` convierte además cada fila basura
+ * en un bloqueo permanente de esa patente o ese RFC. Sin borrado, el catálogo sólo puede ensuciarse.
+ *
+ * LA GUARDA ES LA REFERENCIA, NO LA ANTIGÜEDAD: se niega el borrado si algún pedimento capturado
+ * todavía nombra a la entidad. Eso deja pasar exactamente el caso que importa —el duplicado que nadie
+ * llegó a usar— y protege el que importa más: la entidad que un documento real ya citó.
+ */
+catalogsRouter.delete(
+  '/agentes-aduanales/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params;
+    const before = await query(`SELECT ${AGENTE_RETURNING} FROM agentes_aduanales WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal no encontrado.' }); return; }
+
+    // La patente puede llegar por DOS caminos, y la guarda tiene que cubrir los dos: explícita en
+    // `import_data`, o DERIVADA del número de pedimento cuando el capturista no la escribió —
+    // `routes/pedimento.ts` hace `strOrNull(d.patente) ?? derivePatente(numero_pedimento)`, y esa
+    // derivación son los dígitos 5 a 8 del número de 15. Mirar sólo `import_data` dejaría borrar al
+    // agente de un pedimento que sí lo nombra, nada más porque el dato venía implícito en el folio.
+    const enUso = await query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM pedimentos
+        WHERE import_data->>'patente' = $1
+           OR substring(regexp_replace(COALESCE(numero_pedimento, ''), '[^0-9]', '', 'g') FROM 5 FOR 4) = $1`,
+      [before.rows[0].patente],
+    );
+    if (Number(enUso.rows[0]?.n ?? 0) > 0) {
+      res.status(409).json({
+        error: `No se puede eliminar: ${enUso.rows[0].n} pedimento(s) citan la patente ${before.rows[0].patente}. `
+          + 'Corrige los datos del agente en lugar de borrarlo.',
+      });
+      return;
+    }
+
+    await query('DELETE FROM agentes_aduanales WHERE id=$1', [id]);
+    await recordAudit({
+      userId: req.user!.userId, action: 'DELETE_AGENTE_ADUANAL', entity: 'agente_aduanal',
+      entityId: id, before: before.rows[0], ip: req.ip,
+    });
+    res.status(204).end();
+  },
+);
+
+catalogsRouter.delete(
+  '/importadores/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params;
+    const before = await query(`SELECT ${IMPORTADOR_RETURNING} FROM importadores WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador no encontrado.' }); return; }
+
+    const enUso = await query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM pedimentos
+        WHERE import_data->>'importerRfc' = $1`,
+      [before.rows[0].rfc],
+    );
+    if (Number(enUso.rows[0]?.n ?? 0) > 0) {
+      res.status(409).json({
+        error: `No se puede eliminar: ${enUso.rows[0].n} pedimento(s) citan el RFC ${before.rows[0].rfc}. `
+          + 'Corrige el RFC del importador en lugar de borrarlo.',
+      });
+      return;
+    }
+
+    await query('DELETE FROM importadores WHERE id=$1', [id]);
+    await recordAudit({
+      userId: req.user!.userId, action: 'DELETE_IMPORTADOR', entity: 'importador',
+      entityId: id, before: before.rows[0], ip: req.ip,
+    });
+    res.status(204).end();
   },
 );
 

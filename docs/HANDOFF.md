@@ -88,6 +88,71 @@ That is the operator's one-shot deployment wipe; this endpoint is the in-app one
 
 ---
 
+### Addendum (2026-09-18) — CRUD audit, RFC hygiene, and per-guía tax in the export
+
+Shipped on `feat/crud-rfc-impuesto-guia` (PR to `develop`). Three threads:
+
+**RFC hygiene at the point of capture** (`shared/parsing/taxId.ts`, `server/src/services/entityMaster.ts`).
+The SAT generic RFCs are now an explicit allow-list: `XAXX010101000` does NOT satisfy the check-digit
+algorithm yet is officially valid, so a perfectly legal pedimento was being rejected at
+prevalidation. And OCR'd RFCs no longer reach the catalogs unvalidated — an invalid **agent** RFC is
+dropped (the row survives with its patente, and prevalidation degrades to a warning instead of the
+hard block nobody could clear from the capture form), while an invalid **importador** RFC is refused
+outright, because there the RFC *is* the conflict key and inserting it forks one company into two
+rows. `findImportadoresDuplicados()` + `GET /api/catalogs/importadores/duplicados` report the pair
+that a single misread character produces, and `DELETE` on both catalogs now exists — hard delete, on
+purpose, guarded by a 409 when a captured pedimento still names the entity. These two tables are the
+only ones that auto-register from a PDF, which is why they are also the only ones that can be
+deleted rather than deactivated.
+
+**CRUD gaps closed in the UI** — every one of these was an endpoint that already worked with no
+screen calling it: client data is editable (it was read-only, so fixing a mistyped RFC meant a
+CASCADE delete that also took the signed NOM-151 convenios); importador RFC and agente patente are
+editable; fleet units are editable (renewing an insurance date no longer requires retiring the
+vehicle); delivery addresses got their first screen (`src/components/ClienteDirecciones.tsx`). One
+real frontend bug went with them: the Proveedores section mounted the carrier modal without `tipo`,
+and `COALESCE($8,'transportista')` meant a new airline was silently created as a carrier and then
+vanished from the list that filters `tipo <> 'transportista'`.
+
+**`null` must survive validation.** `unidadUpdateBody` and `clientDireccionUpdateBody` are now
+hand-written instead of `.partial()` of the create schema. Deriving them folded `null` into
+`undefined`, which these PATCH-shaped routes read as "leave this field alone" — so clearing a
+mistyped date or contact looked like it saved and did not. Same reasoning that already justified
+`fechaOpcionalNullable`; there is now a `textoOpcionalNullable` beside it, and
+`server/test/validation/schemasNullable.test.ts` pins the distinction.
+
+**Per-guía tax estimate in the operational export** (`server/src/routes/reportesOperativos.ts`).
+Five columns, asked for in the 15-sep meeting. The arithmetic was already in
+`shared/impuestos/tasaGlobal.ts`; what was missing was carrying it to the sheet. Four things are
+load-bearing and were each a bug first, found by adversarial review:
+- The number is written **once per guía**. A row in this export is guía × despacho partida ×
+  factura partida, so a guía billed under two concepts appears twice — and whoever opens the file
+  selects the column and sums it. Repeating the figure produced an exact-multiple total, which is
+  the worst kind of wrong because it looks right. `marcarPrimeraFilaPorGuia` blanks the repeats and
+  says so in the note column.
+- Origin is aggregated as "GENERAL unless **every** line is T-MEC". `MIN(countryCode)` biased
+  toward TMEC (`'CA'` sorts before almost everything), i.e. toward the cheaper estimate — the exact
+  thing `tasaGlobal.ts` says never to do.
+- The rate date is resolved **in SQL**, cast to `date` like the report's own `WHERE`/`ORDER BY`.
+  Computing it in JS with `toISOString()` gave the UTC day while the filter used the server zone, so
+  an 19:00 Mexico-time arrival landed in the next day's vigencia.
+- The gate is `pedimento_id`, not the pedimento **number**, which is nullable: an unreadable scan
+  produces a real pedimento with no number, and gating on the number claimed "No va al pedimento"
+  about cargo that does ship.
+
+Known, deliberately NOT unified: the export estimates on the **operation day, aggregated per guía**,
+while the cotejo panel estimates on the pedimento's **entry date, per partida** (and rounds per
+partida). For a shipment straddling a rate change the two figures differ legitimately. Picking one
+canonical date is a business decision, not a code cleanup — it is written down in the comment above
+`cargarVigencias()` so the next session does not "fix" it by guessing.
+
+**Still open, and the reason it is open:** there is no user administration at all — no
+`GET /api/users`, no deactivation, no password reset, no screen (`server/src/routes/users.ts` is 33
+lines: create + change role). A forgotten password or a departing employee currently needs database
+access. It was left alone on purpose rather than improvised: password reset touches the JWT `tv`
+(token version) revocation path and MFA enrollment, and a half-built version of that is worse than
+none.
+
 ## 1. What this project is
 
 A Mexican customs (agencia aduanal T1) compliance platform. Two systems in one repo:
@@ -158,9 +223,9 @@ npm --prefix server test                      # server suite (needs local Postgr
 ```
 
 **Current baseline: ZERO failures in both suites** (backlog "#36" is closed, `f6c7fcf`). Measured
-fresh on 2026-08-10:
-- Root: `npx vitest run` → **75 files, 791 tests, 0 failures.**
-- Server: `npm --prefix server test` → **82 files, 1047 tests, 0 failures.**
+fresh on 2026-09-18 (previous mark, 2026-08-10, was 75/791 root and 82/1047 server):
+- Root: `npx vitest run` → **80 files, 898 tests, 0 failures.**
+- Server: `npm --prefix server test` → **86 files, 1200 tests, 0 failures.**
 
 The old "31 failing/5 files root, 3/1 server" baseline is **gone** — do not expect it and do not
 reintroduce it. A session that sees anything less than fully green owns a real regression, not a
@@ -168,7 +233,11 @@ pre-existing one. One caveat worth knowing: under full-suite load a single test 
 `server/test/routes/replan.test.ts` was observed to hit vitest's 5s default timeout once; run in
 isolation (`npx vitest run test/routes/replan.test.ts`) and in a second full clean run it passed
 both times — it is machine-load flakiness, not a real failure, but if you see it recur, consider it
-worth a `testTimeout` bump on that file rather than ignoring it forever. Never run two vitest
+worth a `testTimeout` bump on that file rather than ignoring it forever. The same thing was
+observed on 2026-09-18 in `server/test/routes/rateLimit.test.ts` ("does not throttle repeated
+bad-password attempts"): it times out at 5s under full-suite load and passes 8/8 in isolation. Both
+tests share the same shape — they wait on deliberately slow work (bcrypt, the tick) while 86 files
+compete for the machine. Never run two vitest
 processes against the shared test DB concurrently — truncation storms produce false failures. For
 `server`, set `TEST_DATABASE_URL` in `server/.env` (or override it in the shell) to your own scratch
 Postgres database — a role/db that already exists locally works fine; `createdb <name>` /

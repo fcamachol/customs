@@ -102,6 +102,7 @@ describe('ConfigurationView', () => {
     fireEvent.click(screen.getByText('ACME'));
     await waitFor(() => expect(screen.getByText('Shop A')).toBeTruthy());
   });
+
 });
 
 /** Base apiGet mock for cfg_entidades tests: super_admin user + empty catalogs + all other config
@@ -116,7 +117,7 @@ function mockEntidadesApi(overrides: Record<string, unknown> = {}) {
     if (path.includes('branding')) return { key: 'branding', value: null };
     if (path.includes('validation_params')) return { key: 'validation_params', value: null };
     if (path.includes('tasa_vigencias')) return { key: 'tasa_vigencias', value: null };
-    if (path.includes('/clients')) return [];
+    if (path.includes('/clients')) return overrides.clients ?? [];
     if (path.includes('/validated-rfcs')) return [];
     return { key: '', value: null };
   };
@@ -142,6 +143,37 @@ describe('ConfigurationView — cfg_entidades (Agentes aduanales / Importadores)
     localStorage.removeItem('token');
   });
 
+  /**
+   * CORREGIR UN CLIENTE NO DEBE COSTAR SU EXPEDIENTE.
+   *
+   * El `PUT /api/catalogs/clients/:id` existía, pero el detalle era de sólo lectura: la única forma
+   * de arreglar un RFC mal capturado era borrar el cliente, y ese DELETE va en cascada sobre
+   * plataformas, direcciones, tarifas, mapeos de columnas y los convenios firmados NOM-151.
+   */
+  it('permite editar los datos del cliente en lugar de obligar a borrarlo', async () => {
+    const { apiGet, apiPut } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockEntidadesApi({
+      clients: [{ id: 'cl1', name: 'ACME', tax_id: 'AAA010101AAA', email: 'a@acme.mx', platforms: [] }],
+    }));
+    vi.mocked(apiPut).mockResolvedValue({ id: 'cl1', name: 'ACME' });
+
+    render(<Wrapper><ConfigurationView domain="cfg_clientes" onToast={() => {}} /></Wrapper>);
+    await waitFor(() => expect(screen.getByText('ACME')).toBeTruthy());
+    fireEvent.click(screen.getByText('ACME'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /editar datos/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /editar datos/i }));
+
+    fireEvent.change(screen.getByLabelText('Id fiscal'), { target: { value: 'bbb020202bbb' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar datos/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        '/api/catalogs/clients/cl1',
+        expect.objectContaining({ tax_id: 'BBB020202BBB' }),
+      );
+    });
+  });
   it('renders both tables from GET, with rows and an "Sin verificar" badge', async () => {
     const { apiGet } = await import('../api');
     vi.mocked(apiGet).mockImplementation(mockEntidadesApi({ agentes: [AGENTE_FIXTURE], importadores: [IMPORTADOR_FIXTURE] }));
@@ -224,10 +256,79 @@ describe('ConfigurationView — cfg_entidades (Agentes aduanales / Importadores)
     fireEvent.click(screen.getByRole('button', { name: /guardar/i }));
 
     await waitFor(() => {
+      // El RFC viaja en el patch desde que es editable: es la llave del catálogo y el OCR se
+      // equivoca justo ahí, produciendo dos filas para la misma empresa.
       expect(vi.mocked(apiPut)).toHaveBeenCalledWith('/api/catalogs/importadores/im1', {
+        rfc: 'IMP010101AAA',
         name: 'IMPORTADOR NUEVO SA',
         fiscalAddress: 'Calle 1',
       });
+    });
+  });
+
+  // Lo que hacía imposible limpiar el catálogo: el RFC se pintaba como texto, no como campo.
+  it('el RFC del importador es editable — es donde el OCR se equivoca', async () => {
+    const { apiGet, apiPut } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockEntidadesApi({ importadores: [IMPORTADOR_FIXTURE] }));
+    vi.mocked(apiPut).mockResolvedValue({ ...IMPORTADOR_FIXTURE, rfc: 'IMP010101AB7' });
+
+    render(<Wrapper><ConfigurationView domain="cfg_entidades" onToast={() => {}} /></Wrapper>);
+    await waitFor(() => expect(screen.getByText('IMP010101AAA')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /editar/i }));
+
+    const rfcInput = screen.getByDisplayValue('IMP010101AAA');
+    fireEvent.change(rfcInput, { target: { value: 'IMP010101AB7' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        '/api/catalogs/importadores/im1',
+        expect.objectContaining({ rfc: 'IMP010101AB7' }),
+      );
+    });
+  });
+
+  // La patente es la llave del agente: mal leída, deja la fila inservible y bloquea esa patente.
+  it('la patente del agente es editable', async () => {
+    const { apiGet, apiPut } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockEntidadesApi({ agentes: [AGENTE_FIXTURE] }));
+    vi.mocked(apiPut).mockResolvedValue(AGENTE_FIXTURE);
+
+    render(<Wrapper><ConfigurationView domain="cfg_entidades" onToast={() => {}} /></Wrapper>);
+    await waitFor(() => expect(screen.getByText(AGENTE_FIXTURE.patente)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /editar/i }));
+
+    const patenteInput = screen.getByDisplayValue(AGENTE_FIXTURE.patente);
+    fireEvent.change(patenteInput, { target: { value: '9999' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        `/api/catalogs/agentes-aduanales/${AGENTE_FIXTURE.id}`,
+        expect.objectContaining({ patente: '9999' }),
+      );
+    });
+  });
+
+  // El endpoint sabía diagnosticar duplicados desde antes; esto es lo que faltaba para curarlos.
+  it('ofrece eliminar el duplicado que el servidor detectó, nombrando cuál se conserva', async () => {
+    const { apiGet, apiDelete } = await import('../api');
+    const valido = { ...IMPORTADOR_FIXTURE, id: 'ok1', rfc: 'CCE180415AB7', name: 'CAPITAL SA' };
+    const malo = { ...IMPORTADOR_FIXTURE, id: 'bad1', rfc: 'CCE180415AB2', name: 'CAPITAL SA' };
+    vi.mocked(apiGet).mockImplementation((url: string) => {
+      if (url.includes('/importadores/duplicados')) return Promise.resolve([{ valido, sospechoso: malo }]);
+      return mockEntidadesApi({ importadores: [valido, malo] })(url);
+    });
+    vi.mocked(apiDelete).mockResolvedValue(undefined);
+
+    render(<Wrapper><ConfigurationView domain="cfg_entidades" onToast={() => {}} /></Wrapper>);
+    await waitFor(() => expect(screen.getByText(/importador duplicado/i)).toBeTruthy());
+    expect(screen.getByText(/CCE180415AB7 · conservar/)).toBeTruthy();
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: /eliminar duplicado/i }));
+    await waitFor(() => {
+      expect(vi.mocked(apiDelete)).toHaveBeenCalledWith('/api/catalogs/importadores/bad1');
     });
   });
 

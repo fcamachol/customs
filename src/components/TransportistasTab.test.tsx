@@ -201,10 +201,96 @@ describe('TransportistasTab', () => {
     await waitFor(() =>
       expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/api/transportistas', {
         razonSocial: 'Fletes del Sur',
+        tipo: 'transportista',
         rfc: 'FSU010101AAA',
         contactoTelefono: '5599887766',
       }),
     );
+  });
+
+  /**
+   * EL ALTA DE PROVEEDOR TIENE QUE MANDAR SU `tipo`.
+   *
+   * Transportistas y proveedores son la misma tabla discriminada por `tipo`, y el backend hace
+   * `COALESCE($8,'transportista')`. Omitirlo no creaba "un proveedor sin tipo": creaba un
+   * transportista, que además desaparecía de la lista de proveedores (filtrada por
+   * `tipo <> 'transportista'`). El alta se veía como un fallo silencioso.
+   */
+  it('desde Proveedores, el alta manda el tipo elegido y no cae en transportista', async () => {
+    const { apiPost, apiGet } = await import('../api');
+    vi.mocked(apiGet).mockImplementation(mockApi({ transportistas: [] }));
+    render(
+      <AuthProvider>
+        <ConfigurationView domain="cfg_proveedores" onToast={() => {}} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /agregar proveedor/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /agregar proveedor/i }));
+    fireEvent.change(screen.getByLabelText('Razón social *'), { target: { value: 'Aeroméxico Cargo' } });
+    fireEvent.change(screen.getByLabelText('Tipo de proveedor *'), { target: { value: 'aerolinea' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/api/transportistas', {
+        razonSocial: 'Aeroméxico Cargo',
+        tipo: 'aerolinea',
+      }),
+    );
+  });
+
+  /**
+   * RENOVAR UNA VIGENCIA NO DEBE COSTAR EL HISTORIAL DE LA UNIDAD.
+   *
+   * El seguro y la verificación se renuevan cada año, y de ellos depende `documentosOk` y la
+   * elegibilidad del vehículo. Antes sólo existían alta, baja y reactivar: actualizar una fecha
+   * obligaba a dar de baja el vehículo y recrearlo, con lo que los despachos pasados dejaban de
+   * poder nombrar la unidad que llevó la carga.
+   */
+  /**
+   * RECLASIFICAR UNA CONTRAPARTE MAL TIPIFICADA.
+   *
+   * Los proveedores creados cuando el alta no mandaba `tipo` quedaron guardados como
+   * transportistas, y como la lista de proveedores filtra `tipo <> 'transportista'`, desaparecieron
+   * de la pantalla donde se crearon. Sin `tipo` en el PUT de edición no había forma de repararlos.
+   */
+  it('la edición manda el tipo, para poder reclasificar un proveedor mal guardado', async () => {
+    const { apiPut } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^editar$/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /^editar$/i }));
+    fireEvent.change(screen.getByLabelText('Tipo'), { target: { value: 'almacen' } });
+    fireEvent.click(screen.getByRole('button', { name: /guardar cambios/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        '/api/transportistas/t-1',
+        expect.objectContaining({ tipo: 'almacen' }),
+      );
+    });
+  });
+
+  it('permite editar una unidad para renovar su vigencia, sin darla de baja', async () => {
+    const { apiPut } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /editar la unidad/i })).toBeTruthy());
+    fireEvent.click(screen.getAllByRole('button', { name: /editar la unidad/i })[0]);
+
+    fireEvent.change(screen.getByLabelText('Vigencia del seguro'), { target: { value: '2027-12-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /^guardar$/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        expect.stringMatching(/\/unidades\//),
+        expect.objectContaining({ vigenciaSeguro: '2027-12-31' }),
+      );
+    });
   });
 
   it('opens a carrier and shows its fleet, with an expired inspection called out', async () => {
@@ -419,6 +505,33 @@ describe('TransportistasTab', () => {
         placas: 'XYZ-98-76',
         tipoUnidad: 'rabon',
       }),
+    );
+  });
+
+  /**
+   * RENOVAR UNA VIGENCIA NO DEBE COSTAR EL HISTORIAL DEL VEHÍCULO.
+   *
+   * El seguro y la verificación se renuevan cada año y alimentan `documentosOk`, que decide si la
+   * unidad puede ofrecerse. Sin edición en línea, la única salida era dar de baja el vehículo y
+   * volverlo a crear — y entonces `despachos.unidad_id` apuntaba a una unidad retirada, de modo que
+   * "¿qué camión llevó esta carga?" dejaba de tener respuesta.
+   */
+  it('edita una unidad en línea: renovar el seguro sin recrear el vehículo', async () => {
+    const { apiPut } = await import('../api');
+    await renderPane();
+    await waitFor(() => expect(screen.getByText('Transportes del Bajío')).toBeTruthy());
+    fireEvent.click(screen.getByText('Transportes del Bajío'));
+    await waitFor(() => expect(screen.getByText('ABC1234')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /editar la unidad ABC1234/i }));
+    fireEvent.change(screen.getByLabelText('Vigencia del seguro'), { target: { value: '2027-06-30' } });
+    fireEvent.click(screen.getByRole('button', { name: /^guardar$/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiPut)).toHaveBeenCalledWith(
+        '/api/transportistas/t-1/unidades/u-1',
+        expect.objectContaining({ placas: 'ABC1234', vigenciaSeguro: '2027-06-30' }),
+      ),
     );
   });
 

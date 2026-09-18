@@ -290,6 +290,112 @@ describe('GET /api/catalogs/agentes-aduanales', () => {
   });
 });
 
+/**
+ * BORRADO DE ENTIDADES AUTO-REGISTRADAS.
+ *
+ * Estas dos tablas se llenan solas desde el OCR de un pedimento, así que un PDF mal escaneado crea
+ * filas que nunca representaron a nadie — y el UNIQUE sobre patente/RFC convierte cada fila basura en
+ * un bloqueo permanente de esa llave. Por eso aquí el borrado es duro, a diferencia de los catálogos
+ * que un humano dio de alta y que documentos históricos nombran.
+ *
+ * La guarda es la referencia, no la antigüedad: si un pedimento capturado ya cita a la entidad, el
+ * borrado se niega con 409 y nombra la alternativa (corregir el dato).
+ */
+describe('DELETE /api/catalogs/agentes-aduanales/:id y /importadores/:id', () => {
+  it('borra el agente que ningún pedimento cita', async () => {
+    const { rows } = await query(
+      `INSERT INTO agentes_aduanales (patente, name) VALUES ('5108','BASURA OCR') RETURNING id`);
+    const res = await request(app)
+      .delete(`/api/catalogs/agentes-aduanales/${rows[0].id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(204);
+    const quedan = await query(`SELECT count(*)::int AS n FROM agentes_aduanales`);
+    expect(quedan.rows[0].n).toBe(0);
+    const audit = await query(`SELECT action FROM audit_log WHERE action = 'DELETE_AGENTE_ADUANAL'`);
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it('se NIEGA a borrar el agente que un pedimento cita, y dice qué hacer en su lugar', async () => {
+    const { rows } = await query(
+      `INSERT INTO agentes_aduanales (patente, name) VALUES ('5108','EN USO') RETURNING id`);
+    const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ('M-DEL-1') RETURNING id`);
+    await query(
+      `INSERT INTO pedimentos (manifest_id, import_data) VALUES ($1, $2::jsonb)`,
+      [m.rows[0].id, JSON.stringify({ patente: '5108' })]);
+
+    const res = await request(app)
+      .delete(`/api/catalogs/agentes-aduanales/${rows[0].id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/pedimento/i);
+    expect(res.body.error).toMatch(/5108/);
+    const quedan = await query(`SELECT count(*)::int AS n FROM agentes_aduanales`);
+    expect(quedan.rows[0].n).toBe(1);
+  });
+
+  /**
+   * LA PATENTE PUEDE VENIR IMPLÍCITA EN EL FOLIO.
+   *
+   * `routes/pedimento.ts` resuelve el agente con `strOrNull(d.patente) ?? derivePatente(numero)`, y
+   * esa derivación son los dígitos 5 a 8 del número de 15. Un pedimento capturado sin patente
+   * explícita igual NOMBRA al agente; mirar sólo `import_data` habría dejado borrarlo.
+   */
+  it('se NIEGA a borrar el agente cuya patente está DERIVADA del número de pedimento', async () => {
+    const { rows } = await query(
+      `INSERT INTO agentes_aduanales (patente, name) VALUES ('5108','DERIVADA') RETURNING id`);
+    const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ('M-DEL-3') RETURNING id`);
+    // 264351087104488 → dígitos 5..8 = '5108'. Sin patente en import_data.
+    await query(
+      `INSERT INTO pedimentos (manifest_id, numero_pedimento, import_data) VALUES ($1,'264351087104488','{}'::jsonb)`,
+      [m.rows[0].id]);
+
+    const res = await request(app)
+      .delete(`/api/catalogs/agentes-aduanales/${rows[0].id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/5108/);
+  });
+
+  it('borra el importador duplicado que ningún pedimento cita', async () => {
+    const { rows } = await query(
+      `INSERT INTO importadores (rfc, name) VALUES ('CCE180415AB2','CAPITAL SA') RETURNING id`);
+    const res = await request(app)
+      .delete(`/api/catalogs/importadores/${rows[0].id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(204);
+  });
+
+  it('se NIEGA a borrar el importador que un pedimento cita', async () => {
+    const { rows } = await query(
+      `INSERT INTO importadores (rfc, name) VALUES ('CCE180415AB7','CAPITAL SA') RETURNING id`);
+    const m = await query(`INSERT INTO manifests (mawb_reference) VALUES ('M-DEL-2') RETURNING id`);
+    await query(
+      `INSERT INTO pedimentos (manifest_id, import_data) VALUES ($1, $2::jsonb)`,
+      [m.rows[0].id, JSON.stringify({ importerRfc: 'CCE180415AB7' })]);
+
+    const res = await request(app)
+      .delete(`/api/catalogs/importadores/${rows[0].id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/CCE180415AB7/);
+  });
+
+  it('404 cuando la entidad no existe, y 403 para roles sin permiso', async () => {
+    const inexistente = '00000000-0000-0000-0000-000000000000';
+    const nf = await request(app)
+      .delete(`/api/catalogs/importadores/${inexistente}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(nf.status).toBe(404);
+
+    const { rows } = await query(
+      `INSERT INTO importadores (rfc, name) VALUES ('AAA010101AAA','X') RETURNING id`);
+    const cap = await request(app)
+      .delete(`/api/catalogs/importadores/${rows[0].id}`)
+      .set('Authorization', `Bearer ${capturistaToken}`);
+    expect(cap.status).toBe(403);
+  });
+});
+
 describe('PUT /api/catalogs/agentes-aduanales/:id', () => {
   it('admin can edit fields + verified, writes an audit row', async () => {
     const { rows } = await query(

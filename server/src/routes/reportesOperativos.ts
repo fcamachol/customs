@@ -6,6 +6,7 @@ import { recordAudit } from '../services/audit';
 import { validate } from '../validation/middleware';
 import { reporteOperativoQuery, type ReporteOperativoQuery } from '../validation/schemas';
 import { etiquetaTipoUnidad } from '../../../shared/operaciones/catalogos';
+import { resolverTasa, tipoOrigenDe, type TasaVigencia } from '../../../shared/impuestos/tasaGlobal';
 import {
   LEAD_TIME_RULESET_VERSION,
   METRICAS_LEAD_TIME,
@@ -100,7 +101,16 @@ const SQL_FILAS = `
          f.estado                    AS "facturaEstado",
          f.periodo                   AS "periodoFactura",
          fp.importe                  AS "importeFacturado",
-         f.moneda                    AS "monedaFactura"
+         f.moneda                    AS "monedaFactura",
+         g.pedimento_id              AS "pedimentoId",
+         sh.valor_aduanal_usd        AS "valorAduanalUsd",
+         sh.origen_tasa              AS "origenTasa",
+         -- El día se resuelve AQUÍ, casteado a date igual que el WHERE y el ORDER BY de abajo, no
+         -- con toISOString() en JS: eso daría el día en UTC mientras el filtro usa la zona del
+         -- servidor, y un arribo de las 19:00 hora de México caería en el día siguiente. Un reporte
+         -- de agosto con una fila estimada a la tasa de septiembre es justo la cifra irreproducible
+         -- que este módulo existe para evitar.
+         COALESCE(o.arribo_vuelo_at, o.created_at)::date AS "fechaReferencia"
     FROM operaciones o
     LEFT JOIN operacion_guias g ON g.operacion_id = o.id
     LEFT JOIN clients c ON c.id = COALESCE(g.client_id, o.client_id)
@@ -116,6 +126,27 @@ const SQL_FILAS = `
            ON fp.operacion_id = o.id
           AND (fp.operacion_guia_id = g.id OR (fp.operacion_guia_id IS NULL AND g.id IS NULL))
     LEFT JOIN facturas f ON f.id = fp.factura_id AND f.estado <> 'cancelada'
+    -- Valor aduanal y origen de la guía, sumados desde las líneas del manifiesto. El join va por la
+    -- guía NORMALIZADA con la misma regla que normGuia() en shared/pedimento/guia.ts (quitar todo lo
+    -- que no sea alfanumérico y pasar a mayúsculas), porque operacion_guias.guia_norm se escribió con
+    -- esa función y el manifiesto guarda la guía tal como venía escrita.
+    LEFT JOIN LATERAL (
+      -- El cast va detrás de una guarda de tipo: shipments.data es jsonb libre sin CHECK, y un
+      -- solo valor no numérico ahí tumbaría la consulta entera con 22P02 — el reporte completo
+      -- respondería 500 en lugar de degradar esta columna a "sin valor aduanal".
+      SELECT SUM(CASE WHEN jsonb_typeof(s.data->'customsValueUsd') = 'number'
+                      THEN (s.data->>'customsValueUsd')::numeric END) AS valor_aduanal_usd,
+             -- El origen NO se agrega con MIN(). 'CA' precede alfabéticamente a casi todo, así que
+             -- una guía con líneas de CA y de CN colapsaría a TMEC y se estimaría entera con la tasa
+             -- más baja. La regla del módulo de tasas es la contraria: ante duda, nunca subestimar.
+             -- Basta UNA línea fuera del T-MEC para que la guía se estime como GENERAL.
+             CASE WHEN bool_and(COALESCE(UPPER(TRIM(s.data->'sender'->>'countryCode')), '') IN ('MX','US','CA'))
+                  THEN 'TMEC' ELSE 'GENERAL' END AS origen_tasa
+        FROM shipments s
+       WHERE s.manifest_id = o.manifest_id
+         AND g.guia_norm IS NOT NULL
+         AND UPPER(REGEXP_REPLACE(COALESCE(s.data->>'guideId', ''), '[^a-zA-Z0-9]', '', 'g')) = g.guia_norm
+    ) sh ON TRUE
    WHERE ($1::date IS NULL OR COALESCE(o.arribo_vuelo_at, o.created_at)::date >= $1::date)
      AND ($2::date IS NULL OR COALESCE(o.arribo_vuelo_at, o.created_at)::date <= $2::date)
      AND ($3::uuid IS NULL OR COALESCE(g.client_id, o.client_id) = $3::uuid)
@@ -124,9 +155,122 @@ const SQL_FILAS = `
 
 type Fila = Record<string, any>;
 
+/**
+ * Tabla de tasas vigentes (configuración "Tasa global", Super Admin). Misma fuente que usa el
+ * estimado del cotejo en `routes/pedimentoUpload.ts`. Devuelve null si no está configurada — el
+ * estimado entonces se omite con nota.
+ *
+ * MISMA TABLA NO ES MISMO NÚMERO, y conviene saberlo antes de conciliar los dos: el cotejo estima
+ * sobre la FECHA DE ENTRADA del pedimento y partida por partida; este reporte, sobre el DÍA DE LA
+ * OPERACIÓN y agregando por guía. Para un embarque a caballo de un cambio de vigencia las dos
+ * cifras difieren legítimamente, y en guías multi-línea pueden diferir en centavos por el momento
+ * del redondeo. Unificarlos exige decidir cuál es la fecha canónica del estimado — una decisión de
+ * negocio, no de código.
+ */
+async function cargarVigencias(): Promise<TasaVigencia[] | null> {
+  const { rows } = await query<{ value: TasaVigencia[] | null }>(
+    `SELECT value FROM config WHERE key = 'tasa_vigencias'`,
+  );
+  const v = rows[0]?.value;
+  return Array.isArray(v) && v.length ? v : null;
+}
+
 async function cargarFilas(f: ReporteOperativoQuery): Promise<Fila[]> {
   const { rows } = await query(SQL_FILAS, [f.desde ?? null, f.hasta ?? null, f.clientId ?? null]);
   return rows as Fila[];
+}
+
+/**
+ * Estimado de impuesto de la guía, para el export.
+ *
+ * CUATRO REGLAS, todas aprendidas a golpes:
+ *
+ * 1. SÓLO SE ESTIMA LO QUE VA AL PEDIMENTO. Una guía sin pedimento es carga que el análisis de
+ *    riesgo no dejó pasar o que aún no se transmitió — "no puedo calcular impuestos sobre algo que
+ *    no puede pasar". La condición es `pedimentoId`, NO el número de pedimento: un PDF escaneado
+ *    ilegible produce un pedimento real con `numero_pedimento` null, y usar el número diría
+ *    "No va al pedimento" sobre carga que sí se despacha — la mentira más cara que esta columna
+ *    puede contar.
+ * 2. LA TASA ES LA VIGENTE EL DÍA DE LA OPERACIÓN, y ese día llega ya resuelto desde SQL, en el
+ *    mismo eje de fechas con el que el reporte filtra y ordena.
+ * 3. SIN TASA CONFIGURADA NO HAY ESTIMADO: null con motivo, nunca un default.
+ * 4. EL NÚMERO SE ESCRIBE UNA SOLA VEZ POR GUÍA. Ver `marcarPrimeraFilaPorGuia`.
+ */
+function estimadoDeFila(r: Fila, vigencias: TasaVigencia[] | null): {
+  valorUsd: number | null;
+  origen: 'GENERAL' | 'TMEC' | null;
+  tasaPct: number | null;
+  impuestoUsd: number | null;
+  nota: string;
+} {
+  const vacio = { valorUsd: null, origen: null, tasaPct: null, impuestoUsd: null };
+
+  // Regla 4: en una repetición de la misma guía la celda va vacía, con la nota que lo explica.
+  if (r.__guiaRepetida) return { ...vacio, nota: 'Ya contabilizado en la primera fila de esta guía' };
+
+  if (!r.pedimentoId) return { ...vacio, nota: 'No va al pedimento' };
+
+  const valor = r.valorAduanalUsd == null ? null : Number(r.valorAduanalUsd);
+  if (valor == null || !Number.isFinite(valor)) return { ...vacio, nota: 'Sin valor aduanal en el manifiesto' };
+
+  const origen: 'GENERAL' | 'TMEC' = r.origenTasa === 'TMEC' ? 'TMEC' : 'GENERAL';
+  const fecha = diaDeReferencia(r.fechaReferencia);
+  if (!fecha) return { valorUsd: valor, origen, tasaPct: null, impuestoUsd: null, nota: 'Sin fecha de referencia' };
+
+  const { vigencia, motivo } = resolverTasa(vigencias, fecha, origen);
+  if (!vigencia) {
+    return {
+      valorUsd: valor, origen, tasaPct: null, impuestoUsd: null,
+      nota: motivo === 'sin_tabla' ? 'Sin tabla de tasas configurada' : 'Sin tasa vigente para la fecha',
+    };
+  }
+  return {
+    valorUsd: valor,
+    origen,
+    tasaPct: vigencia.rate,
+    impuestoUsd: Math.round(valor * (vigencia.rate / 100) * 100) / 100,
+    nota: '',
+  };
+}
+
+/**
+ * El día de la operación, ya resuelto por SQL como `date`.
+ *
+ * node-pg entrega un `date` como Date a medianoche LOCAL, así que se leen los componentes locales.
+ * Usar `toISOString()` aquí devolvería el día en UTC y desfasaría las operaciones de la tarde.
+ */
+function diaDeReferencia(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === 'string') return v.slice(0, 10) || null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  if (Number.isNaN(d.getTime())) return null;
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const dia = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mes}-${dia}`;
+}
+
+/**
+ * Marca las filas que REPITEN una guía ya vista.
+ *
+ * Una fila del export no es una guía: es guía × partida de despacho × partida de factura. La misma
+ * guía aparece varias veces cuando viajó en dos camiones o cuando se le facturaron dos conceptos.
+ * El valor aduanal y el impuesto son propiedades de la GUÍA, así que se replicarían idénticos en
+ * cada repetición — y quien recibe el archivo selecciona la columna y suma, que es el primer acto
+ * reflejo frente a una columna de dinero. El total saldría multiplicado por un entero exacto, que
+ * es la peor clase de error: parece correcto.
+ *
+ * Escribir el número sólo en la primera aparición mantiene la autosuma correcta y deja dicho en la
+ * nota por qué la celda está vacía. El orden es el del reporte, así que la "primera" es estable.
+ */
+function marcarPrimeraFilaPorGuia(filas: Fila[]): Fila[] {
+  const vistas = new Set<string>();
+  return filas.map((r) => {
+    const g = r.guia ? String(r.guia) : null;
+    if (!g) return r;
+    if (vistas.has(g)) return { ...r, __guiaRepetida: true };
+    vistas.add(g);
+    return r;
+  });
 }
 
 /** Attach the lead-time metrics to a row. The formulas live in the shared, tested module. */
@@ -162,8 +306,9 @@ function num(v: unknown): number | '' {
 }
 
 /** The combined sheet: operational and financial columns, one row per guía. */
-function filaExport(r: Fila & { leadTimes: LeadTimes }): Record<string, unknown> {
+function filaExport(r: Fila & { leadTimes: LeadTimes }, vigencias: TasaVigencia[] | null): Record<string, unknown> {
   const lt = r.leadTimes;
+  const imp = estimadoDeFila(r, vigencias);
   return {
     MAWB: r.mawb ?? '',
     Guía: r.guia ?? '',
@@ -219,6 +364,15 @@ function filaExport(r: Fila & { leadTimes: LeadTimes }): Record<string, unknown>
     // one row is the whole reason to have a combined export at all (D18 keeps them as facts, not as
     // a computed margin, which would be a fourth place the same number could disagree with itself).
     'Costo de flete': num(r.costoFlete),
+    // Estimado de impuesto, guía por guía (pedido en la junta del 15-sep). Va junto al resto del
+    // dinero y NO se suma a nada: es informativo, el cálculo legal lo determina el agente aduanal.
+    // La columna "Nota del estimado" existe para que una celda vacía nunca se lea como "no paga":
+    // dice si la guía no fue al pedimento, si le faltó valor aduanal o si no había tasa vigente.
+    'Valor aduanal USD': imp.valorUsd ?? '',
+    'Origen de la tasa': imp.origen ?? '',
+    'Tasa aplicada %': imp.tasaPct ?? '',
+    'Impuesto estimado USD': imp.impuestoUsd ?? '',
+    'Nota del estimado': imp.nota,
     // Lead times, in the order the dashboard reads them.
     ...Object.fromEntries(METRICAS_LEAD_TIME.map((m) => [m.label, lt[m.id] ?? ''])),
   };
@@ -282,7 +436,10 @@ reportesOperativosRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const filtros = req.query as unknown as ReporteOperativoQuery;
-      const filas = (await cargarFilas(filtros)).map(conLeadTimes);
+      const [filas, vigencias] = await Promise.all([
+        cargarFilas(filtros).then((rs) => rs.map(conLeadTimes)),
+        cargarVigencias(),
+      ]);
       // Audit BEFORE send, same discipline as the PRD-01 exports: the access is durably logged
       // whether or not the download completes.
       await recordAudit({
@@ -293,7 +450,12 @@ reportesOperativosRouter.get(
         after: { role: req.user!.role, ...filtros, filas: filas.length },
         ip: req.ip,
       });
-      enviarLibro(res, filas.map(filaExport), 'Reporte operativo', 'Reporte_operativo.xlsx');
+      enviarLibro(
+        res,
+        marcarPrimeraFilaPorGuia(filas).map((r) => filaExport(r as Fila & { leadTimes: LeadTimes }, vigencias)),
+        'Reporte operativo',
+        'Reporte_operativo.xlsx',
+      );
     } catch (err) {
       next(err);
     }

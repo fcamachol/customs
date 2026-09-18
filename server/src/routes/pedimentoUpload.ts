@@ -266,6 +266,7 @@ pedimentoUploadRouter.post('/:id/pedimento-pdf', requireAuth, requireRole('admin
           tasaPedimentoPct: extracted.header.tasaImportacion
             ? Number(extracted.header.tasaImportacion)
             : null,
+          partidas: est.partidas,
         };
       }
       report.header = [

@@ -516,3 +516,41 @@ algo que todavía no tenemos.
 —la regla de no cruzar dos vitest contra la base de pruebas sigue viva y esta vez se respetó), y en
 raíz **723 / 54**. No se levantó la app contra una base con manifiestos sembrados: la señal se midió
 contra el fixture golden de 501 filas, que es el mismo insumo con el que se calibró el motor.
+
+### Addendum (2026-09-18) — por qué `npm audit fix` no sirve en este repo
+
+El check `npm audit (high/critical)` llevaba semanas en rojo en **todas** las ramas, incluidas `main`
+y `develop`. Nueve vulnerabilidades `high` entre raíz y `server/`: `browserslist`, `nanoid`,
+`postcss`, `undici`, `brace-expansion`, `multer`, `nodemailer`.
+
+GitHub recomienda `npm audit fix`. **En este repo ese comando no corre**: revienta con
+
+```
+npm error Cannot read properties of null (reading 'edgesOut')
+```
+
+El stack lo ubica en `#loadPeerSet` de arborist (`build-ideal-tree.js:1289`) resolviendo
+`node_modules/vitest` — un bug conocido de npm con sets de peer-deps profundos. Falla igual con
+`--package-lock-only`, así que no hay bandera que lo salve. La primera sospecha fue `xlsx`, que se
+instala desde un tarball de la CDN de SheetJS y suele confundir a arborist; el log la descarta.
+
+La vía que sí funciona (`npm install` normal no revienta, sólo `audit fix`):
+
+- **Deps directas** — se suben en `package.json`: `multer ^2.2.0 → ^2.4.0`,
+  `nodemailer ^9.0.5 → ^9.1.1`.
+- **Deps transitivas** — entran por `vite`/`vitest`, así que se fijan con `overrides`:
+  raíz `browserslist ^4.29.0`, `nanoid ^3.3.19`, `postcss ^8.5.28`, `undici ^7.29.1`;
+  `server/` `brace-expansion ^5.0.12`, `nanoid ^3.3.19`, `postcss ^8.5.28`.
+
+**Todas dentro del mismo major.** Se verificó una por una contra el registro antes de fijarlas:
+`nanoid` publica 3.3.19 (no hace falta saltar a 6.x), `undici` publica 7.29.1 (no hace falta 8.x) y
+`nodemailer` publica 9.1.1 (no hace falta 10.x). Saltar de major ahí habría sido cambiar la API de
+la que dependen el `mailer` y la carga de archivos, a cambio de nada.
+
+Quedan vulnerabilidades `moderate` y `low` (7 en raíz, 5 en `server/`) que el workflow no considera
+—corre con `--audit-level=high`— y que no se tocaron: subirlas exigía saltos de major.
+
+Verificado: `npm audit --audit-level=high` sale con **exit 0** en raíz y en `server/`; `tsc --noEmit`
+limpio en ambos; **1213/1213** en `server/` y **930/930** en raíz. `multer` y `nodemailer` no son
+adorno —los usan la carga de archivos y el envío de correo— así que el valor de esa corrida está en
+que confirma que el bump no cambió comportamiento, no sólo que compila.

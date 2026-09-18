@@ -78,8 +78,10 @@ That is the operator's one-shot deployment wipe; this endpoint is the in-app one
    vocabulary — read the comment in `cincel.ts` before attempting it, the reasons it was deferred
    are load-bearing.
 4. **Deferred frontend views** over APIs that already work: `PlaneacionView`, `DespachosView`,
-   `EntregasView`, `FacturacionView`, and lead-time tiles on `TorreControlView`. `src/nav.ts` and
-   `src/App.tsx` have no entries for them yet.
+   `EntregasView`, `FacturacionView`. `src/nav.ts` and `src/App.tsx` have no entries for them yet.
+   (Lead times SHIPPED — `LeadTimesView`, see the addendum below. It landed as its own section
+   rather than as tiles on `TorreControlView`: the torre is live state, this is a date-ranged
+   historical query with its own export, and a date filter inside the live board reads as a bug.)
 5. **Structurally blocked / deliberately absent, not backlog**: PA-09 (needs the consignee
    patente, which no artefact we receive declares — see `shared/operaciones/cotejo.ts` line ~21);
    #35 Aireon (email sent to FlightAware, waiting).
@@ -224,8 +226,8 @@ npm --prefix server test                      # server suite (needs local Postgr
 
 **Current baseline: ZERO failures in both suites** (backlog "#36" is closed, `f6c7fcf`). Measured
 fresh on 2026-09-18 (previous mark, 2026-08-10, was 75/791 root and 82/1047 server):
-- Root: `npx vitest run` → **80 files, 898 tests, 0 failures.**
-- Server: `npm --prefix server test` → **86 files, 1200 tests, 0 failures.**
+- Root: `npx vitest run` → **80 files, 900 tests, 0 failures.**
+- Server: `npm --prefix server test` → **87 files, 1211 tests, 0 failures.**
 
 The old "31 failing/5 files root, 3/1 server" baseline is **gone** — do not expect it and do not
 reintroduce it. A session that sees anything less than fully green owns a real regression, not a
@@ -390,3 +392,36 @@ only cures what has already been lost, it does not prevent losing more.
 4. Work in the house conventions, verify against baselines, commit atomically with a WHY
    message, push (mind the gh account switch), deploy via Coolify, verify `/api/health`,
    and when the pipeline changed, run the E2E demo runner against production.
+
+### Addendum (2026-09-18) — `LeadTimesView`: la pantalla que el punto 7 no tenía
+
+`shared/operaciones/leadTimes.ts` calculaba las once métricas desde agosto y
+`GET /api/reportes/lead-times` las servía agregadas, con su `.xlsx` al lado. Nada del frontend
+llamaba a `/api/reportes`: el punto 7 del cliente estaba construido y era invisible.
+
+`src/components/LeadTimesView.tsx` es esa vista. No agrega aritmética — importa
+`METRICAS_LEAD_TIME` y consume el resumen que el servidor ya calcula con la misma función que usa
+el export, para que pantalla y archivo no puedan discrepar. Filtros `desde`/`hasta`/`clientId`,
+exactamente `reporteOperativoQuery`; los vacíos se omiten en vez de viajar como `desde=`, que el
+servidor valida como fecha y contestaría 400.
+
+Lo que la pantalla tiene que respetar, y que las pruebas fijan porque son tres formas conocidas de
+mentir con un tablero:
+
+- **`null` se dibuja «—», nunca 0.** Un embarque sin POD firmado tiene lead time desconocido.
+- **El denominador se imprime bajo cada promedio.** "Tiempo en almacén 3h" sobre 3 de 90 guías es
+  una muestra; `muestras` viaja con el promedio desde el módulo y aquí se ve.
+- **Un intervalo negativo se muestra y se marca en ámbar.** Significa que dos marcas de tiempo se
+  contradicen — captura diferida, reloj de un dispositivo, hecho registrado fuera de orden.
+  Recortarlo a cero borra la única evidencia de que algo hay que arreglar.
+
+`rulesetVersion` se imprime junto al detalle, por la misma razón por la que el módulo lo estampa:
+una cifra que alguien fotografía hoy tiene que poder re-derivarse meses después.
+
+Visible para `admin`, `super_admin`, `capturista` y `autoridad` — el mismo conjunto que
+`rolesReporte` en el router, para que la sección no aparezca en el menú de quien recibiría un 403.
+`tramitador` sigue viendo sólo `ops_campo`.
+
+**Verificado con pruebas, no en navegador**: `npx tsc --noEmit` limpio y `npx vitest run` en 908
+pruebas (81 archivos), de las cuales 8 son de esta vista. No se levantó la app contra una base con
+operaciones sembradas.

@@ -1,7 +1,7 @@
-import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, Truck, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, FilePlus2, Activity, FileBarChart2, Search, Info, Settings, Gavel, Inbox, Radar, Smartphone, Truck, Timer, type LucideIcon } from 'lucide-react';
 
 export type Section =
-  | 'dashboard' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
+  | 'dashboard' | 'lead_times' | 'registro' | 'seguimiento' | 'reporte' | 'consulta'
   | 'ops_torre' | 'ops_prealertas' | 'ops_campo' | 'ops_traza'
   | 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' | 'cfg_proveedores' | 'cfg_rfcs' | 'cfg_empresa' | 'cfg_tasa' | 'cfg_entidades'
   | 'autoridad' | 'acerca';
@@ -10,6 +10,7 @@ export type ConfigSection = 'cfg_motor' | 'cfg_clientes' | 'cfg_transportistas' 
 
 export const SECTION_META: Record<Section, { title: string; subtitle: string }> = {
   dashboard:    { title: 'Dashboard', subtitle: 'Desempeño operativo y análisis de riesgo en tiempo real.' },
+  lead_times:   { title: 'Lead times', subtitle: 'Almacén, despacho, tránsito y última milla, calculados sobre marcas de tiempo que nadie puede editar.' },
   registro:     { title: 'Realizar Registro', subtitle: 'Carga un manifiesto y ejecuta el análisis de riesgo T1.' },
   seguimiento:  { title: 'Seguimiento', subtitle: 'Captura de pedimento e importación del documento.' },
   reporte:      { title: 'Reporte General', subtitle: 'Datos de remitente y plataforma, y generación del reporte.' },
@@ -45,7 +46,10 @@ export function isParent(item: NavItem): item is NavParent {
 }
 
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  { label: 'Resumen', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+  { label: 'Resumen', items: [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'lead_times', label: 'Lead times', icon: Timer },
+  ] },
   { label: 'Operación', items: [
     { id: 'registro', label: 'Realizar Registro', icon: FilePlus2 },
     { id: 'seguimiento', label: 'Seguimiento', icon: Activity },
@@ -92,9 +96,9 @@ export function visibleSectionsFor(role: string): Section[] {
   if (role === 'tramitador') return ['ops_campo'];
   // Trazabilidad is read-only and is precisely the trace the authority asks for ("¿con quién salió
   // esa guía?"), so autoridad sees it too.
-  if (role === 'autoridad') return ['dashboard', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_traza', 'autoridad', 'acerca'];
+  if (role === 'autoridad') return ['dashboard', 'lead_times', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_traza', 'autoridad', 'acerca'];
   if (role === 'admin' || role === 'super_admin') {
-    return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
+    return ['dashboard', 'lead_times', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', ...CONFIG_SECTIONS, 'autoridad', 'acerca'];
   }
-  return ['dashboard', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', 'acerca'];
+  return ['dashboard', 'lead_times', 'registro', 'seguimiento', 'reporte', 'consulta', 'ops_torre', 'ops_prealertas', 'ops_campo', 'ops_traza', 'acerca'];
 }

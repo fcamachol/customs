@@ -119,6 +119,17 @@ pedimentoRouter.post(
         }),
       ]);
 
+      // `upsertImportador` refuses an RFC that fails the check digit rather than inserting a
+      // phantom row (see its doc comment). Fail here, naming the offending value, so the pedimento
+      // gets corrected instead of silently producing a duplicate importador.
+      if (!importer) {
+        res.status(422).json({
+          error: `RFC del importador inválido (${importerRfc}): el dígito verificador no coincide. `
+            + 'Corrige el dato en el pedimento antes de prevalidar.',
+        });
+        return;
+      }
+
       const missing = ['tipoCambio', 'claveAduanaEntrada', 'claveAduanaDespacho', 'fechaEntrada', 'paymentDate']
         .filter((k) => d[k] == null || d[k] === '');
       // A zero (or negative) tipoCambio is never valid — treat it the same as missing.
@@ -145,6 +156,16 @@ pedimentoRouter.post(
 
       const ped = buildPedimento(subset.map((s) => s.data), opts);
       const prevalidation = prevalidatePedimento(ped);
+
+      // An agentRfc that arrived on the pedimento but was dropped by the upsert (bad check digit)
+      // would otherwise vanish silently: the row just looks incomplete. Name the rejected value so
+      // the operator knows what to correct in Configuración instead of guessing.
+      const rawAgentRfc = strOrNull(d.agentRfc);
+      if (rawAgentRfc && agent && !agent.agentRfc) {
+        prevalidation.warnings.push(
+          `RFC del agente en el pedimento (${rawAgentRfc}) descartado: dígito verificador inválido.`,
+        );
+      }
 
       // Surface unverified entities as prevalidation warnings naming the entity.
       if (agent && !agent.verified) prevalidation.warnings.push(`Agente aduanal (patente ${agent.patente}) sin verificar.`);

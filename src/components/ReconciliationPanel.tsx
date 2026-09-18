@@ -109,6 +109,49 @@ export function ReconciliationPanel({ report }: { report: ReconciliationReport |
                 {e.sinEstimar} partida(s) sin estimar por falta de tasa vigente — el total no las incluye.
               </p>
             )}
+
+            {/* Desglose guía por guía. El total de arriba dice CUÁNTO; esto dice DE DÓNDE SALE, que
+                es lo que permite verificar el estimado contra el pedimento partida por partida. Las
+                guías sin tasa vigente muestran su motivo en lugar de un cero, por la misma razón que
+                el total las excluye: un cero se confunde con "no paga". */}
+            {e.partidas && e.partidas.length > 0 && (
+              <details className="mt-3 group">
+                <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700">
+                  <span className="group-open:hidden">Ver desglose por guía ({e.partidas.length})</span>
+                  <span className="hidden group-open:inline">Ocultar desglose por guía</span>
+                </summary>
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        <th className="py-1.5 pr-3 text-left font-bold">Guía</th>
+                        <th className="py-1.5 pr-3 text-left font-bold">Origen</th>
+                        <th className="py-1.5 pr-3 text-right font-bold">Valor USD</th>
+                        <th className="py-1.5 pr-3 text-right font-bold">Tasa</th>
+                        <th className="py-1.5 text-right font-bold">Impuesto USD</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {e.partidas.map((p) => (
+                        <tr key={p.guia} className="border-b border-slate-100 last:border-0">
+                          <td className="py-1.5 pr-3 font-mono text-slate-700">{p.guia}</td>
+                          <td className="py-1.5 pr-3 text-slate-500">{p.origen}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-slate-700">{money(p.valorUsd)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-slate-500">
+                            {p.tasaPct == null ? '—' : `${p.tasaPct}%`}
+                          </td>
+                          <td className="py-1.5 text-right font-mono tabular-nums">
+                            {p.impuestoUsd == null
+                              ? <span className="text-amber-700" title={p.motivo}>sin estimar</span>
+                              : <span className="font-semibold text-slate-900">{money(p.impuestoUsd)}</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
           </Card>
         );
       })()}

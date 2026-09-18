@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ReconciliationPanel } from './ReconciliationPanel';
 import type { ReconciliationReport } from '../../shared/types/reports';
 
@@ -94,6 +94,60 @@ describe('ReconciliationPanel', () => {
     };
     render(<ReconciliationPanel report={conDiferencia} />);
     expect(screen.getByText(/Verificar cuál corresponde/i)).toBeTruthy();
+  });
+
+  // El total responde "cuánto"; el desglose responde "de dónde sale". Sin él, la advertencia de
+  // tasa discrepante no se puede verificar contra el pedimento partida por partida.
+  it('muestra el desglose por guía con valor, tasa e impuesto de cada una', () => {
+    const conDesglose = {
+      ...report,
+      estimadoImpuesto: {
+        totalImpuestoUsd: 33.5, totalValorUsd: 100, sinEstimar: 0,
+        tasasUsadas: [{ origen: 'GENERAL' as const, tasaPct: 33.5, desde: '2026-01-01' }],
+        tasaPedimentoPct: 33.5,
+        partidas: [
+          { guia: 'GUIA-001', valorUsd: 60, origen: 'GENERAL' as const, tasaPct: 33.5, impuestoUsd: 20.1 },
+          { guia: 'GUIA-002', valorUsd: 40, origen: 'TMEC' as const, tasaPct: 0, impuestoUsd: 0 },
+        ],
+      },
+    };
+    render(<ReconciliationPanel report={conDesglose} />);
+    fireEvent.click(screen.getByText(/Ver desglose por guía \(2\)/i));
+    expect(screen.getByText('TMEC')).toBeTruthy();
+    expect(screen.getByText('20.10')).toBeTruthy();
+  });
+
+  // Un cero se lee como "no paga". Una partida sin tasa vigente tiene que decir que no se estimó.
+  it('marca "sin estimar" en vez de cero cuando la guía no tuvo tasa vigente', () => {
+    const sinTasa = {
+      ...report,
+      estimadoImpuesto: {
+        totalImpuestoUsd: 0, totalValorUsd: 50, sinEstimar: 1,
+        tasasUsadas: [],
+        tasaPedimentoPct: null,
+        partidas: [
+          { guia: 'GUIA-009', valorUsd: 50, origen: 'GENERAL' as const, tasaPct: null, impuestoUsd: null, motivo: 'sin_vigencia' },
+        ],
+      },
+    };
+    render(<ReconciliationPanel report={sinTasa} />);
+    fireEvent.click(screen.getByText(/Ver desglose por guía \(1\)/i));
+    // El motivo viaja como tooltip de la celda; "sin estimar" a secas también aparece en el aviso
+    // agregado, así que el aserto apunta a la celda por su title para no confundir uno con otro.
+    expect(screen.getByTitle('sin_vigencia').textContent).toBe('sin estimar');
+  });
+
+  it('no muestra el desglose cuando no hay partidas', () => {
+    const sinPartidas = {
+      ...report,
+      estimadoImpuesto: {
+        totalImpuestoUsd: 33.5, totalValorUsd: 100, sinEstimar: 0,
+        tasasUsadas: [{ origen: 'GENERAL' as const, tasaPct: 33.5, desde: '2026-01-01' }],
+        tasaPedimentoPct: 33.5,
+      },
+    };
+    render(<ReconciliationPanel report={sinPartidas} />);
+    expect(screen.queryByText(/Ver desglose por guía/i)).toBeNull();
   });
 
   it('muestra la validación de montos manifiesto vs pedimento', () => {

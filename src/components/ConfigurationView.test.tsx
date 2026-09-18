@@ -43,6 +43,18 @@ describe('ConfigurationView', () => {
     expect(screen.getByText(/Parámetros de validación/)).toBeTruthy();
     expect(screen.getByText(/Artículos prohibidos/)).toBeTruthy();
     expect(screen.getByText(/Marcas de piratería/)).toBeTruthy();
+    expect(screen.getByText(/Descripciones genéricas/)).toBeTruthy();
+  });
+
+  it('el editor de descripciones genéricas avisa que REEMPLAZA la lista de fábrica', () => {
+    // No es un matiz de copy: quien escriba tres palabras aquí creyendo que las agrega a la lista
+    // del motor apagaría en silencio las ~90 que trae de fábrica.
+    render(
+      <Wrapper>
+        <ConfigurationView domain="cfg_motor" onToast={() => {}} />
+      </Wrapper>,
+    );
+    expect(screen.getByText(/reemplaza/i)).toBeTruthy();
   });
 
   it('renders Clientes on its own domain pane', () => {

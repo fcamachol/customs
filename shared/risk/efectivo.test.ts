@@ -78,9 +78,13 @@ describe('hallazgoHash', () => {
     expect(hallazgoHash(r)).not.toBe(hallazgoHash(razon({ signalId: 'cantidad', evidence: { id: 'ABC' } })));
   });
 
-  it('las nueve señales tienen criterio de huella declarado', () => {
+  it('las diez señales tienen criterio de huella declarado', () => {
+    // La lista es literal a propósito: una señal nueva sin entrada en HUELLA_EVIDENCIA hashearía
+    // con proyección vacía, o sea que TODOS sus hallazgos compartirían huella y una sola
+    // disposición humana taparía en silencio a los demás.
     expect(Object.keys(HUELLA_EVIDENCIA).sort()).toEqual(
-      ['agregado', 'bbdd', 'cantidad', 'denied_party', 'direcciones', 'id', 'monto', 'pirateria', 'prohibidos'],
+      ['agregado', 'bbdd', 'cantidad', 'denied_party', 'descripcion_generica', 'direcciones',
+       'id', 'monto', 'pirateria', 'prohibidos'],
     );
   });
 });
@@ -155,7 +159,10 @@ describe('evaluarDisposiciones', () => {
 describe('colorEfectivo', () => {
   it('sin supresiones devuelve exactamente lo que dijo el motor', () => {
     const reasons = [razon({ signalId: 'cantidad', points: 15 }), razon({ signalId: 'monto', points: 20 })];
-    expect(colorEfectivo(reasons, [], opts)).toEqual({ score: 10, band: 'amarillo' });
+    // 35 pts crudos sobre maxPoints=373 → 9. Era 10 con maxPoints=348: el score se movió porque
+    // cambió el denominador, no porque cambiara el juicio. La banda, que es lo que el operador
+    // lee, sigue siendo amarillo — para eso se bajaron los cortes junto con el peso nuevo.
+    expect(colorEfectivo(reasons, [], opts)).toEqual({ score: 9, band: 'amarillo' });
   });
 
   it('suprimir baja la banda sin tocar nada del motor', () => {

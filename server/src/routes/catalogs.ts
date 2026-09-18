@@ -429,17 +429,17 @@ catalogsRouter.delete(
 
 // ─── Config endpoints ───────────────────────────────────────────────────────
 
-const ALLOWED_CONFIG_KEYS = new Set([
-  'prohibited',
-  'piracy_brands',
-  'branding',
-  'validation_params',
-  'denied_parties',
-  'tasa_vigencias',        // §10 — parametrizable tasa-global vigencias (super_admin only to edit)
-  'pedimento_scan_policy', // RF-08/RF-10 — PDF/QR scan sensitivity policy
-  'importer_of_record',   // Phase 2 entity master — stable importer of record (super_admin only)
-  'customs_agent',         // Phase 2 entity master — stable customs agent (super_admin only)
-]);
+// La lista de llaves permitidas NO vive aquí: vive en `ALLOWED_CONFIG_KEYS` de
+// `server/src/validation/schemas.ts`, donde `configKeyParam` la convierte en un `z.enum` y el
+// middleware `validate` rechaza con 400 cualquier otra ANTES de llegar a estos handlers.
+//
+// Aquí había una segunda copia de la misma lista, en forma de `Set`, que nadie consultaba: ningún
+// `.has()` la leía. Servía sólo para engañar — agregarle una llave y esperar que funcionara da un
+// 400 desde el Zod, y el rastro parece correcto. Se borró en vez de sincronizarse, porque dos
+// listas que deben coincidir y sólo una manda es una trampa, no una redundancia.
+//
+// Para habilitar una llave nueva: agrégala a `ALLOWED_CONFIG_KEYS` en schemas.ts, y si sólo debe
+// editarla un super_admin, también a `SUPER_ADMIN_CONFIG_KEYS` de abajo.
 
 // §10: editing tasa-global vigencias is restricted to super_admin (everything else is admin).
 // F18: denied_parties (sanctions list) is also super_admin-only to prevent tampering.

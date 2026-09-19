@@ -1,5 +1,6 @@
 import type { Shipment } from '../types/shipment';
 import { gradeSignals, entityKey, norm, type ReasonCode, type EntityContext } from './signals';
+import { indexarClasificacion } from './clasificacion';
 import { scoreRow, type Band } from './scorecard';
 import { RULESET, resolveThresholds, resolveWeights, resolveBands, type Thresholds, type Weights, type Bands } from './ruleset';
 import { rulesetHash } from './hash';
@@ -191,6 +192,8 @@ export function scoreManifest(
     piracyBrands: options?.piracyBrands,
     prohibitedKeywords: options?.prohibitedKeywords,
     terminosGenericos: options?.terminosGenericos,
+    // PASO 1 sobre el manifiesto completo: una fila sola nunca se contradice consigo misma.
+    fraccionesPorMercancia: indexarClasificacion(shipments).fraccionesPorMercancia,
     deniedParties: options?.deniedParties,
     // F14: nameToken = fuzzy-canonical + base tokenizer (for ID-less consignees only).
     // nameTokenBase = base tokenizer only (for ID-keyed consignees — no fuzzy canonical).

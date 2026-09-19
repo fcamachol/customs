@@ -554,3 +554,59 @@ Verificado: `npm audit --audit-level=high` sale con **exit 0** en raíz y en `se
 limpio en ambos; **1213/1213** en `server/` y **930/930** en raíz. `multer` y `nodemailer` no son
 adorno —los usan la carga de archivos y el envío de correo— así que el valor de esa corrida está en
 que confirma que el bump no cambió comportamiento, no sólo que compila.
+
+### Addendum (2026-09-18) — `clasificacion_inconsistente`: la segunda señal del análisis competitivo
+
+Sabueso evalúa **"¿Permite la clasificación correcta?"** como columna propia. Contestar eso de
+verdad —si la descripción alcanza para asignar LA fracción correcta— exige un catálogo TIGIE al día,
+que es compromiso permanente y no una feature. Ésta es la parte de la pregunta que sí se puede
+contestar sin catálogo, y además la única que un auditor puede verificar solo:
+
+> si la misma mercancía aparece en el mismo manifiesto bajo dos fracciones distintas,
+> al menos una de las dos está mal, sin necesidad de saber cuál.
+
+Es una **contradicción interna**, no una opinión sobre la clasificación. Por eso no depende de fuente
+externa y por eso se sostiene meses después: la evidencia es el propio manifiesto.
+
+**Hallazgo de fondo:** `hsCode` se capturaba, se validaba el formato (`validateManifest` avisa si no
+son 8 o 10 dígitos) y después **no lo usaba ni una línea del motor de riesgo**. Mismo patrón que la
+descripción: dato capturado y descartado.
+
+**La regla obvia se midió y se descartó.** Marcar la fracción "los demás" (las que terminan en 99 o
+90) suena bien y marca **131 de las 501** filas del fixture — el 26%. Una señal que barre un cuarto
+del manifiesto no dirige la revisión a ningún lado. La contradicción interna marca **6** (1.2%), y
+las seis son la misma mercancía: `"funda de plástico para teléfono móvil"` declarada bajo
+**39264000** (artículos de adorno) y **39269099** (los demás manufacturas de plástico).
+
+Decisiones que las pruebas fijan:
+
+- **Se compara a 8 dígitos, no a 10.** Los últimos dos son el NICO, que desagrega *dentro* de la
+  misma fracción. Comparar a 10 inventaría hallazgos donde no hay desacuerdo de clasificación.
+- **La clave de mercancía es conservadora**: acentos, mayúsculas, espacios y el sufijo `* n`, nada
+  más. No reduce a tokens ni agrupa sinónimos. Agrupar de más no da una señal más sensible: da una
+  acusación falsa —"clasificaste igual dos cosas distintas"— que es lo que destruye la confianza en
+  el semáforo.
+- **Se marcan las DOS caras**, no sólo la fracción minoritaria. El motor no sabe cuál es la
+  correcta, y señalar a la minoría sería inventar esa respuesta; a veces la mayoría es la que está
+  mal. Quien revisa necesita ver las dos para decidir.
+- **Sin `forcesBand`**, por lo mismo: de dos líneas contradictorias al menos una está mal, pero al
+  menos una está BIEN. Forzar rojo condenaría también a la correcta.
+- En `HUELLA_EVIDENCIA` la proyección es `['clave', 'fracciones']`. `fraccionDeEstaFila` queda
+  FUERA a propósito para que las dos caras compartan huella — si no, disponer sobre una dejaría viva
+  la otra y el humano afirmaría dos veces lo mismo.
+
+**Un error mío que atrapó la suite, y vale la pena que quede escrito.** Al recalibrar bandé `rojo`
+de 10 a 9 por proporción pura (el umbral crudo 37.3 es 9.37% de los nuevos 398 puntos). Estaba mal:
+**el score se redondea antes de comparar**, así que una fila de 35 puntos crudos —`cantidad` 15 +
+`monto` 20, una combinación que existe desde siempre— puntúa 35/398 = 8.79, redondea a 9, y con el
+corte en 9 habría saltado de amarillo a **rojo**. La aritmética proporcional aplicada sin mirar el
+redondeo escalaba en silencio una combinación vieja. Lo detectó el aserto de `colorEfectivo` en
+`efectivo.test.ts`; `rojo` se quedó en **10**. Si alguien vuelve a mover pesos, ése es el test que
+avisa, y ahora lleva el comentario que lo explica.
+
+Distribución sobre el golden, 2026-09a → 2026-09b: verde 87.62% → 86.43%, amarillo 5.59% → 6.39%,
+rojo 6.79% → 7.19%. Se movieron **exactamente las 6 filas marcadas** y ninguna otra: 3 a amarillo por
+la señal sola, 3 a rojo porque además traen `bbdd` (mismo consignatario importando repetido *y*
+clasificando de dos formas — una combinación que merece rojo).
+
+`RULESET.version` → `2026-09b`. Cinco guardas literales actualizadas con su razón anotada.

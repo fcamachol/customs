@@ -239,3 +239,93 @@ describe('per-client header mappings applied at upload', () => {
     expect(second.body.counts.error).toBe(0);
   });
 });
+
+describe('GET /api/manifests/:id/rrna — regulaciones no arancelarias', () => {
+  /** Siembra un manifiesto con sus shipments ya promovidos, sin pasar por el staging. */
+  async function sembrar(datos: Array<Record<string, unknown>>): Promise<string> {
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO manifests (mawb_reference, client_name) VALUES ('369-RRNA','Cliente A') RETURNING id`,
+    );
+    const manifestId = rows[0].id;
+    for (const d of datos) {
+      await query(
+        `INSERT INTO shipments (id, manifest_id, data) VALUES (gen_random_uuid(), $1, $2)`,
+        [manifestId, JSON.stringify(d)],
+      );
+    }
+    return manifestId;
+  }
+
+  const guia = (over: Record<string, unknown>) => ({
+    guideId: 'G1', description: 'Camisa de algodon', hsCode: '61091000',
+    quantity: 1, customsValueUsd: 100, currency: 'USD', originCountry: 'CN',
+    consignee: { name: 'Ana', rfc: 'PERJ800101AA8' }, ...over,
+  });
+
+  it('marca la guía cuya descripción toca una categoría, y dice qué término la disparó', async () => {
+    const id = await sembrar([guia({ guideId: 'P1', description: 'Pulverizador de perfume' })]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.status).toBe(200);
+    expect(r.body.marcadas).toBe(1);
+    const [fila] = r.body.filas;
+    expect(fila.guia).toBe('P1');
+    expect(fila.coincidencias[0].categoria).toBe('COFEPRIS_COSMETICS');
+    expect(fila.coincidencias[0].termino).toBe('perfume');
+    expect(fila.coincidencias[0].autoridad).toBe('COFEPRIS');
+  });
+
+  it('una guía limpia no aparece: la lista es de revisión, no un volcado del manifiesto', async () => {
+    const id = await sembrar([guia({}), guia({ guideId: 'P2', description: 'Pulverizador de perfume' })]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.body.analizadas).toBe(2);
+    expect(r.body.marcadas).toBe(1);
+    expect(r.body.filas.map((f: { guia: string }) => f.guia)).toEqual(['P2']);
+  });
+
+  it('la nota de RRNA que escribió el remitente se muestra aunque no haya coincidencia', async () => {
+    // `rrnaNote` se venía parseando del manifiesto y nunca se mostraba en ningún lado.
+    const id = await sembrar([guia({ guideId: 'P3', rrnaNote: 'Permiso COFEPRIS 123' })]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.body.marcadas).toBe(1);
+    expect(r.body.filas[0].rrnaNoteDeclarada).toBe('Permiso COFEPRIS 123');
+    expect(r.body.filas[0].coincidencias).toEqual([]);
+  });
+
+  it('un valor declarado de cero dispara ZERO_VALUE (RGCE 3.7.3)', async () => {
+    const id = await sembrar([guia({ guideId: 'P4', customsValueUsd: 0 })]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.body.filas[0].coincidencias.map((c: { categoria: string }) => c.categoria)).toContain('ZERO_VALUE');
+  });
+
+  it('trae el conteo por categoría y el aviso de que esto es indicio, no determinación', async () => {
+    const id = await sembrar([
+      guia({ guideId: 'P5', description: 'Pulverizador de perfume' }),
+      guia({ guideId: 'P6', description: 'crema para la cara' }),
+    ]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.body.porCategoria.COFEPRIS_COSMETICS).toBe(2);
+    expect(r.body.aviso).toMatch(/no son determinaciones|indicios para revisar/i);
+  });
+
+  it('el catálogo se puede sustituir por configuración, sin desplegar', async () => {
+    // El de fábrica es por palabra clave y hace ruido conocido (`chaleco` cae en armas). Esta
+    // puerta existe para que el cliente lo afine sin tocar código.
+    const id = await sembrar([guia({ guideId: 'P7', description: 'Pulverizador de perfume' })]);
+    await query(`INSERT INTO config (key, value) VALUES ('rrna_patrones', $1)`,
+      [JSON.stringify({ SEDENA_WEAPONS: ['bazooka'] })]);
+    const r = await request(app).get(`/api/manifests/${id}/rrna`).set('Authorization', `Bearer ${token}`);
+    expect(r.body.marcadas).toBe(0);
+  });
+
+  it('un manifiesto que no existe es 404, no una lista vacía', async () => {
+    const r = await request(app)
+      .get('/api/manifests/00000000-0000-0000-0000-000000000000/rrna')
+      .set('Authorization', `Bearer ${token}`);
+    expect(r.status).toBe(404);
+  });
+
+  it('sin token es 401', async () => {
+    const id = await sembrar([guia({})]);
+    expect((await request(app).get(`/api/manifests/${id}/rrna`)).status).toBe(401);
+  });
+});

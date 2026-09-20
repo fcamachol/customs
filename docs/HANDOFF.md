@@ -663,3 +663,125 @@ cadenas —`queryString` para el archivo, `queryReporte` para el tablero— y el
 El catálogo de cortes viaja en la respuesta (`cortes`), por la misma razón que `metricas`: la
 pantalla no mantiene una segunda lista sincronizada a mano. El `CORTES_FALLBACK` del componente sirve
 sólo para el primer render, antes de que llegue la respuesta.
+
+### Addendum (2026-09-20) — C4: el catálogo de RRNA que llevaba meses sin que nadie lo leyera
+
+`src/constants/rrnaCategories.ts` contenía **diez categorías de regulaciones no arancelarias**
+—COFEPRIS, SENASICA, SEMARNAT, CITES, SEDENA— cada una con su autoridad, su descripción y su
+fundamento (RGCE 3.7.5-E: esa mercancía debe despacharse por pedimento A1 con agente y padrón, no
+por T1), más listas de palabras clave. **Ningún archivo lo importaba.** Y `Shipment.rrnaNote` —lo
+que el remitente escribe en la columna de RRNA del manifiesto— se parseaba y no se mostraba en
+ninguna pantalla.
+
+Es el **cuarto** caso del mismo patrón en este repo: la descripción (señal `descripcion_generica`),
+la fracción (`clasificacion_inconsistente`), la clave de aduana (ver abajo) y ahora esto. Vale la
+pena decirlo en voz alta: cuando falte una capacidad, conviene buscar si ya está construida antes de
+construirla.
+
+**Qué se hizo.** El catálogo se movió intacto a `shared/rrna/catalogo.ts` para que el servidor lo
+alcance (vivía bajo `src/`, que es sólo el front); `src/constants/rrnaCategories.ts` quedó como
+re-export y `src/types/t1.ts` dejó de declarar su propia copia de `RRNACategory` — había dos listas
+de categorías regulatorias que nadie garantizaba iguales. `shared/rrna/evaluar.ts` es el evaluador
+que faltaba, y `GET /api/manifests/:id/rrna` + `PanelRrna` lo ponen a la vista.
+
+**NO alimenta el semáforo, y es una decisión medida, no una omisión.** Sobre el manifiesto golden de
+501 filas el catálogo marca 26 (5.2%), y cerca de la mitad son falsos positivos previsibles de una
+lista por palabra clave:
+
+| Descripción | Categoría | Veredicto |
+|---|---|---|
+| "Pistola de limpieza para pulverización" | SEDENA_WEAPONS | falso positivo |
+| "Flor de imitación de plástico" | SENASICA_AGRICULTURAL | falso positivo |
+| "Cuchara de café de acero inoxidable" | COFEPRIS_FOOD | falso positivo |
+| "Set de regalo de reloj de acero" | GENERIC_DESCRIPTION | falso positivo |
+| "belleza de lápiz labial" | COFEPRIS_COSMETICS | acierto |
+| "Pulverizador de perfume" | COFEPRIS_COSMETICS | acierto |
+
+Meter eso al score obligaría a recalibrar bandas y, peor, convertiría una heurística de texto en una
+banda roja. Los falsos positivos están **fijados en pruebas con nombre**, para que nadie los
+descubra en producción creyéndolos hallazgos y para que afinar el catálogo muestre qué cambió.
+
+Decisiones que las pruebas fijan:
+
+- **Coincidencia por palabra completa, no por subcadena.** El catálogo trae patrones de tres letras
+  (`'te '`, `'gel'`, `'oil'`); como subcadena, `te` pega en "teléfono", "textil" y "terminal". El
+  precio es recall ("chocolates" no pega con "chocolate") y es el lado correcto en el que
+  equivocarse: una lista de triaje que grita en todo deja de leerse.
+- **Una coincidencia por categoría**, no una por palabra: marcar COFEPRIS tres veces porque dice
+  "crema", "gel" y "jabón" no agrega información.
+- **Cada coincidencia lleva el término que la disparó.** Es lo que permite descartar un falso
+  positivo de un vistazo en vez de abriendo la guía — la diferencia entre una columna que se usa y
+  una que se ignora.
+- **`ZERO_VALUE` es numérico**, no de texto (su lista de patrones está vacía en el catálogo a
+  propósito). Y **sin valor declarado no dispara**: un dato faltante no es un cero, y confundirlos
+  inventaría la infracción de la RGCE 3.7.3 sobre una guía que sólo está incompleta.
+- El panel **no se dibuja si no hay nada que revisar**. Un panel que dice "0 hallazgos" en cada
+  manifiesto entrena a saltárselo, y entonces no sirve el día que sí trae algo.
+- Los colores son neutros y arranca cerrado: pintarlo de rojo sería un semáforo paralelo con
+  autoridad que esta heurística no tiene.
+
+Catálogo sustituible por config `rrna_patrones` (en la allowlist de `schemas.ts`), para que el
+cliente quite los términos ruidosos (`chaleco`, `flor`) sin desplegar. Ausente = el de fábrica;
+`loadRrnaPatrones` devuelve `null` y no `{}` justamente para que un override vacío no apague la
+revisión entera en silencio.
+
+### C2 (aduana exclusiva) — por qué NO se hizo y qué habría que mover
+
+Se empezó y se paró al encontrar que **el dato no existe donde hacía falta**. Tres hechos:
+
+1. **El manifiesto no trae la aduana.** Cero de 501 filas del golden. Las columnas del remitente no
+   la incluyen, así que la señal no puede vivir en el motor de riesgo: la fila no sabe por dónde
+   entró.
+2. **En el régimen T1 las partidas del pedimento van bajo fracción genérica 9901/9902**
+   (`GENERIC_FRACTION_RE`), no la fracción real. Un catálogo `fracción → aduanas permitidas` no casa
+   contra el pedimento directamente.
+3. **La clave de aduana se extrae del PDF y no se persiste.** `ExtractedPedimento.header` la trae
+   como `customsEntryCode`/`customsClearanceCode`, pero `prefillEntries` en `pedimentoUpload.ts` NO
+   las guarda. Y ojo con la trampa de nombres: `import_data.claveAduanaEntrada` **no** contiene la
+   clave de aduana sino el **medio de transporte** (Apéndice 3) — lo dice un comentario explícito
+   ahí mismo, por observación del cliente.
+
+Para hacerlo habría que mover, en este orden:
+
+- **Persistir la clave de aduana** en `pedimentos` (columna propia, o dentro de `import_data` bajo
+  una llave que no se confunda con la de medio de transporte). Esto toca la ruta de ingesta del
+  pedimento, que es núcleo.
+- **Cruzar** `operacion_guias.pedimento_id` → pedimento (aduana) con el `hsCode` real del shipment.
+  El puente ya existe y se usa en el reporte operativo.
+- **Un catálogo `fracción → aduanas permitidas`** que alguien tenga que mantener al día. Si nadie lo
+  carga, el mecanismo nace vacío y no marca nada nunca.
+
+### C5 (estado "previo") — la propuesta, sin implementar
+
+El modelo tiene **tres ejes independientes** (`shared/operaciones/estados.ts`, PRD-02 §8.4): `ETAPAS`
+(físico, monótono), `ESTADOS_DOCUMENTALES` y `ESTADOS_PLANEACION`. Mapeando lo que Sabueso modela y
+nosotros no, el hueco resulta **más angosto de lo que parecía** y casi todo cae en un solo eje:
+
+| Estado suyo | Dónde cae | ¿Falta? |
+|---|---|---|
+| Confronta | documental | **sí** |
+| Solicitud de pago de revalidación | documental | **sí** |
+| Revalidación de MAWB | documental | **sí** |
+| Previo (`Previo_HX` en sus adjuntos) | documental | **sí** |
+| Pedimentos elaborados | documental | no — `pedimento_generado` |
+| Rectificaciones numeradas | — | necesita un contador, no un estado |
+| Salida programada | planeación | no — `planeada` |
+| Colocación de unidad | planeación | no — `asignada` |
+| Entrega en destino | etapa física | no — `entregado` |
+
+**El "previo" es un estado DOCUMENTAL, no físico.** Ponerlo en `ETAPAS` sería el error: `ETAPAS` es
+monótona y describe dónde está la carga, y un previo no mueve la carga.
+
+Qué habría que mover, y por qué es núcleo:
+
+1. `ESTADOS_DOCUMENTALES` gana tres o cuatro valores (`confronta_ok`, `revalidacion_solicitada`,
+   `revalidado`, `previo_realizado`).
+2. **Una migración que empareje el CHECK de la base.** Por convención de la casa las migraciones
+   escriben los valores en línea, y `test/migrations/opsEstadosParity.test.ts` vigila el par. Cambiar
+   el arreglo sin la migración rompe ese test — a propósito.
+3. `TIPOS_EVENTO` gana los eventos correspondientes. Cuidado: el archivo advierte que
+   `operacion_eventos.tipo` **no tiene CHECK**, y que así fue como cuatro tipos `REQUERIMIENTO_*`
+   se escribieron a la bitácora durante meses sin aparecer en la lista.
+4. Decidir, para cada estado nuevo, si **bloquea o permite** la planeación (`replan.ts` lee el eje
+   documental). Ésa es la parte que no se puede adivinar y por la que el análisis decía
+   "diseñar con Luis".

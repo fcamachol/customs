@@ -171,3 +171,104 @@ export function resumirLeadTimes(filas: LeadTimes[]): Record<MetricaLeadTime, Re
   }
   return out;
 }
+
+// ─── Cortes de periodo y comparativo anual ──────────────────────────────────
+//
+// Su "CC Report" corta por mes, semana, día y prefijo; su "Informative Volumes" compara volúmenes
+// año contra año. Hasta aquí nuestro resumen era UNO solo sobre todo el rango filtrado, que
+// contesta "cómo vamos" pero no "vamos mejor o peor que antes" — y la segunda es la pregunta que
+// un cliente hace en la junta.
+
+import { cubeta, partirPeriodo, PERIODO_SIN_FECHA, type Corte } from './periodos';
+
+export interface CubetaLeadTime {
+  /** Etiqueta ordenable: `2026-09-18`, `2026-W38`, `2026-09`, `2026`, o `sin-fecha`. */
+  periodo: string;
+  /** Volumen: cuántas filas cayeron en la cubeta. Es un conteo, nunca un promedio. */
+  operaciones: number;
+  resumen: Record<MetricaLeadTime, ResumenMetrica>;
+}
+
+/**
+ * Agrupa por periodo y resume cada cubeta.
+ *
+ * `ancla` es el instante que decide a qué periodo pertenece la fila. Se pide explícito en vez de
+ * leerlo de `LeadTimes` porque `LeadTimes` son DURACIONES, no momentos: una fila sabe que el
+ * almacén tardó 214 minutos, no cuándo. El llamador es quien tiene el arribo del vuelo.
+ *
+ * Las filas sin ancla NO se descartan: caen en `sin-fecha`. Descartarlas haría que la suma de las
+ * cubetas fuera menor que el total y nadie sabría por qué; contarlas en una cubeta cualquiera sería
+ * peor. Que se vean, y que quien lea decida.
+ */
+export function resumirPorPeriodo(
+  filas: ReadonlyArray<{ ancla: Date | string | null | undefined; leadTimes: LeadTimes }>,
+  corte: Corte,
+): CubetaLeadTime[] {
+  const grupos = new Map<string, LeadTimes[]>();
+  for (const f of filas) {
+    const k = cubeta(f.ancla, corte);
+    const lista = grupos.get(k);
+    if (lista) lista.push(f.leadTimes);
+    else grupos.set(k, [f.leadTimes]);
+  }
+  return [...grupos.entries()]
+    .map(([periodo, lts]) => ({ periodo, operaciones: lts.length, resumen: resumirLeadTimes(lts) }))
+    // Orden cronológico, que en estas etiquetas coincide con el alfabético. `sin-fecha` al final:
+    // no es un periodo, es el residuo.
+    .sort((a, b) => {
+      if (a.periodo === PERIODO_SIN_FECHA) return 1;
+      if (b.periodo === PERIODO_SIN_FECHA) return -1;
+      return a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0;
+    });
+}
+
+export interface ComparativoAnual {
+  /** El periodo sin el año: `09`, `W38`, `09-18`. Es lo que se compara entre años. */
+  periodo: string;
+  /** año → volumen. Un año ausente significa que no hubo operaciones, no cero implícito. */
+  porAnio: Record<string, number>;
+  /**
+   * Variación del año más reciente contra el inmediato anterior, en porcentaje.
+   *
+   * `null` cuando no hay con qué comparar: o falta uno de los dos años, o el anterior fue 0 —y
+   * dividir entre cero para reportar "+∞%" o "+100%" sería inventar una comparación que no existe.
+   */
+  variacionPct: number | null;
+  anioBase: string | null;
+  anioComparado: string | null;
+}
+
+/**
+ * Volumen del mismo periodo, año contra año.
+ *
+ * Sólo tiene sentido para cortes que se repiten dentro del año (día, semana, mes). Con corte anual
+ * el periodo ES el año y no hay nada que alinear, así que devuelve vacío en vez de comparar un año
+ * contra sí mismo.
+ */
+export function compararAnios(cubetas: ReadonlyArray<CubetaLeadTime>, corte: Corte): ComparativoAnual[] {
+  if (corte === 'anio') return [];
+  const porPeriodo = new Map<string, Record<string, number>>();
+  for (const c of cubetas) {
+    const p = partirPeriodo(c.periodo);
+    if (!p || !p.resto) continue; // `sin-fecha` y etiquetas sin resto no se comparan
+    const acc = porPeriodo.get(p.resto) ?? {};
+    acc[p.anio] = (acc[p.anio] ?? 0) + c.operaciones;
+    porPeriodo.set(p.resto, acc);
+  }
+  return [...porPeriodo.entries()]
+    .map(([periodo, porAnio]) => {
+      const anios = Object.keys(porAnio).sort();
+      const anioComparado = anios.length ? anios[anios.length - 1] : null;
+      const anioBase = anios.length > 1 ? anios[anios.length - 2] : null;
+      const base = anioBase ? porAnio[anioBase] : 0;
+      const actual = anioComparado ? porAnio[anioComparado] : 0;
+      return {
+        periodo,
+        porAnio,
+        variacionPct: anioBase && base > 0 ? Math.round(((actual - base) / base) * 1000) / 10 : null,
+        anioBase,
+        anioComparado,
+      };
+    })
+    .sort((a, b) => (a.periodo < b.periodo ? -1 : a.periodo > b.periodo ? 1 : 0));
+}

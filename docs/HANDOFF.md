@@ -610,3 +610,56 @@ la señal sola, 3 a rojo porque además traen `bbdd` (mismo consignatario import
 clasificando de dos formas — una combinación que merece rojo).
 
 `RULESET.version` → `2026-09b`. Cinco guardas literales actualizadas con su razón anotada.
+
+### Addendum (2026-09-20) — C3: cortes de periodo y volumen año contra año
+
+Su "CC Report" corta por mes, semana, día y prefijo; su "Informative Volumes" compara volúmenes año
+contra año por aduana. Nuestro `/api/reportes/lead-times` devolvía **un solo resumen** sobre todo el
+rango filtrado: contesta "cómo vamos", no "vamos mejor o peor que antes" — y la segunda es la que se
+pregunta en la junta.
+
+**`shared/operaciones/periodos.ts`** (nuevo) fija las dos convenciones que, mal elegidas, producen
+números creíbles y falsos:
+
+1. **El día es local, no UTC.** Se delega en `fechaLocalMexico` (`shared/operaciones/eta.ts`), que ya
+   existía y ya documenta el bug: CDMX va seis horas atrás, así que todo lo que pasa entre las 18:00
+   y la medianoche cae en el día SIGUIENTE si se pregunta en UTC. Un vuelo que aterriza a las 19:30
+   se contaría en un día que el almacén no trabajó. **No se reimplementó a propósito** — dos formas
+   de decidir qué día es un instante terminan discrepando.
+2. **La semana es ISO 8601**: empieza en lunes y pertenece al año de su **jueves**. No es un
+   tecnicismo: el 1-ene-2027 cae en viernes, así que esa semana es la W53 de 2026. Etiquetarla por
+   año calendario partiría una semana en dos años y el comparativo arrancaría con una semana de tres
+   días contra una de siete.
+
+Las etiquetas (`2026-09-18`, `2026-W38`, `2026-09`, `2026`) se eligieron para que **ordenen
+alfabéticamente igual que cronológicamente** — de ahí el cero a la izquierda en la semana, para que
+`W09` no se cuele después de `W10`.
+
+**`resumirPorPeriodo` / `compararAnios`** viven en `leadTimes.ts`, junto al resumen que ya existía.
+El ancla del periodo se pide **explícita** en vez de leerse de `LeadTimes`, porque `LeadTimes` son
+DURACIONES y no momentos: una fila sabe que el almacén tardó 214 minutos, no cuándo. El endpoint
+pasa `arriboVueloAt`, que es el inicio de la cadena que estas métricas miden.
+
+Reglas que las pruebas fijan:
+
+- **Las filas sin ancla no se descartan**: caen en `sin-fecha`, se ordenan al final y la pantalla las
+  nombra. Descartarlas haría que la suma de las cubetas fuera menor que el total sin que nadie sepa
+  por qué; repartirlas en una cubeta cualquiera sería peor. Hay un test de integración que afirma
+  que la suma de las cubetas **es** el total.
+- **`variacionPct` es `null`, no 0 ni +100%,** cuando falta el año anterior o cuando fue cero.
+  Dividir entre cero para reportar "+∞%" sería inventar una comparación que no existe.
+- **Se compara contra el año inmediato anterior**, no contra el más viejo de la serie.
+- **Con corte anual el comparativo va vacío**: el periodo ES el año, comparar sería enfrentarlo
+  consigo mismo.
+
+`corte` entró en `reporteOperativoQuery` como **opcional**, con el default (`mes`) en el handler y no
+en el schema: los otros endpoints comparten ese schema y no tienen series que cortar.
+
+**Un error de diseño mío que las pruebas viejas atraparon:** metí `corte` en la query que la pantalla
+comparte con la descarga del XLSX, y tres pruebas existentes fallaron. Tenían razón: el export es el
+detalle por guía, no tiene series, así que `corte` ahí es un parámetro que nadie usa. Ahora hay dos
+cadenas —`queryString` para el archivo, `queryReporte` para el tablero— y el XLSX quedó como estaba.
+
+El catálogo de cortes viaja en la respuesta (`cortes`), por la misma razón que `metricas`: la
+pantalla no mantiene una segunda lista sincronizada a mano. El `CORTES_FALLBACK` del componente sirve
+sólo para el primer render, antes de que llegue la respuesta.

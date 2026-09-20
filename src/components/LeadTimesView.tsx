@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Timer, Download } from 'lucide-react';
 import { apiGet, apiDownload } from '../api';
+import { PERIODO_SIN_FECHA, type Corte } from '../../shared/operaciones/periodos';
 import { Card, Field, Input, Button, SearchSelect, EmptyState } from './ui';
 import type { SearchSelectOption } from './ui';
 import type { Client } from './AddClientModal';
@@ -48,12 +49,42 @@ interface FilaLeadTime extends Record<MetricaLeadTime, number | null> {
   rulesetVersion: string;
 }
 
+interface CubetaLeadTime {
+  periodo: string;
+  operaciones: number;
+  resumen: Record<MetricaLeadTime, ResumenMetrica>;
+}
+
+interface ComparativoAnual {
+  periodo: string;
+  porAnio: Record<string, number>;
+  variacionPct: number | null;
+  anioBase: string | null;
+  anioComparado: string | null;
+}
+
 interface RespuestaLeadTimes {
   rulesetVersion: string;
   resumen: Record<MetricaLeadTime, ResumenMetrica>;
   filas: FilaLeadTime[];
   total: number;
+  corte: Corte;
+  cortes: ReadonlyArray<{ id: Corte; label: string }>;
+  series: CubetaLeadTime[];
+  comparativoAnual: ComparativoAnual[];
 }
+
+/**
+ * Sólo para el primer render, antes de que llegue la respuesta: el catálogo REAL viaja en
+ * `data.cortes`, igual que `metricas`, para que la pantalla no tenga una segunda lista que
+ * mantener sincronizada con el servidor.
+ */
+const CORTES_FALLBACK: ReadonlyArray<{ id: Corte; label: string }> = [
+  { id: 'dia', label: 'Diario' },
+  { id: 'semana', label: 'Semanal' },
+  { id: 'mes', label: 'Mensual' },
+  { id: 'anio', label: 'Anual' },
+];
 
 const ETIQUETAS = new Map<MetricaLeadTime, string>(
   METRICAS_LEAD_TIME.map((m) => [m.id, m.label.replace(' (min)', '')]),
@@ -95,6 +126,10 @@ export default function LeadTimesView() {
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
   const [clientId, setClientId] = useState('');
+  const [corte, setCorte] = useState<Corte>('mes');
+  // Qué métrica se grafica en la serie. Mostrar las once por periodo daría una tabla de trece
+  // columnas que nadie lee; el lead time total es la que se pregunta en la junta.
+  const [metricaSerie, setMetricaSerie] = useState<MetricaLeadTime>('leadTimeMin');
   const [clients, setClients] = useState<Client[]>([]);
   const [data, setData] = useState<RespuestaLeadTimes | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,18 +157,42 @@ export default function LeadTimesView() {
     return s ? `?${s}` : '';
   }, [desde, hasta, clientId]);
 
+  /**
+   * El corte viaja SÓLO en la consulta del tablero, no en la del XLSX.
+   *
+   * El export es el detalle por guía: no tiene series que cortar, así que mandarle `corte` sería
+   * un parámetro que no usa. Separar las dos cadenas cuesta tres líneas y evita que un cambio de
+   * corte invalide la caché del archivo o confunda a quien lea el log del servidor.
+   */
+  const queryReporte = useMemo(() => {
+    const p = new URLSearchParams(queryString.replace(/^\?/, ''));
+    p.set('corte', corte);
+    return `?${p.toString()}`;
+  }, [queryString, corte]);
+
   const cargar = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setData(await apiGet<RespuestaLeadTimes>(`/api/reportes/lead-times${queryString}`));
+      setData(await apiGet<RespuestaLeadTimes>(`/api/reportes/lead-times${queryReporte}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudieron cargar los lead times.');
       setData(null);
     } finally {
       setLoading(false);
     }
-  }, [queryString]);
+  }, [queryReporte]);
+
+  /**
+   * Los años que aparecen en el comparativo, ordenados. Se derivan de la respuesta en vez de
+   * calcularse de las fechas del filtro: si un año no tiene ni una operación, no debe ocupar una
+   * columna vacía.
+   */
+  const aniosComparados = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of data?.comparativoAnual ?? []) for (const a of Object.keys(c.porAnio)) set.add(a);
+    return [...set].sort();
+  }, [data]);
 
   // Loads once on mount with no filters; afterwards only when the user submits, so typing a date
   // does not fire a query per keystroke.
@@ -180,6 +239,18 @@ export default function LeadTimesView() {
               />
             </Field>
           </div>
+          <Field label="Corte" htmlFor="lt-corte">
+            <select
+              id="lt-corte"
+              value={corte}
+              onChange={(e) => setCorte(e.target.value as Corte)}
+              className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700"
+            >
+              {(data?.cortes ?? CORTES_FALLBACK).map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </select>
+          </Field>
           <Button type="submit" disabled={loading}>
             {loading ? 'Calculando…' : 'Aplicar'}
           </Button>
@@ -285,6 +356,127 @@ export default function LeadTimesView() {
               </table>
             </div>
           </Card>
+
+          <Card className="p-5">
+            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+              <h3 className="text-sm font-bold text-slate-800">Evolución por periodo</h3>
+              <select
+                value={metricaSerie}
+                onChange={(e) => setMetricaSerie(e.target.value as MetricaLeadTime)}
+                className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-700"
+                aria-label="Métrica de la serie"
+              >
+                {METRICAS_LEAD_TIME.map((m) => (
+                  <option key={m.id} value={m.id}>{ETIQUETAS.get(m.id)}</option>
+                ))}
+              </select>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                    <th className="py-2 pr-3 text-left">Periodo</th>
+                    <th className="py-2 pr-3 text-right">Operaciones</th>
+                    <th className="py-2 pr-3 text-right">Promedio</th>
+                    <th className="py-2 pr-3 text-right">Mediana</th>
+                    <th className="py-2 pr-3 text-right">Muestras</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.series.map((c) => {
+                    const r = c.resumen[metricaSerie];
+                    const sinFecha = c.periodo === PERIODO_SIN_FECHA;
+                    return (
+                      <tr key={c.periodo} className="border-b border-slate-100 last:border-0">
+                        <td className={`py-2 pr-3 font-medium ${sinFecha ? 'text-amber-600' : 'text-slate-700'}`}>
+                          {sinFecha ? 'Sin arribo registrado' : c.periodo}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-semibold tabular-nums text-slate-800">
+                          {c.operaciones}
+                        </td>
+                        <Celda valor={r.promedioMin} />
+                        <Celda valor={r.medianaMin} />
+                        <td
+                          className={`py-2 pr-3 text-right tabular-nums ${
+                            r.muestras === 0 ? 'text-slate-300' : 'text-slate-500'
+                          }`}
+                        >
+                          {r.muestras}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {data.series.some((c) => c.periodo === PERIODO_SIN_FECHA) && (
+              /* Se muestra en vez de descartarse: si estas filas no salieran, la suma de los
+                 periodos sería menor que el total y nadie sabría por qué. */
+              <p className="mt-3 text-xs text-amber-700">
+                Hay operaciones sin arribo de vuelo registrado. No se pueden ubicar en un periodo, y
+                se listan aparte en vez de repartirse en uno cualquiera.
+              </p>
+            )}
+          </Card>
+
+          {data.comparativoAnual.length > 0 && (
+            <Card className="p-5">
+              <h3 className="mb-1 text-sm font-bold text-slate-800">Volumen año contra año</h3>
+              <p className="mb-4 text-xs text-slate-500">
+                El mismo periodo comparado entre años. La variación es contra el año inmediato
+                anterior.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                      <th className="py-2 pr-3 text-left">Periodo</th>
+                      {aniosComparados.map((a) => (
+                        <th key={a} className="py-2 pr-3 text-right">{a}</th>
+                      ))}
+                      <th className="py-2 pr-3 text-right">Variación</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.comparativoAnual.map((c) => (
+                      <tr key={c.periodo} className="border-b border-slate-100 last:border-0">
+                        <td className="py-2 pr-3 font-medium text-slate-700">{c.periodo}</td>
+                        {aniosComparados.map((a) => (
+                          <td
+                            key={a}
+                            className={`py-2 pr-3 text-right tabular-nums ${
+                              c.porAnio[a] == null ? 'text-slate-300' : 'text-slate-700'
+                            }`}
+                            title={c.porAnio[a] == null ? 'Sin operaciones registradas ese año' : undefined}
+                          >
+                            {c.porAnio[a] ?? '—'}
+                          </td>
+                        ))}
+                        <td
+                          className={`py-2 pr-3 text-right font-semibold tabular-nums ${
+                            c.variacionPct == null
+                              ? 'text-slate-300'
+                              : c.variacionPct < 0
+                                ? 'text-amber-600'
+                                : 'text-emerald-700'
+                          }`}
+                          title={
+                            c.variacionPct == null
+                              ? 'No hay con qué comparar: falta el año anterior, o fue cero'
+                              : `${c.anioComparado} contra ${c.anioBase}`
+                          }
+                        >
+                          {c.variacionPct == null
+                            ? '—'
+                            : `${c.variacionPct > 0 ? '+' : ''}${c.variacionPct}%`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           <Card className="p-5">
             <div className="mb-4 flex items-baseline justify-between gap-4">

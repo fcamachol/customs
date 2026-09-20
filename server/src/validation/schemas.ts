@@ -1319,6 +1319,12 @@ export const reporteOperativoQuery = z.object({
   desde: fechaOpcional,
   hasta: fechaOpcional,
   clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
+  /**
+   * Corte de periodo para las series de `/lead-times`. Opcional y con default en el handler, no
+   * aquí: los OTROS endpoints comparten este schema y no tienen series que cortar, así que un
+   * default en el schema les metería un campo que no usan.
+   */
+  corte: z.enum(['dia', 'semana', 'mes', 'anio']).optional(),
 });
 export type ReporteOperativoQuery = z.infer<typeof reporteOperativoQuery>;
 

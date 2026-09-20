@@ -17,6 +17,25 @@ import {
   manifiestoVersionAplicarBody,
 } from '../validation/schemas';
 import { aplicarVersion, stageVersion, versionPendiente } from '../services/manifiestoVersiones';
+import { decryptShipment } from '../crypto/fieldCrypto';
+import type { Shipment } from '../../../shared/types/shipment';
+import { evaluarRrna } from '../../../shared/rrna/evaluar';
+
+/**
+ * Catálogo de RRNA sustituible por configuración (`rrna_patrones`).
+ *
+ * Existe porque el de fábrica es por palabra clave y genera ruido conocido: `chaleco` cae en armas
+ * y `flor` en agrícola. Sin esta puerta, quitar un término exigiría un despliegue. Devuelve `null`
+ * —no un objeto vacío— cuando no hay override, para que el evaluador use su default en vez de
+ * quedarse sin catálogo, que es la forma silenciosa de apagar la revisión entera.
+ */
+async function loadRrnaPatrones(): Promise<Record<string, string[]> | null> {
+  const { rows } = await query<{ value: unknown }>(
+    "SELECT value FROM config WHERE key='rrna_patrones'",
+  );
+  const v = rows[0]?.value;
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string[]>) : null;
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const MAX_ROWS = 5000; // synchronous ceiling (async deferred to Increment 2)
@@ -129,6 +148,75 @@ manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), uploa
  * lo que la pantalla de staging describe es lo que hay en el oro. Para revisar el diff de una versión
  * recién subida y todavía sin aplicar, el número lo devuelve `POST /:id/versiones`.
  */
+/**
+ * GET /api/manifests/:id/rrna — regulaciones y restricciones no arancelarias de un manifiesto.
+ *
+ * Endpoint NUEVO y de sólo lectura, a propósito: el catálogo de RRNA existía completo en el repo
+ * (`shared/rrna/catalogo.ts`, diez categorías con su autoridad y su fundamento en la RGCE 3.7.5-E)
+ * y no lo miraba ni una línea de código. Esto lo pone a la vista sin tocar nada de lo que ya
+ * funciona.
+ *
+ * NO alimenta el semáforo, y la razón está medida: sobre el manifiesto golden de 501 filas el
+ * catálogo marca 26 y cerca de la mitad son falsos positivos previsibles de una lista por palabra
+ * clave — "Pistola de limpieza" cae en armas, "Flor de imitación de plástico" en agrícola. Meter
+ * eso al score obligaría a recalibrar las bandas y convertiría una heurística de texto en una banda
+ * roja. Se reporta aparte, con el término que disparó cada coincidencia, y quien revisa decide.
+ */
+manifestsRouter.get(
+  '/:id/rrna',
+  requireAuth,
+  requireRole('admin', 'capturista', 'autoridad'),
+  async (req, res) => {
+    const man = await query<{ id: string }>('SELECT id FROM manifests WHERE id=$1', [req.params.id]);
+    if (!man.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
+
+    const { rows } = await query<{ id: string; data: Shipment }>(
+      'SELECT id, data FROM shipments WHERE manifest_id=$1', [req.params.id]);
+
+    // El catálogo admite sustitución por configuración para que el cliente pueda quitar los
+    // términos que le generan ruido (`chaleco`, `flor`) sin tocar código. Ausente = el de fábrica.
+    const patrones = await loadRrnaPatrones();
+
+    const filas = rows
+      .map((r) => {
+        const s = decryptShipment(r.data);
+        const coincidencias = evaluarRrna(
+          { descripcion: s.description, valorDeclarado: s.customsValueUsd, rrnaNote: s.rrnaNote },
+          patrones ?? undefined,
+        );
+        return {
+          shipmentId: r.id,
+          guia: s.guideId ?? null,
+          descripcion: s.description ?? null,
+          hsCode: s.hsCode ?? null,
+          valorDeclarado: Number.isFinite(s.customsValueUsd) ? s.customsValueUsd : null,
+          // Lo que el remitente escribió en la columna de RRNA del manifiesto. Se venía parseando
+          // y nunca se mostraba; va tal cual, sin interpretarlo.
+          rrnaNoteDeclarada: s.rrnaNote ?? null,
+          coincidencias,
+        };
+      })
+      .filter((f) => f.coincidencias.length > 0 || f.rrnaNoteDeclarada);
+
+    const porCategoria: Record<string, number> = {};
+    for (const f of filas) for (const c of f.coincidencias) {
+      porCategoria[c.categoria] = (porCategoria[c.categoria] ?? 0) + 1;
+    }
+
+    res.json({
+      manifestId: req.params.id,
+      analizadas: rows.length,
+      marcadas: filas.length,
+      porCategoria,
+      // El aviso viaja con el dato: una pantalla que muestre esto sin decir qué es lo convierte
+      // en un veredicto, que es justo lo que no es.
+      aviso: 'Coincidencias por palabra clave. Son indicios para revisar, no determinaciones: '
+        + 'revise el término que disparó cada una antes de actuar.',
+      filas,
+    });
+  },
+);
+
 manifestsRouter.get(
   '/:id/staging',
   requireAuth,

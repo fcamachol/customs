@@ -75,7 +75,7 @@ export const clientPlatformBody = z.object({
 // La ÚNICA lista de llaves de config que existe: `configKeyParam` la vuelve un `z.enum` y el
 // middleware `validate` rechaza con 400 cualquier otra antes de que el router la vea.
 // `descripciones_genericas` alimenta la señal `descripcion_generica` (shared/risk/descripcion.ts).
-const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'descripciones_genericas', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
+const ALLOWED_CONFIG_KEYS = ['prohibited', 'piracy_brands', 'descripciones_genericas', 'rrna_patrones', 'branding', 'validation_params', 'denied_parties', 'tasa_vigencias', 'pedimento_scan_policy', 'importer_of_record', 'customs_agent'] as const;
 export const configKeyParam = z.object({
   key: z.enum(ALLOWED_CONFIG_KEYS),
 });
@@ -1319,6 +1319,12 @@ export const reporteOperativoQuery = z.object({
   desde: fechaOpcional,
   hasta: fechaOpcional,
   clientId: z.string().uuid('clientId debe ser un UUID.').optional(),
+  /**
+   * Corte de periodo para las series de `/lead-times`. Opcional y con default en el handler, no
+   * aquí: los OTROS endpoints comparten este schema y no tienen series que cortar, así que un
+   * default en el schema les metería un campo que no usan.
+   */
+  corte: z.enum(['dia', 'semana', 'mes', 'anio']).optional(),
 });
 export type ReporteOperativoQuery = z.infer<typeof reporteOperativoQuery>;
 

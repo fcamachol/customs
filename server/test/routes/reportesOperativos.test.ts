@@ -417,6 +417,45 @@ describe('GET /api/reportes/lead-times — el dashboard (punto 7)', () => {
     });
   });
 
+  it('trae series por periodo y el catálogo de cortes, con mensual por default', async () => {
+    const r = await request(app)
+      .get('/api/reportes/lead-times')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.corte).toBe('mes');
+    expect(r.body.cortes.map((c: { id: string }) => c.id)).toEqual(['dia', 'semana', 'mes', 'anio']);
+    expect(Array.isArray(r.body.series)).toBe(true);
+    // La suma de las cubetas es el total: ninguna fila se pierde al agrupar, ni siquiera las que
+    // no tienen arribo de vuelo (ésas caen en `sin-fecha`).
+    const sumado = r.body.series.reduce((a: number, c: { operaciones: number }) => a + c.operaciones, 0);
+    expect(sumado).toBe(r.body.total);
+  });
+
+  it('respeta el corte pedido y rechaza uno inventado', async () => {
+    const ok = await request(app)
+      .get('/api/reportes/lead-times?corte=semana')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body.corte).toBe('semana');
+    for (const c of ok.body.series) {
+      if (c.periodo !== 'sin-fecha') expect(c.periodo).toMatch(/^\d{4}-W\d{2}$/);
+    }
+
+    const mal = await request(app)
+      .get('/api/reportes/lead-times?corte=quincenal')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(mal.status).toBe(400);
+  });
+
+  it('con corte anual no hay comparativo: el periodo ES el año', async () => {
+    const r = await request(app)
+      .get('/api/reportes/lead-times?corte=anio')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(r.status).toBe(200);
+    expect(r.body.comparativoAnual).toEqual([]);
+  });
+
   it('el resumen dice el tamaño de la muestra junto al promedio', async () => {
     const r = await request(app)
       .get('/api/reportes/lead-times')

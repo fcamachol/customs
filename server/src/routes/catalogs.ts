@@ -8,7 +8,7 @@ import { withTransaction } from '../db/tx';
 import { validate } from '../validation/middleware';
 import { createClientBody, updateClientBody, configKeyParam, configValueBody, validatedRfcBody, clientPlatformBody, idParam, importerSchema, agentSchema, clientDireccionBody, clientDireccionUpdateBody, clientDireccionParam, clientTarifaBody, clientTarifaUpdateBody, clientTarifaParam, type ClientDireccionBody, type ClientDireccionUpdateBody, type ClientTarifaBody, type ClientTarifaUpdateBody } from '../validation/schemas';
 import { decryptField, encryptField } from '../crypto/fieldCrypto';
-import { listAgentes, listImportadores, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
+import { listAgentes, listImportadores, findImportadoresDuplicados, AGENTE_RETURNING, IMPORTADOR_RETURNING } from '../services/entityMaster';
 
 export const catalogsRouter = Router();
 
@@ -94,7 +94,7 @@ catalogsRouter.put(
     const { name, tax_id, address, phone, email, website } = req.body ?? {};
 
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
 
     const { rows } = await query(
       `UPDATE clients
@@ -127,7 +127,7 @@ catalogsRouter.delete(
     // Fetch before state for audit
     const before = await query('SELECT * FROM clients WHERE id = $1', [id]);
     if (before.rows.length === 0) {
-      res.status(404).json({ error: 'Client not found' });
+      res.status(404).json({ error: 'Cliente no encontrado.' });
       return;
     }
 
@@ -162,7 +162,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
       `INSERT INTO client_platforms (client_id, commercial_name, country_of_origin, legal_name, email, url, created_by)
@@ -187,7 +187,7 @@ catalogsRouter.put(
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Plataforma no encontrada.' }); return; }
     const { commercialName, countryOfOrigin, legalName, email, url } = req.body;
     const { rows } = await query(
       `UPDATE client_platforms
@@ -213,7 +213,7 @@ catalogsRouter.delete(
   async (req, res) => {
     const { id, pid } = req.params;
     const before = await query('SELECT * FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Platform not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Plataforma no encontrada.' }); return; }
     await query('DELETE FROM client_platforms WHERE id=$1 AND client_id=$2', [pid, id]);
     await recordAudit({
       userId: req.user!.userId, action: 'DELETE_CLIENT_PLATFORM', entity: 'client_platform',
@@ -323,7 +323,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const b = req.body as ClientDireccionBody;
     try {
       const { rows } = await query(
@@ -429,17 +429,17 @@ catalogsRouter.delete(
 
 // ─── Config endpoints ───────────────────────────────────────────────────────
 
-const ALLOWED_CONFIG_KEYS = new Set([
-  'prohibited',
-  'piracy_brands',
-  'branding',
-  'validation_params',
-  'denied_parties',
-  'tasa_vigencias',        // §10 — parametrizable tasa-global vigencias (super_admin only to edit)
-  'pedimento_scan_policy', // RF-08/RF-10 — PDF/QR scan sensitivity policy
-  'importer_of_record',   // Phase 2 entity master — stable importer of record (super_admin only)
-  'customs_agent',         // Phase 2 entity master — stable customs agent (super_admin only)
-]);
+// La lista de llaves permitidas NO vive aquí: vive en `ALLOWED_CONFIG_KEYS` de
+// `server/src/validation/schemas.ts`, donde `configKeyParam` la convierte en un `z.enum` y el
+// middleware `validate` rechaza con 400 cualquier otra ANTES de llegar a estos handlers.
+//
+// Aquí había una segunda copia de la misma lista, en forma de `Set`, que nadie consultaba: ningún
+// `.has()` la leía. Servía sólo para engañar — agregarle una llave y esperar que funcionara da un
+// 400 desde el Zod, y el rastro parece correcto. Se borró en vez de sincronizarse, porque dos
+// listas que deben coincidir y sólo una manda es una trampa, no una redundancia.
+//
+// Para habilitar una llave nueva: agrégala a `ALLOWED_CONFIG_KEYS` en schemas.ts, y si sólo debe
+// editarla un super_admin, también a `SUPER_ADMIN_CONFIG_KEYS` de abajo.
 
 // §10: editing tasa-global vigencias is restricted to super_admin (everything else is admin).
 // F18: denied_parties (sanctions list) is also super_admin-only to prevent tampering.
@@ -582,7 +582,7 @@ catalogsRouter.put(
     const { id } = req.params;
     const { patente, name, agentRfc, agencyRfc, verified } = req.body;
     const before = await query(`SELECT ${AGENTE_RETURNING} FROM agentes_aduanales WHERE id=$1`, [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal no encontrado.' }); return; }
     try {
       const { rows } = await query(
         `UPDATE agentes_aduanales SET
@@ -613,6 +613,13 @@ catalogsRouter.get('/importadores', requireAuth, requireRole('admin'), async (_r
   res.json(await listImportadores());
 });
 
+// GET /api/catalogs/importadores/duplicados — admin + super_admin.
+// Same company recorded twice because OCR misread one character of the RFC; each pair names the
+// row to keep and the one to delete. Declared before any '/importadores/:id' route would match.
+catalogsRouter.get('/importadores/duplicados', requireAuth, requireRole('admin'), async (_req, res) => {
+  res.json(await findImportadoresDuplicados());
+});
+
 // PUT /api/catalogs/importadores/:id — admin + super_admin
 catalogsRouter.put(
   '/importadores/:id',
@@ -623,7 +630,7 @@ catalogsRouter.put(
     const { id } = req.params;
     const { rfc, name, fiscalAddress, verified } = req.body;
     const before = await query(`SELECT ${IMPORTADOR_RETURNING} FROM importadores WHERE id=$1`, [id]);
-    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador not found' }); return; }
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador no encontrado.' }); return; }
     try {
       const { rows } = await query(
         `UPDATE importadores SET
@@ -645,6 +652,91 @@ catalogsRouter.put(
       if (isUniqueViolation(err)) { res.status(409).json({ error: 'Ya existe un importador con ese RFC' }); return; }
       throw err;
     }
+  },
+);
+
+/**
+ * DELETE /api/catalogs/agentes-aduanales/:id y /importadores/:id — admin + super_admin.
+ *
+ * POR QUÉ ESTOS DOS SÍ SE BORRAN DURO, cuando direcciones, tarifas y unidades sólo se desactivan:
+ * aquellos son catálogos que alguien dio de alta y que documentos históricos nombran (`despachos`
+ * apunta a una dirección, `factura_partidas` a una tarifa), así que la fila tiene que sobrevivir para
+ * que el histórico siga siendo legible. Estas dos tablas son distintas: se **auto-registran** desde el
+ * OCR de un pedimento (`services/entityMaster.ts`), de modo que un PDF mal escaneado crea filas que
+ * nunca representaron a nadie. Un `UNIQUE(patente)` / `UNIQUE(rfc)` convierte además cada fila basura
+ * en un bloqueo permanente de esa patente o ese RFC. Sin borrado, el catálogo sólo puede ensuciarse.
+ *
+ * LA GUARDA ES LA REFERENCIA, NO LA ANTIGÜEDAD: se niega el borrado si algún pedimento capturado
+ * todavía nombra a la entidad. Eso deja pasar exactamente el caso que importa —el duplicado que nadie
+ * llegó a usar— y protege el que importa más: la entidad que un documento real ya citó.
+ */
+catalogsRouter.delete(
+  '/agentes-aduanales/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params;
+    const before = await query(`SELECT ${AGENTE_RETURNING} FROM agentes_aduanales WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Agente aduanal no encontrado.' }); return; }
+
+    // La patente puede llegar por DOS caminos, y la guarda tiene que cubrir los dos: explícita en
+    // `import_data`, o DERIVADA del número de pedimento cuando el capturista no la escribió —
+    // `routes/pedimento.ts` hace `strOrNull(d.patente) ?? derivePatente(numero_pedimento)`, y esa
+    // derivación son los dígitos 5 a 8 del número de 15. Mirar sólo `import_data` dejaría borrar al
+    // agente de un pedimento que sí lo nombra, nada más porque el dato venía implícito en el folio.
+    const enUso = await query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM pedimentos
+        WHERE import_data->>'patente' = $1
+           OR substring(regexp_replace(COALESCE(numero_pedimento, ''), '[^0-9]', '', 'g') FROM 5 FOR 4) = $1`,
+      [before.rows[0].patente],
+    );
+    if (Number(enUso.rows[0]?.n ?? 0) > 0) {
+      res.status(409).json({
+        error: `No se puede eliminar: ${enUso.rows[0].n} pedimento(s) citan la patente ${before.rows[0].patente}. `
+          + 'Corrige los datos del agente en lugar de borrarlo.',
+      });
+      return;
+    }
+
+    await query('DELETE FROM agentes_aduanales WHERE id=$1', [id]);
+    await recordAudit({
+      userId: req.user!.userId, action: 'DELETE_AGENTE_ADUANAL', entity: 'agente_aduanal',
+      entityId: id, before: before.rows[0], ip: req.ip,
+    });
+    res.status(204).end();
+  },
+);
+
+catalogsRouter.delete(
+  '/importadores/:id',
+  requireAuth,
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params;
+    const before = await query(`SELECT ${IMPORTADOR_RETURNING} FROM importadores WHERE id=$1`, [id]);
+    if (before.rows.length === 0) { res.status(404).json({ error: 'Importador no encontrado.' }); return; }
+
+    const enUso = await query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM pedimentos
+        WHERE import_data->>'importerRfc' = $1`,
+      [before.rows[0].rfc],
+    );
+    if (Number(enUso.rows[0]?.n ?? 0) > 0) {
+      res.status(409).json({
+        error: `No se puede eliminar: ${enUso.rows[0].n} pedimento(s) citan el RFC ${before.rows[0].rfc}. `
+          + 'Corrige el RFC del importador en lugar de borrarlo.',
+      });
+      return;
+    }
+
+    await query('DELETE FROM importadores WHERE id=$1', [id]);
+    await recordAudit({
+      userId: req.user!.userId, action: 'DELETE_IMPORTADOR', entity: 'importador',
+      entityId: id, before: before.rows[0], ip: req.ip,
+    });
+    res.status(204).end();
   },
 );
 
@@ -692,7 +784,7 @@ catalogsRouter.post(
   async (req, res) => {
     const { id } = req.params;
     const client = await query('SELECT id FROM clients WHERE id=$1', [id]);
-    if (client.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+    if (client.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
     const b = req.body as ClientTarifaBody;
     const { rows } = await query(
       `INSERT INTO client_tarifas

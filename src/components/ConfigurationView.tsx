@@ -15,7 +15,7 @@
  * for the Super Admin. Non-admins see read-only fields and a notice card.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   Tag,
   AlertOctagon,
@@ -33,6 +33,7 @@ import {
   Landmark,
   UserCheck,
   RotateCcw,
+  FileQuestion,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPut, apiPost, apiDelete } from '../api';
@@ -41,6 +42,8 @@ import { ANAM_COUNTRY_OPTIONS, countryDisplayName } from '../../shared/parsing/c
 import type { ConfigSection } from '../nav';
 import type { Client, ClientPlatform } from './AddClientModal';
 import { AddClientModal } from './AddClientModal';
+import { ClienteConvenios } from './ClienteConvenios';
+import { ClienteDirecciones } from './ClienteDirecciones';
 import { TransportistasTab } from './TransportistasTab';
 
 interface Props {
@@ -99,6 +102,12 @@ interface AgenteAduanal {
   updatedAt: string;
 }
 
+/** Par detectado por el servidor: misma empresa, RFC a un carácter de distancia. */
+interface ImportadorDuplicado {
+  valido: Importador;
+  sospechoso: Importador;
+}
+
 interface Importador {
   id: string;
   rfc: string;
@@ -134,6 +143,7 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
   // Catálogos
   const [prohibitedText, setProhibitedText] = useState('');
   const [brandsText, setBrandsText] = useState('');
+  const [genericasText, setGenericasText] = useState('');
   const [clients, setClients] = useState<Client[]>([]);
 
   // Branding
@@ -164,6 +174,9 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
           .catch(() => {}),
         apiGet<ConfigResponse<string[]>>('/api/catalogs/config/piracy_brands')
           .then((r) => { if (active && r.value) setBrandsText(r.value.join('\n')); })
+          .catch(() => {}),
+        apiGet<ConfigResponse<string[]>>('/api/catalogs/config/descripciones_genericas')
+          .then((r) => { if (active && r.value) setGenericasText(r.value.join('\n')); })
           .catch(() => {}),
         apiGet<ConfigResponse<BrandingConfig>>('/api/catalogs/config/branding')
           .then((r) => {
@@ -226,6 +239,20 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
       const value = prohibitedText.split('\n').map((s) => s.trim()).filter(Boolean);
       await apiPut('/api/catalogs/config/prohibited', { value });
       onToast('Lista de prohibidos guardada');
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveGenericas() {
+    if (!isAdmin) return;
+    setSaving(true);
+    try {
+      const value = genericasText.split('\n').map((s) => s.trim()).filter(Boolean);
+      await apiPut('/api/catalogs/config/descripciones_genericas', { value });
+      onToast('Lista de descripciones genéricas guardada');
     } catch (e) {
       onToast(`Error: ${errMsg(e)}`);
     } finally {
@@ -322,8 +349,11 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
             setProhibitedText={setProhibitedText}
             brandsText={brandsText}
             setBrandsText={setBrandsText}
+            genericasText={genericasText}
+            setGenericasText={setGenericasText}
             onSaveProhibited={saveProhibited}
             onSaveBrands={saveBrands}
+            onSaveGenericas={saveGenericas}
           />
         </div>
       )}
@@ -334,6 +364,13 @@ export default function ConfigurationView({ domain, onToast, onVerTrazabilidad }
 
       {domain === 'cfg_transportistas' && (
         <TransportistasTab isAdmin={isAdmin} onToast={onToast} onVerTrazabilidad={onVerTrazabilidad} />
+      )}
+
+      {/* Proveedores: la misma pantalla sobre el mismo catálogo, filtrada al resto de los tipos
+          (aerolínea, recinto, almacén). Pedido el 15-sep porque ANAM tiene acceso a este sistema y
+          debe poder ver que los contratos con esos proveedores existen, aunque no se usen a diario. */}
+      {domain === 'cfg_proveedores' && (
+        <TransportistasTab isAdmin={isAdmin} onToast={onToast} ambito="proveedores" />
       )}
 
       {domain === 'cfg_rfcs' && (
@@ -542,14 +579,18 @@ interface ListasProps {
   setProhibitedText: (v: string) => void;
   brandsText: string;
   setBrandsText: (v: string) => void;
+  genericasText: string;
+  setGenericasText: (v: string) => void;
   onSaveProhibited: () => void;
   onSaveBrands: () => void;
+  onSaveGenericas: () => void;
 }
 
 function ListasTab(props: ListasProps) {
   const {
     isAdmin, saving, prohibitedText, setProhibitedText,
     brandsText, setBrandsText, onSaveProhibited, onSaveBrands,
+    genericasText, setGenericasText, onSaveGenericas,
   } = props;
 
   return (
@@ -585,6 +626,25 @@ function ListasTab(props: ListasProps) {
           <Save className="h-4 w-4" /> Guardar
         </Button>
       </Card>
+
+      <Card className="p-6 shadow-sm">
+        <SectionHeader icon={FileQuestion}>Descripciones genéricas</SectionHeader>
+        <p className="mb-2 text-xs text-slate-500">
+          Palabras que no dicen qué es la mercancía. Una por línea. Vacío usa la lista
+          predeterminada del motor; lo que se escriba aquí la <strong>reemplaza</strong>, no se suma.
+        </p>
+        <Textarea
+          rows={8}
+          value={genericasText}
+          onChange={(e) => setGenericasText(e.target.value)}
+          disabled={!isAdmin}
+          className="font-mono text-xs disabled:bg-slate-50"
+          placeholder={'artículo\nmercancía general\ngift\nsample'}
+        />
+        <Button className="mt-3" onClick={onSaveGenericas} disabled={!isAdmin || saving}>
+          <Save className="h-4 w-4" /> Guardar
+        </Button>
+      </Card>
     </div>
   );
 }
@@ -615,6 +675,21 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
   function handleCreated() {
     onToast('Cliente agregado');
     onClientsChanged();
+  }
+
+  /**
+   * Guarda los datos del cliente. El endpoint existía desde antes; lo que faltaba era la pantalla,
+   * y esa ausencia convertía cualquier corrección en un borrado con cascada.
+   */
+  async function saveClientDatos(id: string, patch: Partial<Client>) {
+    if (!isAdmin) return;
+    try {
+      await apiPut(`/api/catalogs/clients/${id}`, patch);
+      onToast('Cliente actualizado');
+      onClientsChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
   }
 
   async function removeClient(id: string) {
@@ -744,6 +819,8 @@ function ClientesTab({ isAdmin, clients, onClientsChanged, onToast }: ClientesPr
           onEditPlatform={(pid, p) => editPlatform(detailClient.id, pid, p)}
           onRemovePlatform={(pid) => removePlatform(detailClient.id, pid)}
           onDelete={() => removeClient(detailClient.id)}
+          onSaveDatos={(patch) => saveClientDatos(detailClient.id, patch)}
+          onToast={onToast}
         />
       )}
     </div>
@@ -968,7 +1045,7 @@ interface TasaProps {
   onSave: (rows: TasaVigencia[]) => void;
 }
 
-/* ---------- Client detail (read-only data + platform management) ---------- */
+/* ---------- Client detail (datos editables + plataformas) ---------- */
 
 function DetailRow({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
   return (
@@ -979,31 +1056,110 @@ function DetailRow({ label, value, mono }: { label: string; value?: string; mono
   );
 }
 
-function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onEditPlatform, onRemovePlatform, onDelete }: {
+function ClientDetailModal({ client, isAdmin, onClose, onAddPlatform, onEditPlatform, onRemovePlatform, onDelete, onSaveDatos, onToast }: {
   client: Client;
   isAdmin: boolean;
   onClose: () => void;
+  onToast: (msg: string) => void;
   onAddPlatform: (p: ClientPlatform) => void;
   onEditPlatform: (pid: string, p: ClientPlatform) => void;
   onRemovePlatform: (pid: string) => void;
   onDelete: () => void;
+  onSaveDatos: (patch: Partial<Client>) => Promise<void>;
 }) {
   const platforms = client.platforms ?? [];
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Los datos del cliente se editan aquí. Antes eran de sólo lectura, y como el DELETE es en
+  // cascada —se lleva plataformas, direcciones, tarifas, mapeos de columnas y los convenios
+  // firmados—, corregir un RFC mal capturado obligaba a destruir el expediente entero del cliente
+  // para volver a crearlo. Un dato equivocado no debería costar un contrato firmado.
+  const [editandoDatos, setEditandoDatos] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [datos, setDatos] = useState({
+    name: client.name ?? '', tax_id: client.tax_id ?? '', email: client.email ?? '',
+    phone: client.phone ?? '', website: client.website ?? '', address: client.address ?? '',
+  });
+
+  function abrirEdicion() {
+    setDatos({
+      name: client.name ?? '', tax_id: client.tax_id ?? '', email: client.email ?? '',
+      phone: client.phone ?? '', website: client.website ?? '', address: client.address ?? '',
+    });
+    setEditandoDatos(true);
+  }
+
+  async function guardarDatos() {
+    setGuardando(true);
+    try {
+      await onSaveDatos({
+        name: datos.name.trim(),
+        tax_id: datos.tax_id.trim().toUpperCase(),
+        email: datos.email.trim(),
+        phone: datos.phone.trim(),
+        website: datos.website.trim(),
+        address: datos.address.trim(),
+      });
+      setEditandoDatos(false);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   return (
     <Modal open onClose={onClose} title={client.name}>
       <section className="mb-5">
-        <h4 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Datos del cliente</h4>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-          <DetailRow label="Id fiscal" value={client.tax_id} mono />
-          <DetailRow label="Correo" value={client.email} />
-          <DetailRow label="Teléfono" value={client.phone} />
-          <DetailRow label="Sitio web" value={client.website} />
-          <div className="sm:col-span-2">
-            <DetailRow label="Domicilio" value={client.address} />
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h4 className="text-xs font-bold uppercase tracking-wide text-slate-500">Datos del cliente</h4>
+          {isAdmin && !editandoDatos && (
+            <Button variant="ghost" onClick={abrirEdicion}>Editar datos</Button>
+          )}
+        </div>
+        {editandoDatos ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Nombre" htmlFor="cl-name">
+              <Input id="cl-name" value={datos.name} onChange={(e) => setDatos({ ...datos, name: e.target.value })} />
+            </Field>
+            <Field label="Id fiscal" htmlFor="cl-taxid">
+              <Input id="cl-taxid" className="font-mono" value={datos.tax_id} onChange={(e) => setDatos({ ...datos, tax_id: e.target.value.toUpperCase() })} />
+            </Field>
+            <Field label="Correo" htmlFor="cl-email">
+              <Input id="cl-email" type="email" value={datos.email} onChange={(e) => setDatos({ ...datos, email: e.target.value })} />
+            </Field>
+            <Field label="Teléfono" htmlFor="cl-phone">
+              <Input id="cl-phone" value={datos.phone} onChange={(e) => setDatos({ ...datos, phone: e.target.value })} />
+            </Field>
+            <Field label="Sitio web" htmlFor="cl-web">
+              <Input id="cl-web" value={datos.website} onChange={(e) => setDatos({ ...datos, website: e.target.value })} />
+            </Field>
+            <div className="sm:col-span-2">
+              <Field label="Domicilio" htmlFor="cl-addr">
+                <Input id="cl-addr" value={datos.address} onChange={(e) => setDatos({ ...datos, address: e.target.value })} />
+              </Field>
+            </div>
+            <div className="flex gap-2 sm:col-span-2">
+              <Button variant="secondary" onClick={() => { void guardarDatos(); }} disabled={guardando}>
+                Guardar datos
+              </Button>
+              <Button variant="ghost" onClick={() => setEditandoDatos(false)} disabled={guardando}>Cancelar</Button>
+            </div>
           </div>
-        </dl>
+        ) : (
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+            <DetailRow label="Id fiscal" value={client.tax_id} mono />
+            <DetailRow label="Correo" value={client.email} />
+            <DetailRow label="Teléfono" value={client.phone} />
+            <DetailRow label="Sitio web" value={client.website} />
+            <div className="sm:col-span-2">
+              <DetailRow label="Domicilio" value={client.address} />
+            </div>
+          </dl>
+        )}
       </section>
+
+      <ClienteDirecciones clientId={client.id} isAdmin={isAdmin} onToast={onToast} />
+
+      <ClienteConvenios clientId={client.id} isAdmin={isAdmin} />
 
       <section className="border-t border-slate-200 pt-4">
         <h4 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
@@ -1257,7 +1413,24 @@ interface EntidadesProps {
 }
 
 function EntidadesTab({ canEdit, agentes, importadores, onAgentesChanged, onImportadoresChanged, onToast }: EntidadesProps) {
-  async function updateAgente(id: string, patch: Partial<Pick<AgenteAduanal, 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) {
+  // Duplicados de importador detectados por el servidor (mismo nombre, RFC a un carácter, uno válido
+  // y otro no). El endpoint sabía diagnosticarlos desde antes; esto es lo que faltaba para curarlos.
+  const [duplicados, setDuplicados] = useState<ImportadorDuplicado[]>([]);
+
+  const refrescarDuplicados = useCallback(() => {
+    apiGet<ImportadorDuplicado[]>('/api/catalogs/importadores/duplicados')
+      // Se valida la forma de cada par, no sólo que la respuesta sea un arreglo: este aviso se pinta
+      // sobre el catálogo de entidades, y una respuesta inesperada no debe tumbar la pantalla donde
+      // se corrigen los datos — que es justamente la que hace falta cuando algo va mal.
+      .then((r) => setDuplicados(
+        Array.isArray(r) ? r.filter((d) => d?.valido?.id && d?.sospechoso?.id) : [],
+      ))
+      .catch(() => setDuplicados([]));
+  }, []);
+
+  useEffect(() => { refrescarDuplicados(); }, [refrescarDuplicados, importadores]);
+
+  async function updateAgente(id: string, patch: Partial<Pick<AgenteAduanal, 'patente' | 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) {
     if (!canEdit) return;
     try {
       await apiPut(`/api/catalogs/agentes-aduanales/${id}`, patch);
@@ -1268,12 +1441,35 @@ function EntidadesTab({ canEdit, agentes, importadores, onAgentesChanged, onImpo
     }
   }
 
-  async function updateImportador(id: string, patch: Partial<Pick<Importador, 'name' | 'fiscalAddress' | 'verified'>>) {
+  async function updateImportador(id: string, patch: Partial<Pick<Importador, 'rfc' | 'name' | 'fiscalAddress' | 'verified'>>) {
     if (!canEdit) return;
     try {
       await apiPut(`/api/catalogs/importadores/${id}`, patch);
       onToast('Importador actualizado');
       onImportadoresChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  async function borrarAgente(id: string) {
+    if (!canEdit) return;
+    try {
+      await apiDelete(`/api/catalogs/agentes-aduanales/${id}`);
+      onToast('Agente aduanal eliminado');
+      onAgentesChanged();
+    } catch (e) {
+      onToast(`Error: ${errMsg(e)}`);
+    }
+  }
+
+  async function borrarImportador(id: string) {
+    if (!canEdit) return;
+    try {
+      await apiDelete(`/api/catalogs/importadores/${id}`);
+      onToast('Importador eliminado');
+      onImportadoresChanged();
+      refrescarDuplicados();
     } catch (e) {
       onToast(`Error: ${errMsg(e)}`);
     }
@@ -1296,17 +1492,60 @@ function EntidadesTab({ canEdit, agentes, importadores, onAgentesChanged, onImpo
         {agentes.length === 0 ? (
           <EmptyState icon={UserCheck} title="Sin agentes aduanales" message={autoRegisterMsg} />
         ) : (
-          <AgentesAduanalesTable agentes={agentes} canEdit={canEdit} onUpdate={updateAgente} />
+          <AgentesAduanalesTable agentes={agentes} canEdit={canEdit} onUpdate={updateAgente} onDelete={borrarAgente} />
         )}
       </Card>
 
       <Card className="p-6 shadow-sm">
         <SectionHeader icon={Landmark}>Importadores</SectionHeader>
         <p className="mb-4 text-xs text-slate-500">{autoRegisterMsg}</p>
+
+        {/* Duplicados por OCR. El servidor sólo reporta el par cuando es inequívoco —mismo nombre,
+            RFC a un carácter, uno válido y el otro no—, así que aquí se puede ofrecer el borrado
+            directo sin obligar a nadie a comparar cadenas a ojo. */}
+        {duplicados.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="mb-2 text-sm font-semibold text-amber-900">
+              {duplicados.length === 1
+                ? 'Se detectó 1 importador duplicado'
+                : `Se detectaron ${duplicados.length} importadores duplicados`}
+            </p>
+            <p className="mb-3 text-xs text-amber-800">
+              Misma empresa registrada dos veces: el RFC diferente en un solo carácter es la huella de
+              una lectura errónea del pedimento. Se conserva el que pasa la validación.
+            </p>
+            <ul className="space-y-2">
+              {duplicados.map((d) => (
+                <li key={d.sospechoso.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-amber-900">{d.valido.name || 'Sin nombre'}:</span>
+                  <span className="rounded bg-white px-2 py-0.5 font-mono text-green-700 ring-1 ring-green-200">
+                    {d.valido.rfc} · conservar
+                  </span>
+                  <span className="rounded bg-white px-2 py-0.5 font-mono text-red-700 ring-1 ring-red-200 line-through">
+                    {d.sospechoso.rfc}
+                  </span>
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      className="text-red-600 hover:bg-red-100"
+                      onClick={() => {
+                        if (confirm(`¿Eliminar el importador duplicado ${d.sospechoso.rfc}?`)) {
+                          void borrarImportador(d.sospechoso.id);
+                        }
+                      }}
+                    >
+                      Eliminar duplicado
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {importadores.length === 0 ? (
           <EmptyState icon={Landmark} title="Sin importadores" message={autoRegisterMsg} />
         ) : (
-          <ImportadoresTable importadores={importadores} canEdit={canEdit} onUpdate={updateImportador} />
+          <ImportadoresTable importadores={importadores} canEdit={canEdit} onUpdate={updateImportador} onDelete={borrarImportador} />
         )}
       </Card>
     </div>
@@ -1319,7 +1558,7 @@ function VerifiedBadge({ verified }: { verified: boolean }) {
   );
 }
 
-function RowActions({ canEdit, isEditing, verified, busy, onVerify, onEdit, onSave, onCancel }: {
+function RowActions({ canEdit, isEditing, verified, busy, onVerify, onEdit, onSave, onCancel, onDelete, deleteLabel }: {
   canEdit: boolean;
   isEditing: boolean;
   verified: boolean;
@@ -1328,6 +1567,9 @@ function RowActions({ canEdit, isEditing, verified, busy, onVerify, onEdit, onSa
   onEdit: () => void;
   onSave: () => void;
   onCancel: () => void;
+  /** Ausente = la fila no se puede borrar. El servidor rechaza con 409 si algún pedimento la cita. */
+  onDelete?: () => void;
+  deleteLabel?: string;
 }) {
   if (!canEdit) return null;
   if (isEditing) {
@@ -1342,28 +1584,46 @@ function RowActions({ canEdit, isEditing, verified, busy, onVerify, onEdit, onSa
     <div className="flex justify-end gap-2">
       {!verified && <Button variant="secondary" onClick={onVerify} disabled={busy}>Verificar</Button>}
       <Button variant="ghost" onClick={onEdit} disabled={busy}>Editar</Button>
+      {onDelete && (
+        <Button
+          variant="ghost"
+          className="text-red-600 hover:bg-red-50"
+          disabled={busy}
+          onClick={() => { if (confirm(deleteLabel ?? '¿Eliminar este registro?')) onDelete(); }}
+        >
+          Eliminar
+        </Button>
+      )}
     </div>
   );
 }
 
-function AgentesAduanalesTable({ agentes, canEdit, onUpdate }: {
+function AgentesAduanalesTable({ agentes, canEdit, onUpdate, onDelete }: {
   agentes: AgenteAduanal[];
   canEdit: boolean;
-  onUpdate: (id: string, patch: Partial<Pick<AgenteAduanal, 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) => Promise<void>;
+  onUpdate: (id: string, patch: Partial<Pick<AgenteAduanal, 'patente' | 'name' | 'agentRfc' | 'agencyRfc' | 'verified'>>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ name: '', agentRfc: '', agencyRfc: '' });
+  // La PATENTE entra al borrador: el OCR puede leerla mal y, al ser la llave del catálogo, una
+  // patente equivocada deja al agente inservible y bloquea esa patente para siempre.
+  const [draft, setDraft] = useState({ patente: '', name: '', agentRfc: '', agencyRfc: '' });
   const [busyId, setBusyId] = useState<string | null>(null);
 
   function startEdit(a: AgenteAduanal) {
     setEditingId(a.id);
-    setDraft({ name: a.name ?? '', agentRfc: a.agentRfc ?? '', agencyRfc: a.agencyRfc ?? '' });
+    setDraft({ patente: a.patente ?? '', name: a.name ?? '', agentRfc: a.agentRfc ?? '', agencyRfc: a.agencyRfc ?? '' });
   }
 
   async function saveEdit(id: string) {
     setBusyId(id);
     try {
-      await onUpdate(id, { name: draft.name.trim(), agentRfc: draft.agentRfc.trim().toUpperCase(), agencyRfc: draft.agencyRfc.trim().toUpperCase() });
+      await onUpdate(id, {
+        patente: draft.patente.trim(),
+        name: draft.name.trim(),
+        agentRfc: draft.agentRfc.trim().toUpperCase(),
+        agencyRfc: draft.agencyRfc.trim().toUpperCase(),
+      });
       setEditingId(null);
     } finally {
       setBusyId(null);
@@ -1398,15 +1658,16 @@ function AgentesAduanalesTable({ agentes, canEdit, onUpdate }: {
             const busy = busyId === a.id;
             return (
               <tr key={a.id}>
-                <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.patente}</td>
                 {isEditing ? (
                   <>
+                    <td className="px-3 py-2"><Input className="font-mono" value={draft.patente} onChange={(e) => setDraft({ ...draft, patente: e.target.value })} /></td>
                     <td className="px-3 py-2"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></td>
                     <td className="px-3 py-2"><Input className="font-mono" value={draft.agentRfc} onChange={(e) => setDraft({ ...draft, agentRfc: e.target.value.toUpperCase() })} /></td>
                     <td className="px-3 py-2"><Input className="font-mono" value={draft.agencyRfc} onChange={(e) => setDraft({ ...draft, agencyRfc: e.target.value.toUpperCase() })} /></td>
                   </>
                 ) : (
                   <>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.patente}</td>
                     <td className="px-3 py-2 text-slate-700">{a.name || '—'}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.agentRfc || '—'}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-600">{a.agencyRfc || '—'}</td>
@@ -1423,6 +1684,8 @@ function AgentesAduanalesTable({ agentes, canEdit, onUpdate }: {
                     onEdit={() => startEdit(a)}
                     onSave={() => saveEdit(a.id)}
                     onCancel={() => setEditingId(null)}
+                    onDelete={() => { void onDelete(a.id); }}
+                    deleteLabel={`¿Eliminar el agente de la patente ${a.patente}? Solo procede si ningún pedimento lo cita.`}
                   />
                 </td>
               </tr>
@@ -1434,24 +1697,31 @@ function AgentesAduanalesTable({ agentes, canEdit, onUpdate }: {
   );
 }
 
-function ImportadoresTable({ importadores, canEdit, onUpdate }: {
+function ImportadoresTable({ importadores, canEdit, onUpdate, onDelete }: {
   importadores: Importador[];
   canEdit: boolean;
-  onUpdate: (id: string, patch: Partial<Pick<Importador, 'name' | 'fiscalAddress' | 'verified'>>) => Promise<void>;
+  onUpdate: (id: string, patch: Partial<Pick<Importador, 'rfc' | 'name' | 'fiscalAddress' | 'verified'>>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ name: '', fiscalAddress: '' });
+  // El RFC entra al borrador: es la llave del catálogo y el OCR puede equivocarse en un carácter,
+  // que es exactamente lo que produce dos filas para la misma empresa.
+  const [draft, setDraft] = useState({ rfc: '', name: '', fiscalAddress: '' });
   const [busyId, setBusyId] = useState<string | null>(null);
 
   function startEdit(i: Importador) {
     setEditingId(i.id);
-    setDraft({ name: i.name ?? '', fiscalAddress: i.fiscalAddress ?? '' });
+    setDraft({ rfc: i.rfc ?? '', name: i.name ?? '', fiscalAddress: i.fiscalAddress ?? '' });
   }
 
   async function saveEdit(id: string) {
     setBusyId(id);
     try {
-      await onUpdate(id, { name: draft.name.trim(), fiscalAddress: draft.fiscalAddress.trim() });
+      await onUpdate(id, {
+        rfc: draft.rfc.trim().toUpperCase(),
+        name: draft.name.trim(),
+        fiscalAddress: draft.fiscalAddress.trim(),
+      });
       setEditingId(null);
     } finally {
       setBusyId(null);
@@ -1485,14 +1755,15 @@ function ImportadoresTable({ importadores, canEdit, onUpdate }: {
             const busy = busyId === i.id;
             return (
               <tr key={i.id}>
-                <td className="px-3 py-2 font-mono text-xs text-slate-600">{i.rfc}</td>
                 {isEditing ? (
                   <>
+                    <td className="px-3 py-2"><Input className="font-mono" value={draft.rfc} onChange={(e) => setDraft({ ...draft, rfc: e.target.value.toUpperCase() })} /></td>
                     <td className="px-3 py-2"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></td>
                     <td className="px-3 py-2"><Input value={draft.fiscalAddress} onChange={(e) => setDraft({ ...draft, fiscalAddress: e.target.value })} /></td>
                   </>
                 ) : (
                   <>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-600">{i.rfc}</td>
                     <td className="px-3 py-2 text-slate-700">{i.name || '—'}</td>
                     <td className="px-3 py-2 text-slate-600">{i.fiscalAddress || '—'}</td>
                   </>
@@ -1508,6 +1779,8 @@ function ImportadoresTable({ importadores, canEdit, onUpdate }: {
                     onEdit={() => startEdit(i)}
                     onSave={() => saveEdit(i.id)}
                     onCancel={() => setEditingId(null)}
+                    onDelete={() => { void onDelete(i.id); }}
+                    deleteLabel={`¿Eliminar el importador ${i.rfc}? Solo procede si ningún pedimento lo cita.`}
                   />
                 </td>
               </tr>

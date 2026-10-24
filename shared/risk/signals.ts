@@ -3,6 +3,7 @@ import { cleanId, validateTaxId } from '../parsing/taxId';
 import { matchesBrand, matchesProhibited, matchesDeniedParty, type DeniedPartyEntry } from './lists';
 import { resolveThresholds, type Thresholds, type Weights } from './ruleset';
 import { norm as _norm } from './normalize';
+import { analizarDescripcion, type VeredictoDescripcion } from './descripcion';
 
 export interface RiskContext {
   nameCounts: Record<string, number>;
@@ -62,7 +63,9 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
 
 // ─── Task 5: Graded, entity-aware signals with reason codes ──────────────────
 
-export type SignalId = 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd' | 'denied_party';
+export type SignalId =
+  | 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd'
+  | 'denied_party' | 'descripcion_generica';
 
 export interface ReasonCode {
   signalId: SignalId;
@@ -102,6 +105,9 @@ export interface EntityContext {
   entityValueTotal?: Record<string, number>;
   piracyBrands?: string[];
   prohibitedKeywords?: string[];
+  /** Catálogo administrable de términos genéricos (config `descripciones_genericas`).
+   * Ausente → se usa `GENERICOS_DEFAULT` de descripcion.ts. */
+  terminosGenericos?: string[];
   /**
    * F18: denied-party / sanctions list (OFAC/BIS/EU/UN).
    * Loaded from the `denied_parties` config key and passed through scoreManifest → EntityContext.
@@ -158,6 +164,15 @@ export function entityKey(
 }
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/** Copy humano del hallazgo. Vive fuera de `gradeSignals` porque `detail` es texto editable y
+ * queda FUERA de la huella del hallazgo (ver `shared/risk/efectivo.ts`): el discriminador entre
+ * las tres variantes es `evidence.veredicto`, no esta cadena. */
+const DETALLE_DESCRIPCION: Record<Exclude<VeredictoDescripcion, 'informativa'>, string> = {
+  vacia: 'La descripción viene vacía',
+  solo_generica: 'La descripción no dice qué es la mercancía',
+  solo_material: 'La descripción sólo nombra el material, no el producto',
+};
 
 /**
  * Graded, entity-aware signal evaluation.
@@ -231,6 +246,30 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
       (distinctCount - (t.addressDistinctConsignees - 1)) / t.addressDistinctConsignees,
       'Misma dirección de entrega',
       { distinctConsignees: distinctCount },
+    );
+  }
+
+  // descripcion_generica: ¿la descripción alcanza para saber QUÉ es la mercancía?
+  //
+  // Va ANTES de `prohibidos` y `pirateria` a propósito: esas dos buscan palabras dentro de la
+  // descripción, y una descripción que no nombra nada es justamente la que las deja sin materia.
+  // Nombrar primero el defecto de origen hace legible el hallazgo: "no disparó prohibidos porque
+  // no había qué leer", en vez de un verde silencioso.
+  //
+  // No lleva forcesBand: es una señal de CALIDAD del dato, no de severidad. Una descripción vaga
+  // no acusa a nadie — impide auditar. Forzar rojo mandaría a la cola de revisión manual a medio
+  // manifiesto de cualquier remitente descuidado y quemaría la banda roja, que hoy significa
+  // "esto tiene algo malo", no "esto está mal capturado".
+  const desc = analizarDescripcion(s.description, { terminosGenericos: ctx.terminosGenericos });
+  if (desc.veredicto !== 'informativa') {
+    // `solo_material` ("plástico de cristal") conserva algo: acota el capítulo arancelario aunque
+    // no nombre el objeto. Vale 0.6 del peso. `vacia` y `solo_generica` no dejan nada: peso completo.
+    const frac = desc.veredicto === 'solo_material' ? 0.6 : 1;
+    add(
+      'descripcion_generica',
+      frac,
+      DETALLE_DESCRIPCION[desc.veredicto],
+      { veredicto: desc.veredicto, descripcion: s.description ?? null, tokensVacios: desc.tokensVacios },
     );
   }
 

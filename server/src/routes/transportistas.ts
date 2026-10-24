@@ -87,6 +87,7 @@ function descifrar(v: string | null | undefined): string | null {
 const SELECT_TRANSPORTISTA = `
   t.id,
   t.razon_social      AS "razonSocial",
+  t.tipo,
   t.rfc,
   t.contacto_nombre   AS "contactoNombre",
   t.contacto_telefono AS "contactoTelefono",
@@ -146,6 +147,14 @@ transportistasRouter.get('/tipos-unidad', requireAuth, (_req: Request, res: Resp
  */
 transportistasRouter.get('/', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // `?tipo=` separa las dos secciones de la interfaz sobre un solo catálogo: "Transportistas"
+    // pide tipo=transportista y "Proveedores" pide el resto. Sin el parámetro se devuelve todo,
+    // que es el comportamiento que tenía este endpoint antes de que existieran los tipos — así
+    // ningún consumidor previo cambia de resultado.
+    const tipoFiltro = typeof req.query.tipo === 'string' && req.query.tipo ? req.query.tipo : null;
+    const excluir = req.query.excluir === 'transportista';
+    const filtro = tipoFiltro ? 'WHERE t.tipo = $1' : excluir ? "WHERE t.tipo <> 'transportista'" : '';
+    const params = tipoFiltro ? [tipoFiltro] : [];
     const { rows } = await query<FilaTransportista & { unidadesActivas: number; convenioVigente: boolean }>(
       `SELECT ${SELECT_TRANSPORTISTA},
               (SELECT count(*) FROM transportista_unidades u
@@ -156,7 +165,9 @@ transportistasRouter.get('/', requireAuth, async (req: Request, res: Response, n
                          AND (c.vigencia_desde IS NULL OR c.vigencia_desde <= current_date)
                          AND (c.vigencia_hasta IS NULL OR c.vigencia_hasta >= current_date)) AS "convenioVigente"
          FROM transportistas t
+        ${filtro}
         ORDER BY t.razon_social`,
+      params,
     );
     res.json(rows.map((r) => ({ ...desencriptarFila(r), unidadesActivas: r.unidadesActivas, convenioVigente: r.convenioVigente })));
   } catch (err) {
@@ -390,9 +401,9 @@ transportistasRouter.post(
       const { rows } = await query<FilaTransportista>(
         `INSERT INTO transportistas
            (razon_social, rfc, contacto_nombre, contacto_telefono, contacto_email,
-            estado, documentos_ok, created_by)
-         VALUES ($1,$2,$3,$4,$5,COALESCE($6,'activo'),COALESCE($7,false),$8)
-         RETURNING id, razon_social AS "razonSocial", rfc,
+            estado, documentos_ok, tipo, created_by)
+         VALUES ($1,$2,$3,$4,$5,COALESCE($6,'activo'),COALESCE($7,false),COALESCE($8,'transportista'),$9)
+         RETURNING id, razon_social AS "razonSocial", rfc, tipo,
                    contacto_nombre AS "contactoNombre", contacto_telefono AS "contactoTelefono",
                    contacto_email AS "contactoEmail", estado, documentos_ok AS "documentosOk",
                    created_at AS "createdAt", updated_at AS "updatedAt"`,
@@ -404,6 +415,7 @@ transportistasRouter.post(
           cifrar(b.contactoEmail),
           b.estado ?? null,
           b.documentosOk ?? null,
+          b.tipo ?? null,
           req.user!.userId,
         ],
       );

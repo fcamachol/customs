@@ -3,7 +3,7 @@
 # ─────────────────────────────────────────────────────────────
 # Stage 1 — Build the React/Vite frontend
 # ─────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS frontend
+FROM node:22.23.4-bookworm-slim AS frontend
 WORKDIR /app
 # Combined single-container deploy: the frontend is served from the same origin
 # as the API, so it calls /api/* relatively. Empty VITE_API_URL => relative URLs.
@@ -21,7 +21,7 @@ RUN npm run build
 # are devDependencies, so a production-only install would break it at runtime.
 # Native modules (bcrypt) build here; toolchain stays out of the final image.
 # ─────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS server-deps
+FROM node:22.23.4-bookworm-slim AS server-deps
 WORKDIR /app/server
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
@@ -32,7 +32,7 @@ RUN npm ci --include=dev
 # ─────────────────────────────────────────────────────────────
 # Stage 3 — Runtime image
 # ─────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
 WORKDIR /app
 # curl is needed for Coolify's in-container healthcheck against /api/health.
 RUN apt-get update \

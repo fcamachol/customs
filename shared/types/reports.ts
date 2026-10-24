@@ -225,6 +225,40 @@ export interface LineResult {
   diffs: FieldDiff[];           // valorUsd, nombre, rfcCurp
 }
 
+/**
+ * Estimado informativo de impuesto, adjunto al cotejo.
+ *
+ * Va aquí y no en el manifiesto completo por una decisión explícita del 15-sep: se estima SÓLO
+ * sobre las partidas que efectivamente van al pedimento. Estimar toda la carga incluiría mercancía
+ * que el análisis de riesgo marcó y que por lo tanto no se va a importar — un número que nadie va
+ * a pagar. NO es el cálculo legal: ese lo determina el agente aduanal.
+ */
+export interface EstimadoPartidaReporte {
+  guia: string;
+  valorUsd: number;
+  origen: 'GENERAL' | 'TMEC';
+  /** null cuando no hubo tasa vigente aplicable; `motivo` explica por qué. */
+  tasaPct: number | null;
+  impuestoUsd: number | null;
+  motivo?: string;
+}
+
+export interface EstimadoImpuestoReporte {
+  totalImpuestoUsd: number;
+  totalValorUsd: number;
+  sinEstimar: number;
+  tasasUsadas: Array<{ origen: 'GENERAL' | 'TMEC'; tasaPct: number; desde: string }>;
+  /** Tasa que el pedimento declara por partida, para contrastarla con la nuestra. */
+  tasaPedimentoPct?: number | null;
+  /**
+   * Desglose guía por guía. El total responde "cuánto"; esto responde "de dónde sale" — y es lo
+   * que vuelve accionable la advertencia de tasa discrepante: se ve EN CUÁLES guías cambia el
+   * monto, en vez de sólo saber que el agregado no cuadra. Las partidas sin tasa vigente viajan
+   * con `tasaPct`/`impuestoUsd` en null y su `motivo`, para no mostrar un cero engañoso.
+   */
+  partidas?: EstimadoPartidaReporte[];
+}
+
 export interface ReconciliationReport {
   generatedAt: string;
   extractionMethod: 'deterministic' | 'ai';
@@ -233,6 +267,8 @@ export interface ReconciliationReport {
   header: FieldDiff[];
   totals: FieldDiff[];
   lines: LineResult[];
+  /** Ausente cuando no hay tabla de tasas configurada. */
+  estimadoImpuesto?: EstimadoImpuestoReporte;
   summary: {
     matched: number;
     mismatched: number;

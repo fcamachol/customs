@@ -65,7 +65,10 @@ beforeEach(() => {
   });
 });
 
-async function openPanel() {
+async function openPanel(semaforo: 'green' | 'red' | null = null) {
+  // El semáforo de la tarea decide si "Salida de rojo" se ofrece, así que las pruebas tienen que
+  // poder abrir el panel en cualquiera de los dos estados.
+  tarea1.semaforo = semaforo;
   render(<CampoView />);
   await waitFor(() => expect(screen.getByText('369-94705516')).toBeTruthy());
   fireEvent.click(screen.getByText('369-94705516'));
@@ -104,7 +107,7 @@ describe('CampoView', () => {
   });
 
   it('tapping a card opens the full capture panel for that operación', async () => {
-    await openPanel();
+    await openPanel('red');
     expect(screen.getByText('Ingreso a patio')).toBeTruthy();
     expect(screen.getByText('Ingreso a aduana')).toBeTruthy();
     expect(screen.getByText('Inicio de carga')).toBeTruthy();
@@ -116,6 +119,14 @@ describe('CampoView', () => {
     await waitFor(() => expect(screen.queryByText('Disponible')).toBeNull());
   });
 
+  // Roberto lo pidió así en la junta del 15-sep: la opción aparece CUANDO el semáforo sale rojo.
+  // Antes se mostraba siempre y el servidor la rechazaba con 409 — para alguien de pie en la
+  // aduana con el celular, un botón que siempre falla es peor que un botón que no está.
+  it('no ofrece "Salida de rojo" cuando el semáforo no es rojo', async () => {
+    await openPanel('green');
+    expect(screen.queryByText('Salida de rojo')).toBeNull();
+  });
+
   it.each([
     ['Disponible', 'CARGA_DISPONIBLE'],
     ['Ingreso a patio', 'INGRESO_PATIO'],
@@ -123,7 +134,7 @@ describe('CampoView', () => {
     ['Fin de carga', 'FIN_CARGA'],
     ['Salida de rojo', 'SALIDA_ROJO'],
   ])('tapping "%s" posts tipo %s and shows a success mark', async (label, tipo) => {
-    await openPanel();
+    await openPanel(tipo === 'SALIDA_ROJO' ? 'red' : null);
     fireEvent.click(screen.getByText(label));
     await waitFor(() => expect(apiPostMock).toHaveBeenCalledWith(
       '/api/campo/operaciones/op-1/evento',

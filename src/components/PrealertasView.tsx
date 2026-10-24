@@ -217,9 +217,19 @@ const SCAN_VERDICT_RESULTADO: Record<string, Resultado> = {
   clean: 'verde', suspicious: 'amarillo', unscannable: 'amarillo', blocked: 'rojo',
 };
 
+const SCAN_VERDICT_LABEL: Record<string, string> = {
+  clean: 'Limpio',
+  suspicious: 'Sospechoso',
+  unscannable: 'No se pudo escanear',
+  infected: 'Infectado',
+};
+
 function ScanVerdictPill({ verdict }: { verdict: string | null }) {
   if (!verdict) return <StatusPill resultado="gris" label="Sin escanear" />;
-  return <StatusPill resultado={SCAN_VERDICT_RESULTADO[verdict] ?? 'gris'} label={verdict} />;
+  // Los veredictos llegan del pipeline de escaneo en inglés (`clean`, `suspicious`,
+  // `unscannable`). Mostrarlos crudos deja al operador adivinando; la pantalla de captura ya los
+  // traducía y ésta no, así que decían cosas distintas sobre el mismo dato.
+  return <StatusPill resultado={SCAN_VERDICT_RESULTADO[verdict] ?? 'gris'} label={SCAN_VERDICT_LABEL[verdict] ?? verdict} />;
 }
 
 // Semáforo is deliberately shown in English (green/red) — the client sees this exact value, so

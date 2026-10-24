@@ -111,6 +111,7 @@ export async function runRiskForManifest(input: {
   const piracyBrands = await loadConfig<string[]>('piracy_brands');
   const thresholds = await loadConfig<Partial<Record<keyof Thresholds, unknown>>>('validation_params');
   const deniedParties = await loadConfig<DeniedPartyEntry[]>('denied_parties');
+  const terminosGenericos = await loadConfig<string[]>('descripciones_genericas');
 
   await deleteManifestHistory(manifestId);
   const history = await loadHistoryCounts(period, manifestId);
@@ -120,6 +121,7 @@ export async function runRiskForManifest(input: {
     piracyBrands,
     thresholds,
     deniedParties,
+    terminosGenericos,
     nameTokenFn: rawBlindIndex,
   };
   const scored = scoreManifest(shipments, history, scoreOptions);

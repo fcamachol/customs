@@ -7,6 +7,7 @@ import { LoginView } from './components/LoginView';
 import { AcercaDeView } from './components/AcercaDeView';
 import { SimulationBanner } from './components/SimulationBanner';
 import DashboardView from './components/DashboardView';
+import LeadTimesView from './components/LeadTimesView';
 import RegistroView from './components/RegistroView';
 import ConsultaView from './components/ConsultaView';
 import SeguimientoView from './components/SeguimientoView';
@@ -55,6 +56,7 @@ function AuthenticatedApp() {
           <SimulationBanner />
           <PageHeader title={meta.title} subtitle={meta.subtitle} />
           {current === 'dashboard' && <DashboardView onNavigate={setSection} />}
+          {current === 'lead_times' && <LeadTimesView />}
           {current === 'registro' && <RegistroView />}
           {current === 'seguimiento' && <SeguimientoView />}
           {current === 'reporte' && <ReporteGeneralView />}

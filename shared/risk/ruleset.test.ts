@@ -25,8 +25,9 @@ describe('ruleset weights/bands floors', () => {
   });
 
   it('maxPoints sums all signal weights — literal guard catches accidental future changes', () => {
-    // 25 + 15 + 20 + 30 (agregado F13) + 20 + 60 + 60 + 18 + 100 (denied_party F18) = 348
-    expect(maxPoints(RULESET.weights)).toBe(348);
+    // 25 + 15 + 20 + 30 (agregado F13) + 20 + 60 + 60 + 18 + 100 (denied_party F18)
+    //    + 25 (descripcion_generica 2026-09a) = 373
+    expect(maxPoints(RULESET.weights)).toBe(373);
     expect(maxPoints(RULESET.weights)).toBe(
       Object.values(RULESET.weights).reduce((a, b) => a + b, 0),
     );

@@ -23,7 +23,7 @@
  *     legitimate distinct people.
  */
 export const RULESET = {
-  version: '2026-07b',
+  version: '2026-09a',
   thresholds: {
     cantidad: 10,
     montoMin: 1,
@@ -70,6 +70,11 @@ export const RULESET = {
     /** F18: denied-party / sanctions screening (OFAC/BIS/EU/UN). Dominating weight (100) +
      * forcesBand:'rojo' guarantees any match is rojo regardless of other signals. */
     denied_party: 100,
+    /** Descripción que no dice qué es la mercancía. Peso 25, el mismo que `id`, porque el efecto
+     * es el mismo: la fila no se puede auditar. Una sola de las dos deja la fila en amarillo;
+     * las dos juntas (50 pts) la mandan a rojo, que es exactamente el caso "ni sé quién la recibe
+     * ni sé qué es". Ver `shared/risk/descripcion.ts` para el criterio. */
+    descripcion_generica: 25,
   },
   /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
    * Calibrated in Task 7: with the 501-row golden fixture these thresholds produced
@@ -87,8 +92,17 @@ export const RULESET = {
    * so the band change is purely a proportional compression correction:
    *   amarillo: 10 → 7  (raw-pts threshold 24.8 → 24.8/348*100 ≈ 7.1, rounded to 7)
    *   rojo:     15 → 11 (raw-pts threshold 37.2 → 37.2/348*100 ≈ 10.7, rounded to 11)
-   * Post-F18 501-row distribution (bands {amarillo:7,rojo:11}): expected rojo≈6-7%, verde>80%. */
-  bands: { amarillo: 7, rojo: 11 },
+   * Post-F18 501-row distribution (bands {amarillo:7,rojo:11}): expected rojo≈6-7%, verde>80%.
+   *
+   * Recalibración 2026-09a (señal `descripcion_generica`, peso 25): maxPoints 348 → 373, lo que
+   * comprime todos los scores un 6.7%. Las bandas bajan para NO cambiar qué filas caen dónde:
+   *   amarillo: 7 → 6  — obligado, no cosmético. Con maxPoints=373 una fila que sólo trae
+   *     `id` (25 pts) puntúa 6.70; dejando amarillo en 7 esa fila habría caído a verde, o sea
+   *     que agregar una señal nueva habría *escondido* una que ya existía.
+   *   rojo:     11 → 10 — proporcional: el umbral crudo 38.28 (11% de 348) es 10.26% de 373.
+   * La señal dispara en 1 de las 501 filas del fixture ("Plástico de cristal", que en efecto no
+   * nombra el objeto), así que la distribución observada casi no se mueve — ver enhanced.test.ts. */
+  bands: { amarillo: 6, rojo: 10 },
 } as const;
 
 export type Thresholds = {
@@ -134,9 +148,11 @@ export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, u
  * recurrence signal in Task 5. `direcciones` is the smurfing signal (distinct consignees
  * per address). `agregado` (F13) is the cross-row split-shipment aggregate cap.
  * `denied_party` (F18) is the OFAC/BIS/EU/UN sanctions screening signal.
+ * `descripcion_generica` marca la fila cuya descripción no nombra la mercancía.
  */
 export type Weights = Record<
-  'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd' | 'denied_party',
+  | 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd'
+  | 'denied_party' | 'descripcion_generica',
   number
 >;
 

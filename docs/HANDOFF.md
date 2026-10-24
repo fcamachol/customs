@@ -78,8 +78,10 @@ That is the operator's one-shot deployment wipe; this endpoint is the in-app one
    vocabulary — read the comment in `cincel.ts` before attempting it, the reasons it was deferred
    are load-bearing.
 4. **Deferred frontend views** over APIs that already work: `PlaneacionView`, `DespachosView`,
-   `EntregasView`, `FacturacionView`, and lead-time tiles on `TorreControlView`. `src/nav.ts` and
-   `src/App.tsx` have no entries for them yet.
+   `EntregasView`, `FacturacionView`. `src/nav.ts` and `src/App.tsx` have no entries for them yet.
+   (Lead times SHIPPED — `LeadTimesView`, see the addendum below. It landed as its own section
+   rather than as tiles on `TorreControlView`: the torre is live state, this is a date-ranged
+   historical query with its own export, and a date filter inside the live board reads as a bug.)
 5. **Structurally blocked / deliberately absent, not backlog**: PA-09 (needs the consignee
    patente, which no artefact we receive declares — see `shared/operaciones/cotejo.ts` line ~21);
    #35 Aireon (email sent to FlightAware, waiting).
@@ -87,6 +89,71 @@ That is the operator's one-shot deployment wipe; this endpoint is the in-app one
 `docs/PLAN_COMPLETO.md` is the fuller index of all of the above, requirement by requirement.
 
 ---
+
+### Addendum (2026-09-18) — CRUD audit, RFC hygiene, and per-guía tax in the export
+
+Shipped on `feat/crud-rfc-impuesto-guia` (PR to `develop`). Three threads:
+
+**RFC hygiene at the point of capture** (`shared/parsing/taxId.ts`, `server/src/services/entityMaster.ts`).
+The SAT generic RFCs are now an explicit allow-list: `XAXX010101000` does NOT satisfy the check-digit
+algorithm yet is officially valid, so a perfectly legal pedimento was being rejected at
+prevalidation. And OCR'd RFCs no longer reach the catalogs unvalidated — an invalid **agent** RFC is
+dropped (the row survives with its patente, and prevalidation degrades to a warning instead of the
+hard block nobody could clear from the capture form), while an invalid **importador** RFC is refused
+outright, because there the RFC *is* the conflict key and inserting it forks one company into two
+rows. `findImportadoresDuplicados()` + `GET /api/catalogs/importadores/duplicados` report the pair
+that a single misread character produces, and `DELETE` on both catalogs now exists — hard delete, on
+purpose, guarded by a 409 when a captured pedimento still names the entity. These two tables are the
+only ones that auto-register from a PDF, which is why they are also the only ones that can be
+deleted rather than deactivated.
+
+**CRUD gaps closed in the UI** — every one of these was an endpoint that already worked with no
+screen calling it: client data is editable (it was read-only, so fixing a mistyped RFC meant a
+CASCADE delete that also took the signed NOM-151 convenios); importador RFC and agente patente are
+editable; fleet units are editable (renewing an insurance date no longer requires retiring the
+vehicle); delivery addresses got their first screen (`src/components/ClienteDirecciones.tsx`). One
+real frontend bug went with them: the Proveedores section mounted the carrier modal without `tipo`,
+and `COALESCE($8,'transportista')` meant a new airline was silently created as a carrier and then
+vanished from the list that filters `tipo <> 'transportista'`.
+
+**`null` must survive validation.** `unidadUpdateBody` and `clientDireccionUpdateBody` are now
+hand-written instead of `.partial()` of the create schema. Deriving them folded `null` into
+`undefined`, which these PATCH-shaped routes read as "leave this field alone" — so clearing a
+mistyped date or contact looked like it saved and did not. Same reasoning that already justified
+`fechaOpcionalNullable`; there is now a `textoOpcionalNullable` beside it, and
+`server/test/validation/schemasNullable.test.ts` pins the distinction.
+
+**Per-guía tax estimate in the operational export** (`server/src/routes/reportesOperativos.ts`).
+Five columns, asked for in the 15-sep meeting. The arithmetic was already in
+`shared/impuestos/tasaGlobal.ts`; what was missing was carrying it to the sheet. Four things are
+load-bearing and were each a bug first, found by adversarial review:
+- The number is written **once per guía**. A row in this export is guía × despacho partida ×
+  factura partida, so a guía billed under two concepts appears twice — and whoever opens the file
+  selects the column and sums it. Repeating the figure produced an exact-multiple total, which is
+  the worst kind of wrong because it looks right. `marcarPrimeraFilaPorGuia` blanks the repeats and
+  says so in the note column.
+- Origin is aggregated as "GENERAL unless **every** line is T-MEC". `MIN(countryCode)` biased
+  toward TMEC (`'CA'` sorts before almost everything), i.e. toward the cheaper estimate — the exact
+  thing `tasaGlobal.ts` says never to do.
+- The rate date is resolved **in SQL**, cast to `date` like the report's own `WHERE`/`ORDER BY`.
+  Computing it in JS with `toISOString()` gave the UTC day while the filter used the server zone, so
+  an 19:00 Mexico-time arrival landed in the next day's vigencia.
+- The gate is `pedimento_id`, not the pedimento **number**, which is nullable: an unreadable scan
+  produces a real pedimento with no number, and gating on the number claimed "No va al pedimento"
+  about cargo that does ship.
+
+Known, deliberately NOT unified: the export estimates on the **operation day, aggregated per guía**,
+while the cotejo panel estimates on the pedimento's **entry date, per partida** (and rounds per
+partida). For a shipment straddling a rate change the two figures differ legitimately. Picking one
+canonical date is a business decision, not a code cleanup — it is written down in the comment above
+`cargarVigencias()` so the next session does not "fix" it by guessing.
+
+**Still open, and the reason it is open:** there is no user administration at all — no
+`GET /api/users`, no deactivation, no password reset, no screen (`server/src/routes/users.ts` is 33
+lines: create + change role). A forgotten password or a departing employee currently needs database
+access. It was left alone on purpose rather than improvised: password reset touches the JWT `tv`
+(token version) revocation path and MFA enrollment, and a half-built version of that is worse than
+none.
 
 ## 1. What this project is
 
@@ -158,9 +225,9 @@ npm --prefix server test                      # server suite (needs local Postgr
 ```
 
 **Current baseline: ZERO failures in both suites** (backlog "#36" is closed, `f6c7fcf`). Measured
-fresh on 2026-08-10:
-- Root: `npx vitest run` → **75 files, 791 tests, 0 failures.**
-- Server: `npm --prefix server test` → **82 files, 1047 tests, 0 failures.**
+fresh on 2026-09-18 (previous mark, 2026-08-10, was 75/791 root and 82/1047 server):
+- Root: `npx vitest run` → **80 files, 900 tests, 0 failures.**
+- Server: `npm --prefix server test` → **87 files, 1211 tests, 0 failures.**
 
 The old "31 failing/5 files root, 3/1 server" baseline is **gone** — do not expect it and do not
 reintroduce it. A session that sees anything less than fully green owns a real regression, not a
@@ -168,7 +235,11 @@ pre-existing one. One caveat worth knowing: under full-suite load a single test 
 `server/test/routes/replan.test.ts` was observed to hit vitest's 5s default timeout once; run in
 isolation (`npx vitest run test/routes/replan.test.ts`) and in a second full clean run it passed
 both times — it is machine-load flakiness, not a real failure, but if you see it recur, consider it
-worth a `testTimeout` bump on that file rather than ignoring it forever. Never run two vitest
+worth a `testTimeout` bump on that file rather than ignoring it forever. The same thing was
+observed on 2026-09-18 in `server/test/routes/rateLimit.test.ts` ("does not throttle repeated
+bad-password attempts"): it times out at 5s under full-suite load and passes 8/8 in isolation. Both
+tests share the same shape — they wait on deliberately slow work (bcrypt, the tick) while 86 files
+compete for the machine. Never run two vitest
 processes against the shared test DB concurrently — truncation storms produce false failures. For
 `server`, set `TEST_DATABASE_URL` in `server/.env` (or override it in the shell) to your own scratch
 Postgres database — a role/db that already exists locally works fine; `createdb <name>` /
@@ -321,3 +392,165 @@ only cures what has already been lost, it does not prevent losing more.
 4. Work in the house conventions, verify against baselines, commit atomically with a WHY
    message, push (mind the gh account switch), deploy via Coolify, verify `/api/health`,
    and when the pipeline changed, run the E2E demo runner against production.
+
+### Addendum (2026-09-18) — `LeadTimesView`: la pantalla que el punto 7 no tenía
+
+`shared/operaciones/leadTimes.ts` calculaba las once métricas desde agosto y
+`GET /api/reportes/lead-times` las servía agregadas, con su `.xlsx` al lado. Nada del frontend
+llamaba a `/api/reportes`: el punto 7 del cliente estaba construido y era invisible.
+
+`src/components/LeadTimesView.tsx` es esa vista. No agrega aritmética — importa
+`METRICAS_LEAD_TIME` y consume el resumen que el servidor ya calcula con la misma función que usa
+el export, para que pantalla y archivo no puedan discrepar. Filtros `desde`/`hasta`/`clientId`,
+exactamente `reporteOperativoQuery`; los vacíos se omiten en vez de viajar como `desde=`, que el
+servidor valida como fecha y contestaría 400.
+
+Lo que la pantalla tiene que respetar, y que las pruebas fijan porque son tres formas conocidas de
+mentir con un tablero:
+
+- **`null` se dibuja «—», nunca 0.** Un embarque sin POD firmado tiene lead time desconocido.
+- **El denominador se imprime bajo cada promedio.** "Tiempo en almacén 3h" sobre 3 de 90 guías es
+  una muestra; `muestras` viaja con el promedio desde el módulo y aquí se ve.
+- **Un intervalo negativo se muestra y se marca en ámbar.** Significa que dos marcas de tiempo se
+  contradicen — captura diferida, reloj de un dispositivo, hecho registrado fuera de orden.
+  Recortarlo a cero borra la única evidencia de que algo hay que arreglar.
+
+`rulesetVersion` se imprime junto al detalle, por la misma razón por la que el módulo lo estampa:
+una cifra que alguien fotografía hoy tiene que poder re-derivarse meses después.
+
+Visible para `admin`, `super_admin`, `capturista` y `autoridad` — el mismo conjunto que
+`rolesReporte` en el router, para que la sección no aparezca en el menú de quien recibiría un 403.
+`tramitador` sigue viendo sólo `ops_campo`.
+
+**Verificado con pruebas, no en navegador**: `npx tsc --noEmit` limpio y `npx vitest run` en 908
+pruebas (81 archivos), de las cuales 8 son de esta vista. No se levantó la app contra una base con
+operaciones sembradas.
+
+### Addendum (2026-09-18) — `descripcion_generica`: la primera señal que sale del análisis competitivo
+
+Contexto: se revisaron nueve capturas del sistema Sabueso (Hound Express). De la lista de "qué
+conviene tomarles", ésta era la única marcada **Tomar** que seguía pendiente — su pantalla de
+riesgo evalúa "¿Es genérica?" como columna propia y nosotros no teníamos nada equivalente.
+
+El hueco era real y silencioso. Una fila cuya descripción dice `"artículo"` pasaba por el motor sin
+una sola observación: `prohibidos` y `pirateria` buscan palabras *dentro* de la descripción, así que
+una descripción que no nombra nada las deja sin materia y la fila sale **verde**. Una descripción
+*vacía* sí estaba cubierta (`insufficientData` la manda a `gris`); una vaga, no.
+
+**`shared/risk/descripcion.ts`** decide en cuatro veredictos. La regla **no mide longitud** — a
+propósito: `"anillo de acero"` son 15 caracteres y nombra el objeto, `"mercancía general para uso
+doméstico"` son 38 y no nombra nada. Lo que se mide es si queda **al menos un token informativo**
+tras descontar tres catálogos cerrados (genéricos, materiales, relleno gramatical y muletillas de
+propósito del tipo "para uso doméstico", que abundan en los manifiestos traducidos del chino).
+
+- `solo_generica` / `vacia` → peso completo (25).
+- `solo_material` (`"Plástico de cristal"`) → 0.6 del peso. Nombrar la sustancia acota el capítulo
+  arancelario aunque no identifique el producto; no es lo mismo que no decir nada.
+- `informativa` → no dispara.
+
+**No lleva `forcesBand`.** Es una señal de *calidad del dato*, no de severidad: una descripción vaga
+no acusa a nadie, impide auditar. Forzar rojo mandaría medio manifiesto de cualquier remitente
+descuidado a la cola de revisión manual y quemaría la banda roja, que hoy significa "esto tiene algo
+malo", no "esto está mal capturado".
+
+**La recalibración de bandas no es cosmética.** Agregar el peso subió `maxPoints` 348 → 373, lo que
+comprime todos los scores un 6.7%. `amarillo` bajó 7 → 6 **porque tenía que bajar**: con 373 una
+fila que sólo trae `id` (RFC con dígito verificador malo, 25 pts) puntúa 6.70, y dejando el corte en
+7 esa fila habría caído a verde — o sea que agregar una señal nueva habría *escondido* una que ya
+existía. `rojo` bajó 11 → 10 por proporción (el umbral crudo 38.28 es 10.26% de 373).
+`shared/risk/descripcion.test.ts` fija ese caso explícitamente; si alguien vuelve a tocar los pesos,
+ese test es el que avisa.
+
+Medido sobre el manifiesto golden de 501 filas: la señal dispara en **1**, y es un acierto
+(`"Plástico de cristal"`). Distribución antes → después: verde 87.82% → 87.62%, amarillo 5.39% →
+5.59%, rojo 6.79% → **6.79%** (sin cambio). Exactamente una fila cambió de banda. `enhanced.test.ts`
+fija ese 1 como guarda de **precisión**: si un cambio al catálogo hiciera disparar la señal en
+decenas de filas, ese test lo delata antes de que llegue a la cola de revisión del cliente.
+
+Catálogo administrable por config `descripciones_genericas`, igual que `prohibited` y
+`piracy_brands`. **Reemplaza al de fábrica, no se suma** (hay test, y la UI lo dice en negritas —
+quien escriba tres palabras creyendo que las agrega apagaría en silencio las ~90 de fábrica).
+Viaja en `resolved.lists`, así que el `ruleset_hash` cambia con la lista y un score viejo se puede
+volver a derivar.
+
+La llave va en `ALLOWED_CONFIG_KEYS` de **`server/src/validation/schemas.ts`** (nivel admin, no
+super_admin: es un catálogo de calidad, no una lista de sanciones) y tiene su editor en
+`ConfigurationView` → *Motor de riesgo*, junto a prohibidos y piratería. Sin esa entrada el
+override habría sido código muerto —`riskService` lo lee, pero nadie habría podido escribirlo—;
+hay una prueba en `catalogs.test.ts` que fija justamente eso.
+
+**Trampa encontrada de paso, ya desactivada:** `catalogs.ts` tenía una SEGUNDA lista de llaves
+permitidas, un `Set` llamado igual, que **nadie consultaba** — ningún `.has()` lo leía. La que
+manda siempre fue el `z.enum` de `schemas.ts`, vía `configKeyParam` + el middleware `validate`.
+Agregar la llave a la copia muerta daba un 400 con el rastro pareciendo correcto (me pasó). Se
+borró el `Set` en vez de sincronizarlo y quedó un comentario en su lugar diciendo dónde vive la
+lista real: dos listas que deben coincidir y sólo una manda es una trampa, no una redundancia.
+
+En `HUELLA_EVIDENCIA` la proyección es `['veredicto']` y **no** el texto crudo. Si el texto
+participara del hash, el remitente que siempre escribe "gift" obligaría a re-afirmar la disposición
+en cada manifiesto por una mayúscula de diferencia. El veredicto sí discrimina: disponer "sólo dice
+el material, lo verifiqué con el cliente" no puede tapar una fila posterior que ya no dice nada.
+
+`RULESET.version` → `2026-09a`. Seis guardas literales se actualizaron a mano y con su razón
+anotada (`maxPoints` 348→373, las señales de `HUELLA_EVIDENCIA` 9→10, un score 10→9 por el
+denominador nuevo, y la versión) — están escritas para atrapar cambios accidentales, así que
+cambiarlas es una decisión, no un trámite. Dos más del lado del servidor: la versión persistida en
+`risk.test.ts`, y el snapshot de paridad de `riesgoEfectivo.test.ts`, que está escrito a mano como
+"esto es lo que el sistema respondía, congelado". Ése se re-congeló **una** vez, con la razón
+anotada dentro del propio archivo: la fila gris del fixture suma el motivo "La descripción viene
+vacía" porque su semilla trae `descripcion: ''`. Sigue siendo gris y las cuatro superficies siguen
+contando 1/1/1/1 — la diferencia viene del motor, aguas arriba, que es exactamente lo que ese
+archivo NO está midiendo.
+
+La tabla de riesgo no necesitó trabajo: `RiskResultTable` pinta `r.detail` y `(r.signalId)` de
+forma genérica, así que el hallazgo aparece solo con su texto en español.
+
+**Lo que NO se hizo, y por qué** (del mismo análisis): `RRNA` y `aduana exclusiva` quedaron en
+*Evaluar* — necesitan catálogos regulatorios mantenidos al día, que es un compromiso permanente y
+no una feature. El estado de `previo` está marcado *Diseñar con Luis*. `Transportista y placas por
+guía` es *Integrar por API* contra el webhook de ellos: no hay nada que construir, hay que conectar
+algo que todavía no tenemos.
+
+**Verificado con pruebas, no en navegador**: `npx tsc --noEmit` limpio en raíz y en `server/`;
+`npx vitest run` en `server/` da **1213 pruebas / 87 archivos, todas en verde** (443s, corrida sola
+—la regla de no cruzar dos vitest contra la base de pruebas sigue viva y esta vez se respetó), y en
+raíz **723 / 54**. No se levantó la app contra una base con manifiestos sembrados: la señal se midió
+contra el fixture golden de 501 filas, que es el mismo insumo con el que se calibró el motor.
+
+### Addendum (2026-09-18) — por qué `npm audit fix` no sirve en este repo
+
+El check `npm audit (high/critical)` llevaba semanas en rojo en **todas** las ramas, incluidas `main`
+y `develop`. Nueve vulnerabilidades `high` entre raíz y `server/`: `browserslist`, `nanoid`,
+`postcss`, `undici`, `brace-expansion`, `multer`, `nodemailer`.
+
+GitHub recomienda `npm audit fix`. **En este repo ese comando no corre**: revienta con
+
+```
+npm error Cannot read properties of null (reading 'edgesOut')
+```
+
+El stack lo ubica en `#loadPeerSet` de arborist (`build-ideal-tree.js:1289`) resolviendo
+`node_modules/vitest` — un bug conocido de npm con sets de peer-deps profundos. Falla igual con
+`--package-lock-only`, así que no hay bandera que lo salve. La primera sospecha fue `xlsx`, que se
+instala desde un tarball de la CDN de SheetJS y suele confundir a arborist; el log la descarta.
+
+La vía que sí funciona (`npm install` normal no revienta, sólo `audit fix`):
+
+- **Deps directas** — se suben en `package.json`: `multer ^2.2.0 → ^2.4.0`,
+  `nodemailer ^9.0.5 → ^9.1.1`.
+- **Deps transitivas** — entran por `vite`/`vitest`, así que se fijan con `overrides`:
+  raíz `browserslist ^4.29.0`, `nanoid ^3.3.19`, `postcss ^8.5.28`, `undici ^7.29.1`;
+  `server/` `brace-expansion ^5.0.12`, `nanoid ^3.3.19`, `postcss ^8.5.28`.
+
+**Todas dentro del mismo major.** Se verificó una por una contra el registro antes de fijarlas:
+`nanoid` publica 3.3.19 (no hace falta saltar a 6.x), `undici` publica 7.29.1 (no hace falta 8.x) y
+`nodemailer` publica 9.1.1 (no hace falta 10.x). Saltar de major ahí habría sido cambiar la API de
+la que dependen el `mailer` y la carga de archivos, a cambio de nada.
+
+Quedan vulnerabilidades `moderate` y `low` (7 en raíz, 5 en `server/`) que el workflow no considera
+—corre con `--audit-level=high`— y que no se tocaron: subirlas exigía saltos de major.
+
+Verificado: `npm audit --audit-level=high` sale con **exit 0** en raíz y en `server/`; `tsc --noEmit`
+limpio en ambos; **1213/1213** en `server/` y **930/930** en raíz. `multer` y `nodemailer` no son
+adorno —los usan la carga de archivos y el envío de correo— así que el valor de esa corrida está en
+que confirma que el bump no cambió comportamiento, no sólo que compila.

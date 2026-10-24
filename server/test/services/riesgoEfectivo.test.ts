@@ -42,7 +42,7 @@ interface Semilla {
 
 /**
  * Cuatro líneas elegidas para que el motor produzca los cuatro colores con la config por defecto:
- * verde, amarillo (monto bajo 20 pts + cantidad 15 pts = 35/348 ≈ 10), rojo forzado (`prohibidos`)
+ * verde, amarillo (monto bajo 20 pts + cantidad 15 pts = 35/373 ≈ 9), rojo forzado (`prohibidos`)
  * y gris (sin descripción, sin valor y sin RFC → datos insuficientes).
  */
 const SEMILLAS: Semilla[] = [
@@ -207,6 +207,17 @@ async function superficies() {
  * CAPTURADO CONTRA EL CÓDIGO ANTERIOR A ESTA FASE, ejecutando el mismo montaje de arriba antes de
  * tocar una sola de las cuatro superficies. No es una expectativa escrita a mano sobre lo que
  * *debería* pasar: es lo que el sistema respondía, congelado. Ése es todo el valor que tiene.
+ *
+ * RE-CONGELADO UNA VEZ, 2026-09-18, ruleset 2026-09a. Qué cambió y por qué se aceptó:
+ *   P-GRIS suma el motivo "La descripción viene vacía". La semilla tiene `descripcion: ''`, así
+ *   que la señal `descripcion_generica` (nueva) dispara con veredicto `vacia`. La fila sigue
+ *   siendo `gris` y las cuatro superficies siguen contando 1/1/1/1: lo único que cambió es que
+ *   ahora el motivo DICE que faltaba la descripción, donde antes sólo mencionaba el RFC y el valor.
+ *
+ * La pregunta que este archivo existe para responder —"¿la capa de riesgo efectivo alteró algo?"—
+ * sigue contestada que no: la diferencia viene del MOTOR, aguas arriba, y se ve igual con y sin
+ * disposiciones. Cualquier otra edición a esta constante debe justificarse igual de explícita, o
+ * el snapshot deja de valer lo que dice el párrafo de arriba.
  */
 const PARIDAD = {
   dashboard: { manifests: 1, distribution: { verde: 1, amarillo: 1, rojo: 1, gris: 1 } },
@@ -219,13 +230,13 @@ const PARIDAD = {
   ],
   pantalla: [
     { guide: 'P-AMARILLO', resultado: 'amarillo', motivo: 'Demasiados productos; Valor declarado incorrecto (muy bajo)' },
-    { guide: 'P-GRIS', resultado: 'gris', motivo: 'Falta RFC/CURP; Valor declarado incorrecto (muy bajo)' },
+    { guide: 'P-GRIS', resultado: 'gris', motivo: 'Falta RFC/CURP; Valor declarado incorrecto (muy bajo); La descripción viene vacía' },
     { guide: 'P-ROJO', resultado: 'rojo', motivo: 'Artículos prohibidos (pistola)' },
     { guide: 'P-VERDE', resultado: 'verde', motivo: '' },
   ],
   libro: [
     { Guia: 'P-AMARILLO', Resultado: 'amarillo', Motivo: 'Demasiados productos; Valor declarado incorrecto (muy bajo)' },
-    { Guia: 'P-GRIS', Resultado: 'gris', Motivo: 'Falta RFC/CURP; Valor declarado incorrecto (muy bajo)' },
+    { Guia: 'P-GRIS', Resultado: 'gris', Motivo: 'Falta RFC/CURP; Valor declarado incorrecto (muy bajo); La descripción viene vacía' },
     { Guia: 'P-ROJO', Resultado: 'rojo', Motivo: 'Artículos prohibidos (pistola)' },
     { Guia: 'P-VERDE', Resultado: 'verde', Motivo: '' },
   ],

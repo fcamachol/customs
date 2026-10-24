@@ -30,7 +30,7 @@ pedimentoLifecycleRouter.post(
       );
 
       if (!rows.length) {
-        res.status(404).json({ error: 'Pedimento not found' });
+        res.status(404).json({ error: 'Pedimento no encontrado.' });
         return;
       }
 
@@ -90,7 +90,7 @@ pedimentoLifecycleRouter.post(
       );
 
       if (!rows.length) {
-        res.status(404).json({ error: 'Pedimento not found' });
+        res.status(404).json({ error: 'Pedimento no encontrado.' });
         return;
       }
 
@@ -160,7 +160,7 @@ pedimentoLifecycleRouter.delete(
       );
 
       if (!rows.length) {
-        res.status(404).json({ error: 'Pedimento not found' });
+        res.status(404).json({ error: 'Pedimento no encontrado.' });
         return;
       }
 

@@ -196,6 +196,63 @@ describe('unidades — the fleet', () => {
     expect(rows[0].activo).toBe(false);
   });
 
+  /**
+   * RENOVAR Y LIMPIAR UNA VIGENCIA.
+   *
+   * El seguro y la verificación se renuevan cada año y también se capturan mal, así que el UPDATE
+   * tiene que poder AMBAS cosas: mover la fecha y borrarla. Lo segundo es la trampa: con
+   * `fechaOpcional` un `null` se pliega a `undefined`, que esta ruta lee como "no toques el campo"
+   * — la pantalla diría que guardó y el valor viejo seguiría ahí. Por eso `unidadUpdateBody` usa
+   * `fechaOpcionalNullable`, y por eso este test comprueba el borrado además de la renovación.
+   */
+  it('renueva la vigencia del seguro sin dar de baja la unidad', async () => {
+    const u = await crearUnidad({
+      placas: 'BBB2222', tipoUnidad: 'tracto', vigenciaSeguro: '2026-01-31',
+    }).expect(201);
+
+    const res = await request(app)
+      .put(`/api/transportistas/${transportistaId}/unidades/${u.body.id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ vigenciaSeguro: '2027-12-31' })
+      .expect(200);
+
+    expect(String(res.body.vigenciaSeguro)).toContain('2027-12-31');
+    // La unidad sigue activa: corregir un dato no es retirar el vehículo.
+    expect(res.body.activo).toBe(true);
+  });
+
+  it('permite BORRAR una vigencia mal capturada (null no se confunde con "no tocar")', async () => {
+    const u = await crearUnidad({
+      placas: 'CCC3333', tipoUnidad: 'tracto',
+      vigenciaSeguro: '2026-01-31', vigenciaVerificacion: '2026-02-28',
+    }).expect(201);
+
+    await request(app)
+      .put(`/api/transportistas/${transportistaId}/unidades/${u.body.id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ vigenciaSeguro: null })
+      .expect(200);
+
+    const { rows } = await query<{ vigencia_seguro: string | null; vigencia_verificacion: string | null }>(
+      'SELECT vigencia_seguro, vigencia_verificacion FROM transportista_unidades WHERE id = $1',
+      [u.body.id],
+    );
+    expect(rows[0].vigencia_seguro).toBeNull();
+    // El campo que no se mandó queda intacto: null borra, ausente no toca.
+    expect(rows[0].vigencia_verificacion).not.toBeNull();
+  });
+
+  it('permite corregir placas y tipo de unidad de un vehículo existente', async () => {
+    const u = await crearUnidad({ placas: 'DDD4444', tipoUnidad: 'tracto' }).expect(201);
+    const res = await request(app)
+      .put(`/api/transportistas/${transportistaId}/unidades/${u.body.id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ placas: 'ddd-44-45', tipoUnidad: 'torton' })
+      .expect(200);
+    expect(res.body.placas).toBe('DDD4445');
+    expect(res.body.tipoUnidad).toBe('torton');
+  });
+
   it('reports expiry as a computed fact about today', async () => {
     await crearUnidad({
       placas: 'AAA1111',

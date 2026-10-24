@@ -25,7 +25,7 @@ export const manifestsRouter = Router();
 
 manifestsRouter.post('/', requireAuth, requireRole('admin', 'capturista'), upload.single('file'), validate({ body: manifestCreateBody }), async (req, res) => {
   const { mawbReference, clientName, clientId } = req.body;
-  if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
+  if (!req.file) { res.status(400).json({ error: 'Falta el archivo.' }); return; }
 
   // Apply the client's saved header mappings (client-specific + global) so its column naming ingests
   // without a code change. With no clientId only the global mappings apply.
@@ -137,7 +137,7 @@ manifestsRouter.get(
   async (req, res) => {
     const man = await query<{ version_vigente: number }>(
       'SELECT version_vigente FROM manifests WHERE id=$1', [req.params.id]);
-    if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+    if (!man.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
     const version = Number(req.query.version ?? man.rows[0].version_vigente);
 
     const { rows } = await query<{ row_index: number; status: string; errors: unknown; warnings: unknown }>(
@@ -171,11 +171,11 @@ manifestsRouter.post(
   validate({ body: manifiestoVersionAplicarBody }),
   async (req, res) => {
     const id = req.params.id;
-    if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
+    if (!req.file) { res.status(400).json({ error: 'Falta el archivo.' }); return; }
 
     const man = await query<{ id: string; mawb_reference: string; client_id: string | null }>(
       'SELECT id, mawb_reference, client_id FROM manifests WHERE id=$1', [id]);
-    if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+    if (!man.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
 
     // Toda versión subida por aquí sustituye algo, así que el motivo es obligatorio. Se comprueba
     // contra el número de versión y no "siempre", para que la regla sea la misma que la del CHECK.
@@ -278,7 +278,7 @@ manifestsRouter.get(
   async (req, res) => {
     const man = await query<{ version_vigente: number }>(
       'SELECT version_vigente FROM manifests WHERE id=$1', [req.params.id]);
-    if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+    if (!man.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
 
     // `created_by_usuario` es ADITIVO (fase 4): `created_by` sigue saliendo igual y nada que ya
     // existiera cambia. Se añade porque la pantalla del auditor tiene que contestar «¿quién mandó
@@ -331,7 +331,7 @@ manifestsRouter.post(
     const id = req.params.id;
     const man = await query<{ ingestion_status: string }>(
       'SELECT ingestion_status FROM manifests WHERE id=$1', [id]);
-    if (!man.rows.length) { res.status(404).json({ error: 'Manifest not found' }); return; }
+    if (!man.rows.length) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
 
     const pendiente = await versionPendiente(id);
     if (!pendiente) {
@@ -416,10 +416,10 @@ manifestsRouter.post('/:id/client', requireAuth, requireRole('admin', 'capturist
   const { clientId, platformId } = req.body;
 
   const existing = await query('SELECT id FROM manifests WHERE id=$1', [id]);
-  if (existing.rows.length === 0) { res.status(404).json({ error: 'Manifest not found' }); return; }
+  if (existing.rows.length === 0) { res.status(404).json({ error: 'Manifiesto no encontrado.' }); return; }
 
   const clientCheck = await query('SELECT id FROM clients WHERE id=$1', [clientId]);
-  if (clientCheck.rows.length === 0) { res.status(404).json({ error: 'Client not found' }); return; }
+  if (clientCheck.rows.length === 0) { res.status(404).json({ error: 'Cliente no encontrado.' }); return; }
 
   if (platformId) {
     const pc = await query('SELECT id FROM client_platforms WHERE id=$1 AND client_id=$2', [platformId, clientId]);

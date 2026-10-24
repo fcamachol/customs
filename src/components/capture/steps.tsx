@@ -389,7 +389,12 @@ function PrevalidationResult({ prevalidation }: { prevalidation: Prevalidation }
             : 'border-red-200 bg-red-50 text-red-700'
         }`}
       >
-        Prevalidación: {prevalidation.status}
+        {/* El servicio devuelve APPROVED/REJECTED — vocabulario interno. Quien lee esto está
+            capturando pedimentos, no depurando el sistema, así que se traduce a lo que significa
+            para él: si pasó o si tiene que corregir algo. */}
+        {approved
+          ? 'Prevalidación aprobada'
+          : `Prevalidación rechazada${prevalidation.errors.length ? ` — ${prevalidation.errors.length} error(es) por corregir` : ''}`}
       </div>
       {prevalidation.errors.length > 0 && (
         <ul className="space-y-1">

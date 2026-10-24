@@ -398,7 +398,7 @@ conveniosRouter.post(
       const body = req.body as CincelWebhookPayload;
       const documentId = body?.document?.id;
       if (!documentId) {
-        res.status(400).json({ error: 'document.id es requerido' });
+        res.status(400).json({ error: 'Falta indicar el documento.' });
         return;
       }
 

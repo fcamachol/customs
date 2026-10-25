@@ -10,17 +10,9 @@
 // RRNA — Regulaciones y Restricciones No Arancelarias
 // ============================================================================
 
-export type RRNACategory =
-  | 'COFEPRIS_FOOD'              // Food, supplements, vitamins
-  | 'COFEPRIS_COSMETICS'         // Cosmetics, perfumes, lotions
-  | 'COFEPRIS_MEDICAL'           // Medical devices, orthopedic
-  | 'SENASICA_AGRICULTURAL'      // Raw agricultural products
-  | 'SEMARNAT_ENVIRONMENTAL'     // Timber, hazardous waste
-  | 'CITES_WILDLIFE'             // Endangered species flora/fauna
-  | 'SEDENA_WEAPONS'             // Arms, ammunition, explosives, dual-use
-  | 'DIFFICULT_IDENTIFICATION'   // Powders, liquids, pills, granules
-  | 'ZERO_VALUE'                 // Declared value = 0 (Rule 3.7.3)
-  | 'GENERIC_DESCRIPTION';       // "artículos diversos", "regalo", "cortesía"
+// La unión vive junto al catálogo que la usa (`shared/rrna/catalogo.ts`). Declararla aquí otra vez
+// dejaba dos listas de categorías regulatorias que nadie garantizaba iguales.
+export type { RRNACategory } from '../../shared/rrna/catalogo';
 
 // ============================================================================
 // Compliance Rules — Real RGCE Rules

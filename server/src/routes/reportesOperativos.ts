@@ -12,8 +12,11 @@ import {
   METRICAS_LEAD_TIME,
   calcularLeadTimes,
   resumirLeadTimes,
+  resumirPorPeriodo,
+  compararAnios,
   type LeadTimes,
 } from '../../../shared/operaciones/leadTimes';
+import { CORTES, type Corte } from '../../../shared/operaciones/periodos';
 
 /**
  * OPERATIONAL REPORTING — points 6 and 7 of the authorised requirement (Fase C).
@@ -478,6 +481,13 @@ reportesOperativosRouter.get(
     try {
       const filtros = req.query as unknown as ReporteOperativoQuery;
       const filas = (await cargarFilas(filtros)).map(conLeadTimes);
+      // Mensual por default: es el corte con el que se habla en la junta, y el único que da
+      // muestras de tamaño razonable en un cliente que mueve decenas de operaciones al mes.
+      const corte: Corte = filtros.corte ?? 'mes';
+      const series = resumirPorPeriodo(
+        filas.map((f) => ({ ancla: f.arriboVueloAt, leadTimes: f.leadTimes })),
+        corte,
+      );
       await recordAudit({
         userId: req.user!.userId,
         action: 'VIEW_LEAD_TIMES',
@@ -490,9 +500,19 @@ reportesOperativosRouter.get(
         filtros,
         rulesetVersion: LEAD_TIME_RULESET_VERSION,
         metricas: METRICAS_LEAD_TIME,
+        // El catálogo viaja con la respuesta por la misma razón que `metricas`: la pantalla no
+        // reimplementa la lista de cortes, la recibe.
+        cortes: CORTES,
         // `muestras` travels with every average: an average over three of ninety shipments is a
         // sample, and a dashboard that hid the denominator would be the spreadsheet again.
         resumen: resumirLeadTimes(filas.map((f) => f.leadTimes)),
+        // Series por periodo + volumen año contra año. El ancla es el arribo del vuelo: es el
+        // inicio de la cadena que estas métricas miden, y `resumirPorPeriodo` lo lleva a día local
+        // antes de agrupar. Una fila sin arribo no tiene lead times que contar de todos modos, y
+        // aun así se ve — cae en `sin-fecha` en vez de desaparecer de la suma.
+        corte,
+        series,
+        comparativoAnual: compararAnios(series, corte),
         filas: filas.map((f) => ({
           operacionId: f.operacionId,
           mawb: f.mawb,

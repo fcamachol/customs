@@ -36,6 +36,21 @@ describe('enhanced engine on the 501-row golden manifest', () => {
       .toBe('solo_material');
   });
 
+  it('la señal de clasificación marca 6 filas — y son las dos caras de UNA sola contradicción', () => {
+    // Guarda de precisión. La regla obvia —marcar la fracción "los demás", las que terminan en
+    // 99/90— marca 131 de estas 501 filas (26%): barrer un cuarto del manifiesto no dirige la
+    // revisión a ningún lado. La contradicción interna marca 6, y todas son la misma mercancía.
+    const scored = scoreManifest(ships, {});
+    const con = scored.filter((s) => s.reasons.some((r) => r.signalId === 'clasificacion_inconsistente'));
+    expect(con).toHaveLength(6);
+    const claves = new Set(con.map((s) => s.reasons.find((r) => r.signalId === 'clasificacion_inconsistente')?.evidence?.clave));
+    expect(claves.size).toBe(1);
+    expect([...claves][0]).toBe('funda de plastico para telefono movil');
+    // Las dos fracciones difieren ya a 8 dígitos: adorno de plástico contra los demás manufacturas.
+    expect(con[0].reasons.find((r) => r.signalId === 'clasificacion_inconsistente')?.evidence?.fracciones)
+      .toEqual(['39264000', '39269099']);
+  });
+
   it('every row carries reasons-array, 0-100 score, and a ruleset hash', () => {
     const scored = scoreManifest(ships, {});
     expect(scored[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);

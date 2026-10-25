@@ -4,6 +4,7 @@ import { matchesBrand, matchesProhibited, matchesDeniedParty, type DeniedPartyEn
 import { resolveThresholds, type Thresholds, type Weights } from './ruleset';
 import { norm as _norm } from './normalize';
 import { analizarDescripcion, type VeredictoDescripcion } from './descripcion';
+import { claveMercancia, fraccionBase } from './clasificacion';
 
 export interface RiskContext {
   nameCounts: Record<string, number>;
@@ -65,7 +66,7 @@ export function runSignals(s: Shipment, ctx: RiskContext): SignalResult[] {
 
 export type SignalId =
   | 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd'
-  | 'denied_party' | 'descripcion_generica';
+  | 'denied_party' | 'descripcion_generica' | 'clasificacion_inconsistente';
 
 export interface ReasonCode {
   signalId: SignalId;
@@ -108,6 +109,10 @@ export interface EntityContext {
   /** Catálogo administrable de términos genéricos (config `descripciones_genericas`).
    * Ausente → se usa `GENERICOS_DEFAULT` de descripcion.ts. */
   terminosGenericos?: string[];
+  /** PASO 1: clave de mercancía → fracciones en conflicto. Sólo trae los grupos con más de una
+   * fracción; ausente o vacío = no se evaluó la contradicción (manifiesto de una sola fila, por
+   * ejemplo). Lo construye `indexarClasificacion` en classify.ts. */
+  fraccionesPorMercancia?: Record<string, string[]>;
   /**
    * F18: denied-party / sanctions list (OFAC/BIS/EU/UN).
    * Loaded from the `denied_parties` config key and passed through scoreManifest → EntityContext.
@@ -246,6 +251,30 @@ export function gradeSignals(s: Shipment, ctx: EntityContext): ReasonCode[] {
       (distinctCount - (t.addressDistinctConsignees - 1)) / t.addressDistinctConsignees,
       'Misma dirección de entrega',
       { distinctConsignees: distinctCount },
+    );
+  }
+
+  // clasificacion_inconsistente: la misma mercancía bajo dos fracciones distintas.
+  //
+  // Va pegada a `descripcion_generica` porque son las dos caras del mismo problema: una dice que no
+  // se sabe QUÉ entró, la otra que no se sabe BAJO QUÉ entró. Juntas son el caso que ningún
+  // análisis posterior puede rescatar.
+  //
+  // El hallazgo se pone en TODAS las filas del grupo, no sólo en las de la fracción minoritaria.
+  // Es deliberado: el motor no sabe cuál de las dos clasificaciones es la correcta, y señalar a la
+  // minoritaria sería inventar esa respuesta — a veces la mayoría es la que está mal. Quien revisa
+  // necesita ver las dos caras para decidir; marcar una sola escondería la mitad de la evidencia.
+  //
+  // Tampoco lleva forcesBand, por la misma razón: de dos líneas contradictorias, al menos una está
+  // mal, pero al menos una está BIEN. Forzar rojo condenaría también a la correcta.
+  const claveMerc = claveMercancia(s.description);
+  const fraccionesEnConflicto = claveMerc ? ctx.fraccionesPorMercancia?.[claveMerc] : undefined;
+  if (fraccionesEnConflicto && fraccionesEnConflicto.length > 1) {
+    add(
+      'clasificacion_inconsistente',
+      1,
+      `La misma mercancía va declarada bajo ${fraccionesEnConflicto.length} fracciones distintas`,
+      { clave: claveMerc, fracciones: fraccionesEnConflicto, fraccionDeEstaFila: fraccionBase(s.hsCode) },
     );
   }
 

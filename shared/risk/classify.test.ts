@@ -102,8 +102,8 @@ describe('scoreManifest', () => {
 
   it('ruleset_version and ruleset_hash are set on every scored shipment', () => {
     const out = scoreManifest([ship()], {});
-    // 2026-09a: señal `descripcion_generica` + recalibración de bandas.
-    expect(out[0].ruleset_version).toBe('2026-09a');
+    // 2026-09b: señal `clasificacion_inconsistente`.
+    expect(out[0].ruleset_version).toBe('2026-09b');
     expect(out[0].ruleset_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 

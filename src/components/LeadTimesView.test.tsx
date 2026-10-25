@@ -44,12 +44,21 @@ const FILA = {
   rulesetVersion: '2026-08a',
 };
 
+const CORTES = [
+  { id: 'dia', label: 'Diario' }, { id: 'semana', label: 'Semanal' },
+  { id: 'mes', label: 'Mensual' }, { id: 'anio', label: 'Anual' },
+];
+
 function respuesta(over: Record<string, unknown> = {}) {
   return {
     rulesetVersion: '2026-08a',
     resumen: resumen({ almacenMin: { muestras: 1, promedioMin: 134, medianaMin: 134, minimoMin: 134, maximoMin: 134 } }),
     filas: [FILA],
     total: 1,
+    corte: 'mes',
+    cortes: CORTES,
+    series: [],
+    comparativoAnual: [],
     ...over,
   };
 }
@@ -112,7 +121,9 @@ describe('LeadTimesView', () => {
     await montar(respuesta());
     await esperarDatos();
     const llamadas = vi.mocked(apiGet).mock.calls.map((c) => c[0] as string);
-    expect(llamadas).toContain('/api/reportes/lead-times');
+    // El corte SÍ viaja siempre (tiene default); las fechas vacías no. Un `desde=` vacío no es
+    // "sin filtro", es un 400 del servidor.
+    expect(llamadas).toContain('/api/reportes/lead-times?corte=mes');
     expect(llamadas.some((p) => p.includes('desde=&') || p.endsWith('desde='))).toBe(false);
   });
 
@@ -126,7 +137,7 @@ describe('LeadTimesView', () => {
 
     await waitFor(() => {
       const llamadas = vi.mocked(apiGet).mock.calls.map((c) => c[0] as string);
-      expect(llamadas).toContain('/api/reportes/lead-times?desde=2026-09-01');
+      expect(llamadas).toContain('/api/reportes/lead-times?desde=2026-09-01&corte=mes');
     });
   });
 
@@ -144,6 +155,84 @@ describe('LeadTimesView', () => {
         'Lead_times.xlsx',
       ),
     );
+  });
+
+  it('manda el corte elegido y lo aplica al pedir de nuevo', async () => {
+    const { apiGet } = await import('../api');
+    await montar(respuesta());
+    await esperarDatos();
+    fireEvent.change(screen.getByLabelText('Corte'), { target: { value: 'semana' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }));
+    await waitFor(() => {
+      const llamadas = vi.mocked(apiGet).mock.calls.map((c) => String(c[0]));
+      expect(llamadas.some((u) => u.includes('/api/reportes/lead-times') && u.includes('corte=semana'))).toBe(true);
+    });
+  });
+
+  it('la serie por periodo muestra el volumen de cada cubeta', async () => {
+    await montar(respuesta({
+      series: [
+        { periodo: '2026-08', operaciones: 12, resumen: resumen({ leadTimeMin: { muestras: 12, promedioMin: 300, medianaMin: 290, minimoMin: 100, maximoMin: 900 } }) },
+        { periodo: '2026-09', operaciones: 30, resumen: resumen({ leadTimeMin: { muestras: 28, promedioMin: 244, medianaMin: 240, minimoMin: 90, maximoMin: 800 } }) },
+      ],
+    }));
+    await esperarDatos();
+    expect(screen.getByText('Evolución por periodo')).toBeTruthy();
+    expect(screen.getByText('2026-08')).toBeTruthy();
+    expect(screen.getByText('2026-09')).toBeTruthy();
+    expect(screen.getByText('30')).toBeTruthy();
+  });
+
+  it('las operaciones sin arribo se ven, en vez de desaparecer de la suma', async () => {
+    // Si no salieran, la suma de los periodos sería menor que el total y nadie sabría por qué.
+    await montar(respuesta({
+      series: [
+        { periodo: '2026-09', operaciones: 30, resumen: resumen() },
+        { periodo: 'sin-fecha', operaciones: 4, resumen: resumen() },
+      ],
+    }));
+    await esperarDatos();
+    expect(screen.getByText('Sin arribo registrado')).toBeTruthy();
+    expect(screen.getByText(/no se pueden ubicar en un periodo/i)).toBeTruthy();
+  });
+
+  it('el comparativo anual muestra la variación con signo', async () => {
+    await montar(respuesta({
+      comparativoAnual: [
+        { periodo: '09', porAnio: { '2025': 100, '2026': 143 }, variacionPct: 43, anioBase: '2025', anioComparado: '2026' },
+      ],
+    }));
+    await esperarDatos();
+    expect(screen.getByText('Volumen año contra año')).toBeTruthy();
+    expect(screen.getByText('+43%')).toBeTruthy();
+  });
+
+  it('sin año anterior la variación es «—», no 0% ni +100%', async () => {
+    await montar(respuesta({
+      comparativoAnual: [
+        { periodo: '09', porAnio: { '2026': 143 }, variacionPct: null, anioBase: null, anioComparado: '2026' },
+      ],
+    }));
+    await esperarDatos();
+    const celda = screen.getByTitle('No hay con qué comparar: falta el año anterior, o fue cero');
+    expect(celda.textContent).toBe('—');
+  });
+
+  it('un año sin operaciones deja la celda en «—», no en cero', async () => {
+    await montar(respuesta({
+      comparativoAnual: [
+        { periodo: '09', porAnio: { '2026': 143 }, variacionPct: null, anioBase: null, anioComparado: '2026' },
+        { periodo: '10', porAnio: { '2025': 90, '2026': 95 }, variacionPct: 5.6, anioBase: '2025', anioComparado: '2026' },
+      ],
+    }));
+    await esperarDatos();
+    expect(screen.getByTitle('Sin operaciones registradas ese año').textContent).toBe('—');
+  });
+
+  it('sin comparativo no dibuja la tarjeta vacía', async () => {
+    await montar(respuesta({ comparativoAnual: [] }));
+    await esperarDatos();
+    expect(screen.queryByText('Volumen año contra año')).toBeNull();
   });
 
   it('sin operaciones en el rango no inventa un tablero de ceros', async () => {

@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Download, Eye, FileText, Shie
 import { apiGet, apiDownload } from '../api';
 import { Card } from './ui';
 import { RiskResultTable, RiskSummary } from './RiskResultTable';
+import { PanelRrna } from './PanelRrna';
 import type { RiskRow, RiskSummaryData } from './RiskResultTable';
 import { TramiteDetailDrawer } from './TramiteDetailDrawer';
 
@@ -296,6 +297,10 @@ export function RiskPanel({ recordId, refreshKey = 0 }: { recordId: string; refr
             version={bundle.version}
             onDisposicion={() => setRecarga((n) => n + 1)}
           />
+          {/* Va DESPUÉS de la tabla de riesgo, y no dentro: son indicios por palabra clave que no
+              alimentan el semáforo, y mezclarlos con los hallazgos del motor les daría una
+              autoridad que no tienen. Se dibuja solo si hay algo que revisar. */}
+          <PanelRrna manifestId={recordId} />
         </div>
       )}
     </Card>

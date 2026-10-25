@@ -23,7 +23,7 @@
  *     legitimate distinct people.
  */
 export const RULESET = {
-  version: '2026-09a',
+  version: '2026-09b',
   thresholds: {
     cantidad: 10,
     montoMin: 1,
@@ -75,6 +75,10 @@ export const RULESET = {
      * las dos juntas (50 pts) la mandan a rojo, que es exactamente el caso "ni sé quién la recibe
      * ni sé qué es". Ver `shared/risk/descripcion.ts` para el criterio. */
     descripcion_generica: 25,
+    /** Misma mercancía bajo dos fracciones distintas en el mismo manifiesto. Peso 25 para que una
+     * contradicción sola alcance amarillo: es un hallazgo accionable por sí mismo —al menos una de
+     * las dos líneas está mal clasificada— aunque no diga cuál. Ver `shared/risk/clasificacion.ts`. */
+    clasificacion_inconsistente: 25,
   },
   /** Score bands: [0, amarillo) = verde, [amarillo, rojo) = amarillo, [rojo, 100] = rojo.
    * Calibrated in Task 7: with the 501-row golden fixture these thresholds produced
@@ -101,7 +105,21 @@ export const RULESET = {
    *     que agregar una señal nueva habría *escondido* una que ya existía.
    *   rojo:     11 → 10 — proporcional: el umbral crudo 38.28 (11% de 348) es 10.26% de 373.
    * La señal dispara en 1 de las 501 filas del fixture ("Plástico de cristal", que en efecto no
-   * nombra el objeto), así que la distribución observada casi no se mueve — ver enhanced.test.ts. */
+   * nombra el objeto), así que la distribución observada casi no se mueve — ver enhanced.test.ts.
+   *
+   * Recalibración 2026-09b (señal `clasificacion_inconsistente`, peso 25): maxPoints 373 → 398.
+   *   amarillo: se QUEDA en 6 — con 398, `id` sola (25 pts) puntúa 6.28, que sigue por encima del
+   *     corte. Bajarla a 5 habría metido filas nuevas a la cola sin que nada lo justifique.
+   *   rojo:     se QUEDA en 10. La proporción pura decía 9 (el umbral crudo 37.3 es 9.37% de 398),
+   *     y estaba MAL: el score se redondea antes de comparar, así que una fila de 35 pts crudos
+   *     —`cantidad` 15 + `monto` 20, una combinación que existe desde siempre— puntúa
+   *     35/398 = 8.79 → redondea a 9, y con el corte en 9 habría saltado de amarillo a ROJO.
+   *     Es decir: la aritmética proporcional, aplicada sin mirar el redondeo, habría escalado en
+   *     silencio una combinación vieja. Lo atrapó `efectivo.test.ts`; se deja en 10, que es el
+   *     valor que conserva esa fila en amarillo.
+   * La señal dispara en 6 de las 501 filas del fixture, todas de la misma mercancía declarada bajo
+   * 39264000 y 39269099: 3 quedan en amarillo por la señal sola y 3 en rojo porque además traen
+   * `bbdd` (mismo consignatario importando repetido). Ninguna otra fila se movió. */
   bands: { amarillo: 6, rojo: 10 },
 } as const;
 
@@ -149,10 +167,11 @@ export function resolveThresholds(overrides?: Partial<Record<keyof Thresholds, u
  * per address). `agregado` (F13) is the cross-row split-shipment aggregate cap.
  * `denied_party` (F18) is the OFAC/BIS/EU/UN sanctions screening signal.
  * `descripcion_generica` marca la fila cuya descripción no nombra la mercancía.
+ * `clasificacion_inconsistente` marca la mercancía declarada bajo dos fracciones distintas.
  */
 export type Weights = Record<
   | 'id' | 'cantidad' | 'monto' | 'agregado' | 'direcciones' | 'prohibidos' | 'pirateria' | 'bbdd'
-  | 'denied_party' | 'descripcion_generica',
+  | 'denied_party' | 'descripcion_generica' | 'clasificacion_inconsistente',
   number
 >;
 

@@ -554,3 +554,234 @@ Verificado: `npm audit --audit-level=high` sale con **exit 0** en raíz y en `se
 limpio en ambos; **1213/1213** en `server/` y **930/930** en raíz. `multer` y `nodemailer` no son
 adorno —los usan la carga de archivos y el envío de correo— así que el valor de esa corrida está en
 que confirma que el bump no cambió comportamiento, no sólo que compila.
+
+### Addendum (2026-09-18) — `clasificacion_inconsistente`: la segunda señal del análisis competitivo
+
+Sabueso evalúa **"¿Permite la clasificación correcta?"** como columna propia. Contestar eso de
+verdad —si la descripción alcanza para asignar LA fracción correcta— exige un catálogo TIGIE al día,
+que es compromiso permanente y no una feature. Ésta es la parte de la pregunta que sí se puede
+contestar sin catálogo, y además la única que un auditor puede verificar solo:
+
+> si la misma mercancía aparece en el mismo manifiesto bajo dos fracciones distintas,
+> al menos una de las dos está mal, sin necesidad de saber cuál.
+
+Es una **contradicción interna**, no una opinión sobre la clasificación. Por eso no depende de fuente
+externa y por eso se sostiene meses después: la evidencia es el propio manifiesto.
+
+**Hallazgo de fondo:** `hsCode` se capturaba, se validaba el formato (`validateManifest` avisa si no
+son 8 o 10 dígitos) y después **no lo usaba ni una línea del motor de riesgo**. Mismo patrón que la
+descripción: dato capturado y descartado.
+
+**La regla obvia se midió y se descartó.** Marcar la fracción "los demás" (las que terminan en 99 o
+90) suena bien y marca **131 de las 501** filas del fixture — el 26%. Una señal que barre un cuarto
+del manifiesto no dirige la revisión a ningún lado. La contradicción interna marca **6** (1.2%), y
+las seis son la misma mercancía: `"funda de plástico para teléfono móvil"` declarada bajo
+**39264000** (artículos de adorno) y **39269099** (los demás manufacturas de plástico).
+
+Decisiones que las pruebas fijan:
+
+- **Se compara a 8 dígitos, no a 10.** Los últimos dos son el NICO, que desagrega *dentro* de la
+  misma fracción. Comparar a 10 inventaría hallazgos donde no hay desacuerdo de clasificación.
+- **La clave de mercancía es conservadora**: acentos, mayúsculas, espacios y el sufijo `* n`, nada
+  más. No reduce a tokens ni agrupa sinónimos. Agrupar de más no da una señal más sensible: da una
+  acusación falsa —"clasificaste igual dos cosas distintas"— que es lo que destruye la confianza en
+  el semáforo.
+- **Se marcan las DOS caras**, no sólo la fracción minoritaria. El motor no sabe cuál es la
+  correcta, y señalar a la minoría sería inventar esa respuesta; a veces la mayoría es la que está
+  mal. Quien revisa necesita ver las dos para decidir.
+- **Sin `forcesBand`**, por lo mismo: de dos líneas contradictorias al menos una está mal, pero al
+  menos una está BIEN. Forzar rojo condenaría también a la correcta.
+- En `HUELLA_EVIDENCIA` la proyección es `['clave', 'fracciones']`. `fraccionDeEstaFila` queda
+  FUERA a propósito para que las dos caras compartan huella — si no, disponer sobre una dejaría viva
+  la otra y el humano afirmaría dos veces lo mismo.
+
+**Un error mío que atrapó la suite, y vale la pena que quede escrito.** Al recalibrar bandé `rojo`
+de 10 a 9 por proporción pura (el umbral crudo 37.3 es 9.37% de los nuevos 398 puntos). Estaba mal:
+**el score se redondea antes de comparar**, así que una fila de 35 puntos crudos —`cantidad` 15 +
+`monto` 20, una combinación que existe desde siempre— puntúa 35/398 = 8.79, redondea a 9, y con el
+corte en 9 habría saltado de amarillo a **rojo**. La aritmética proporcional aplicada sin mirar el
+redondeo escalaba en silencio una combinación vieja. Lo detectó el aserto de `colorEfectivo` en
+`efectivo.test.ts`; `rojo` se quedó en **10**. Si alguien vuelve a mover pesos, ése es el test que
+avisa, y ahora lleva el comentario que lo explica.
+
+Distribución sobre el golden, 2026-09a → 2026-09b: verde 87.62% → 86.43%, amarillo 5.59% → 6.39%,
+rojo 6.79% → 7.19%. Se movieron **exactamente las 6 filas marcadas** y ninguna otra: 3 a amarillo por
+la señal sola, 3 a rojo porque además traen `bbdd` (mismo consignatario importando repetido *y*
+clasificando de dos formas — una combinación que merece rojo).
+
+`RULESET.version` → `2026-09b`. Cinco guardas literales actualizadas con su razón anotada.
+
+### Addendum (2026-09-20) — C3: cortes de periodo y volumen año contra año
+
+Su "CC Report" corta por mes, semana, día y prefijo; su "Informative Volumes" compara volúmenes año
+contra año por aduana. Nuestro `/api/reportes/lead-times` devolvía **un solo resumen** sobre todo el
+rango filtrado: contesta "cómo vamos", no "vamos mejor o peor que antes" — y la segunda es la que se
+pregunta en la junta.
+
+**`shared/operaciones/periodos.ts`** (nuevo) fija las dos convenciones que, mal elegidas, producen
+números creíbles y falsos:
+
+1. **El día es local, no UTC.** Se delega en `fechaLocalMexico` (`shared/operaciones/eta.ts`), que ya
+   existía y ya documenta el bug: CDMX va seis horas atrás, así que todo lo que pasa entre las 18:00
+   y la medianoche cae en el día SIGUIENTE si se pregunta en UTC. Un vuelo que aterriza a las 19:30
+   se contaría en un día que el almacén no trabajó. **No se reimplementó a propósito** — dos formas
+   de decidir qué día es un instante terminan discrepando.
+2. **La semana es ISO 8601**: empieza en lunes y pertenece al año de su **jueves**. No es un
+   tecnicismo: el 1-ene-2027 cae en viernes, así que esa semana es la W53 de 2026. Etiquetarla por
+   año calendario partiría una semana en dos años y el comparativo arrancaría con una semana de tres
+   días contra una de siete.
+
+Las etiquetas (`2026-09-18`, `2026-W38`, `2026-09`, `2026`) se eligieron para que **ordenen
+alfabéticamente igual que cronológicamente** — de ahí el cero a la izquierda en la semana, para que
+`W09` no se cuele después de `W10`.
+
+**`resumirPorPeriodo` / `compararAnios`** viven en `leadTimes.ts`, junto al resumen que ya existía.
+El ancla del periodo se pide **explícita** en vez de leerse de `LeadTimes`, porque `LeadTimes` son
+DURACIONES y no momentos: una fila sabe que el almacén tardó 214 minutos, no cuándo. El endpoint
+pasa `arriboVueloAt`, que es el inicio de la cadena que estas métricas miden.
+
+Reglas que las pruebas fijan:
+
+- **Las filas sin ancla no se descartan**: caen en `sin-fecha`, se ordenan al final y la pantalla las
+  nombra. Descartarlas haría que la suma de las cubetas fuera menor que el total sin que nadie sepa
+  por qué; repartirlas en una cubeta cualquiera sería peor. Hay un test de integración que afirma
+  que la suma de las cubetas **es** el total.
+- **`variacionPct` es `null`, no 0 ni +100%,** cuando falta el año anterior o cuando fue cero.
+  Dividir entre cero para reportar "+∞%" sería inventar una comparación que no existe.
+- **Se compara contra el año inmediato anterior**, no contra el más viejo de la serie.
+- **Con corte anual el comparativo va vacío**: el periodo ES el año, comparar sería enfrentarlo
+  consigo mismo.
+
+`corte` entró en `reporteOperativoQuery` como **opcional**, con el default (`mes`) en el handler y no
+en el schema: los otros endpoints comparten ese schema y no tienen series que cortar.
+
+**Un error de diseño mío que las pruebas viejas atraparon:** metí `corte` en la query que la pantalla
+comparte con la descarga del XLSX, y tres pruebas existentes fallaron. Tenían razón: el export es el
+detalle por guía, no tiene series, así que `corte` ahí es un parámetro que nadie usa. Ahora hay dos
+cadenas —`queryString` para el archivo, `queryReporte` para el tablero— y el XLSX quedó como estaba.
+
+El catálogo de cortes viaja en la respuesta (`cortes`), por la misma razón que `metricas`: la
+pantalla no mantiene una segunda lista sincronizada a mano. El `CORTES_FALLBACK` del componente sirve
+sólo para el primer render, antes de que llegue la respuesta.
+
+### Addendum (2026-09-20) — C4: el catálogo de RRNA que llevaba meses sin que nadie lo leyera
+
+`src/constants/rrnaCategories.ts` contenía **diez categorías de regulaciones no arancelarias**
+—COFEPRIS, SENASICA, SEMARNAT, CITES, SEDENA— cada una con su autoridad, su descripción y su
+fundamento (RGCE 3.7.5-E: esa mercancía debe despacharse por pedimento A1 con agente y padrón, no
+por T1), más listas de palabras clave. **Ningún archivo lo importaba.** Y `Shipment.rrnaNote` —lo
+que el remitente escribe en la columna de RRNA del manifiesto— se parseaba y no se mostraba en
+ninguna pantalla.
+
+Es el **cuarto** caso del mismo patrón en este repo: la descripción (señal `descripcion_generica`),
+la fracción (`clasificacion_inconsistente`), la clave de aduana (ver abajo) y ahora esto. Vale la
+pena decirlo en voz alta: cuando falte una capacidad, conviene buscar si ya está construida antes de
+construirla.
+
+**Qué se hizo.** El catálogo se movió intacto a `shared/rrna/catalogo.ts` para que el servidor lo
+alcance (vivía bajo `src/`, que es sólo el front); `src/constants/rrnaCategories.ts` quedó como
+re-export y `src/types/t1.ts` dejó de declarar su propia copia de `RRNACategory` — había dos listas
+de categorías regulatorias que nadie garantizaba iguales. `shared/rrna/evaluar.ts` es el evaluador
+que faltaba, y `GET /api/manifests/:id/rrna` + `PanelRrna` lo ponen a la vista.
+
+**NO alimenta el semáforo, y es una decisión medida, no una omisión.** Sobre el manifiesto golden de
+501 filas el catálogo marca 26 (5.2%), y cerca de la mitad son falsos positivos previsibles de una
+lista por palabra clave:
+
+| Descripción | Categoría | Veredicto |
+|---|---|---|
+| "Pistola de limpieza para pulverización" | SEDENA_WEAPONS | falso positivo |
+| "Flor de imitación de plástico" | SENASICA_AGRICULTURAL | falso positivo |
+| "Cuchara de café de acero inoxidable" | COFEPRIS_FOOD | falso positivo |
+| "Set de regalo de reloj de acero" | GENERIC_DESCRIPTION | falso positivo |
+| "belleza de lápiz labial" | COFEPRIS_COSMETICS | acierto |
+| "Pulverizador de perfume" | COFEPRIS_COSMETICS | acierto |
+
+Meter eso al score obligaría a recalibrar bandas y, peor, convertiría una heurística de texto en una
+banda roja. Los falsos positivos están **fijados en pruebas con nombre**, para que nadie los
+descubra en producción creyéndolos hallazgos y para que afinar el catálogo muestre qué cambió.
+
+Decisiones que las pruebas fijan:
+
+- **Coincidencia por palabra completa, no por subcadena.** El catálogo trae patrones de tres letras
+  (`'te '`, `'gel'`, `'oil'`); como subcadena, `te` pega en "teléfono", "textil" y "terminal". El
+  precio es recall ("chocolates" no pega con "chocolate") y es el lado correcto en el que
+  equivocarse: una lista de triaje que grita en todo deja de leerse.
+- **Una coincidencia por categoría**, no una por palabra: marcar COFEPRIS tres veces porque dice
+  "crema", "gel" y "jabón" no agrega información.
+- **Cada coincidencia lleva el término que la disparó.** Es lo que permite descartar un falso
+  positivo de un vistazo en vez de abriendo la guía — la diferencia entre una columna que se usa y
+  una que se ignora.
+- **`ZERO_VALUE` es numérico**, no de texto (su lista de patrones está vacía en el catálogo a
+  propósito). Y **sin valor declarado no dispara**: un dato faltante no es un cero, y confundirlos
+  inventaría la infracción de la RGCE 3.7.3 sobre una guía que sólo está incompleta.
+- El panel **no se dibuja si no hay nada que revisar**. Un panel que dice "0 hallazgos" en cada
+  manifiesto entrena a saltárselo, y entonces no sirve el día que sí trae algo.
+- Los colores son neutros y arranca cerrado: pintarlo de rojo sería un semáforo paralelo con
+  autoridad que esta heurística no tiene.
+
+Catálogo sustituible por config `rrna_patrones` (en la allowlist de `schemas.ts`), para que el
+cliente quite los términos ruidosos (`chaleco`, `flor`) sin desplegar. Ausente = el de fábrica;
+`loadRrnaPatrones` devuelve `null` y no `{}` justamente para que un override vacío no apague la
+revisión entera en silencio.
+
+### C2 (aduana exclusiva) — por qué NO se hizo y qué habría que mover
+
+Se empezó y se paró al encontrar que **el dato no existe donde hacía falta**. Tres hechos:
+
+1. **El manifiesto no trae la aduana.** Cero de 501 filas del golden. Las columnas del remitente no
+   la incluyen, así que la señal no puede vivir en el motor de riesgo: la fila no sabe por dónde
+   entró.
+2. **En el régimen T1 las partidas del pedimento van bajo fracción genérica 9901/9902**
+   (`GENERIC_FRACTION_RE`), no la fracción real. Un catálogo `fracción → aduanas permitidas` no casa
+   contra el pedimento directamente.
+3. **La clave de aduana se extrae del PDF y no se persiste.** `ExtractedPedimento.header` la trae
+   como `customsEntryCode`/`customsClearanceCode`, pero `prefillEntries` en `pedimentoUpload.ts` NO
+   las guarda. Y ojo con la trampa de nombres: `import_data.claveAduanaEntrada` **no** contiene la
+   clave de aduana sino el **medio de transporte** (Apéndice 3) — lo dice un comentario explícito
+   ahí mismo, por observación del cliente.
+
+Para hacerlo habría que mover, en este orden:
+
+- **Persistir la clave de aduana** en `pedimentos` (columna propia, o dentro de `import_data` bajo
+  una llave que no se confunda con la de medio de transporte). Esto toca la ruta de ingesta del
+  pedimento, que es núcleo.
+- **Cruzar** `operacion_guias.pedimento_id` → pedimento (aduana) con el `hsCode` real del shipment.
+  El puente ya existe y se usa en el reporte operativo.
+- **Un catálogo `fracción → aduanas permitidas`** que alguien tenga que mantener al día. Si nadie lo
+  carga, el mecanismo nace vacío y no marca nada nunca.
+
+### C5 (estado "previo") — la propuesta, sin implementar
+
+El modelo tiene **tres ejes independientes** (`shared/operaciones/estados.ts`, PRD-02 §8.4): `ETAPAS`
+(físico, monótono), `ESTADOS_DOCUMENTALES` y `ESTADOS_PLANEACION`. Mapeando lo que Sabueso modela y
+nosotros no, el hueco resulta **más angosto de lo que parecía** y casi todo cae en un solo eje:
+
+| Estado suyo | Dónde cae | ¿Falta? |
+|---|---|---|
+| Confronta | documental | **sí** |
+| Solicitud de pago de revalidación | documental | **sí** |
+| Revalidación de MAWB | documental | **sí** |
+| Previo (`Previo_HX` en sus adjuntos) | documental | **sí** |
+| Pedimentos elaborados | documental | no — `pedimento_generado` |
+| Rectificaciones numeradas | — | necesita un contador, no un estado |
+| Salida programada | planeación | no — `planeada` |
+| Colocación de unidad | planeación | no — `asignada` |
+| Entrega en destino | etapa física | no — `entregado` |
+
+**El "previo" es un estado DOCUMENTAL, no físico.** Ponerlo en `ETAPAS` sería el error: `ETAPAS` es
+monótona y describe dónde está la carga, y un previo no mueve la carga.
+
+Qué habría que mover, y por qué es núcleo:
+
+1. `ESTADOS_DOCUMENTALES` gana tres o cuatro valores (`confronta_ok`, `revalidacion_solicitada`,
+   `revalidado`, `previo_realizado`).
+2. **Una migración que empareje el CHECK de la base.** Por convención de la casa las migraciones
+   escriben los valores en línea, y `test/migrations/opsEstadosParity.test.ts` vigila el par. Cambiar
+   el arreglo sin la migración rompe ese test — a propósito.
+3. `TIPOS_EVENTO` gana los eventos correspondientes. Cuidado: el archivo advierte que
+   `operacion_eventos.tipo` **no tiene CHECK**, y que así fue como cuatro tipos `REQUERIMIENTO_*`
+   se escribieron a la bitácora durante meses sin aparecer en la lista.
+4. Decidir, para cada estado nuevo, si **bloquea o permite** la planeación (`replan.ts` lee el eje
+   documental). Ésa es la parte que no se puede adivinar y por la que el análisis decía
+   "diseñar con Luis".
